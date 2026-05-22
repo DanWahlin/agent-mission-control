@@ -1460,31 +1460,51 @@ export class CodeKingdomScene extends Phaser.Scene {
     const btnH = 28;
     const innerW = w - 44;
     const gap = 8;
-    // Accurate width estimate for Press Start 2P at fontSize 12
-    // (advance ≈ 1em). Old `* 8` under-estimated and let buttons
-    // overrun the panel at narrow widths.
-    const editorLabel = '↗ Open in Editor';
-    const editorW = session.git_root ? Math.max(170, editorLabel.length * 12 + 24) : 0;
     const tcalls = session.recent_tool_calls?.length ?? 0;
-    const transcriptLabel = this.transcriptOpen ? 'Close transcript' : `Transcript (${tcalls})`;
-    const transcriptW = tcalls > 0 ? Math.max(160, transcriptLabel.length * 12 + 18) : 0;
-    // If both buttons + gap exceed the panel inner width, stack them
-    // vertically so neither spills past the panel edge.
-    const stacked = editorW > 0 && transcriptW > 0 && editorW + transcriptW + gap > innerW;
+    // Buttons always render side-by-side — the panel has a fixed
+    // height so stacking would push the second button into the
+    // Activity Feed below. Instead, pick the widest label pair that
+    // fits the panel's inner width. The original widths (170/160
+    // minimums + `* 8` char estimate) work fine at typical widths;
+    // narrower panels fall through to short labels with no minimum
+    // so the buttons can actually shrink to fit.
+    type Tier = { editor: string; transcript: string; editorMin: number; transcriptMin: number };
+    const tiers: Tier[] = this.transcriptOpen
+      ? [
+          { editor: '↗ Open in Editor', transcript: 'Close transcript', editorMin: 170, transcriptMin: 160 },
+          { editor: '↗ Editor', transcript: 'Close', editorMin: 0, transcriptMin: 0 },
+        ]
+      : [
+          { editor: '↗ Open in Editor', transcript: `Transcript (${tcalls})`, editorMin: 170, transcriptMin: 160 },
+          { editor: '↗ Editor', transcript: `Transcript (${tcalls})`, editorMin: 0, transcriptMin: 0 },
+          { editor: '↗ Editor', transcript: 'Transcript', editorMin: 0, transcriptMin: 0 },
+        ];
+    const widthOf = (label: string, min: number) => Math.max(min, label.length * 8 + 24);
+
+    let pick = tiers[tiers.length - 1];
+    for (const tier of tiers) {
+      const eW = session.git_root ? widthOf(tier.editor, tier.editorMin) : 0;
+      const tW = tcalls > 0 ? widthOf(tier.transcript, tier.transcriptMin) : 0;
+      const usedGap = eW > 0 && tW > 0 ? gap : 0;
+      if (eW + tW + usedGap <= innerW) {
+        pick = tier;
+        break;
+      }
+    }
+
     const actionsY = tokensBottomY + 32;
+    const editorW = session.git_root ? widthOf(pick.editor, pick.editorMin) : 0;
     if (session.git_root) {
-      const btnW = stacked ? Math.min(editorW, innerW) : editorW;
-      this.drawSmallButton(x + 22, actionsY, btnW, btnH, editorLabel, '#61d6ff');
-      this.openInEditorRect = { x: x + 22, y: actionsY, w: btnW, h: btnH };
+      this.drawSmallButton(x + 22, actionsY, editorW, btnH, pick.editor, '#61d6ff');
+      this.openInEditorRect = { x: x + 22, y: actionsY, w: editorW, h: btnH };
     } else {
       this.openInEditorRect = null;
     }
     if (tcalls > 0) {
-      const btnW = stacked ? Math.min(transcriptW, innerW) : transcriptW;
-      const btnX = stacked ? x + 22 : x + 22 + editorW + (editorW > 0 ? gap : 0);
-      const btnY = stacked && editorW > 0 ? actionsY + btnH + gap : actionsY;
-      this.drawSmallButton(btnX, btnY, btnW, btnH, transcriptLabel, this.transcriptOpen ? '#ffd54a' : '#a5b1d8');
-      this.transcriptToggleRect = { x: btnX, y: btnY, w: btnW, h: btnH };
+      const transcriptW = widthOf(pick.transcript, pick.transcriptMin);
+      const btnX = x + 22 + editorW + (editorW > 0 ? gap : 0);
+      this.drawSmallButton(btnX, actionsY, transcriptW, btnH, pick.transcript, this.transcriptOpen ? '#ffd54a' : '#a5b1d8');
+      this.transcriptToggleRect = { x: btnX, y: actionsY, w: transcriptW, h: btnH };
     } else {
       this.transcriptToggleRect = null;
     }
