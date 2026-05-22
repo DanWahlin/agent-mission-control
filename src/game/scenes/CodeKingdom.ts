@@ -127,6 +127,19 @@ interface EventPulse {
   source: 'live' | 'replay';
 }
 
+/// Short-lived expanding ring drawn at a building when a pulse arrives
+/// — the "rune lights up" sigil. Lives in the same `flow` Graphics
+/// layer as the pulses and is rendered with `ADD` blend so overlapping
+/// arrivals (chatty session) brighten naturally instead of stacking
+/// flat. Auto-removed once `age >= lifetime`.
+interface ArrivalEffect {
+  x: number;
+  y: number;
+  color: number;
+  age: number;
+  lifetime: number;
+}
+
 type AttentionLevel = 'ok' | 'watch' | 'review';
 
 interface InsightCard {
@@ -271,6 +284,21 @@ const DISTRICT_HOVER_RADIUS_MIN_PX = 48;
 /// gets `i * PULSE_STAGGER_MS` delay so the eye can track the train.
 const PULSE_STAGGER_MS = 120;
 
+/// Number of fading samples drawn behind the pulse head to form a
+/// glowing comet tail. Each sample is offset along the bezier path by
+/// `PULSE_TRAIL_SPACING_PROGRESS`, so the visible trail length is
+/// `samples * spacing` of the total journey. 6 × 0.045 ≈ 27% of the
+/// path — short enough to read as a tail, long enough to feel mystical.
+const PULSE_TRAIL_SAMPLES = 6;
+const PULSE_TRAIL_SPACING_PROGRESS = 0.045;
+
+/// Arrival sigil — the expanding ring that blooms at a building when a
+/// pulse lands. Lifetime is short so concurrent arrivals don't pile up
+/// into a blinding flash; max radius scales with the scene so it reads
+/// the same at every viewport size.
+const ARRIVAL_LIFETIME_MS = 520;
+const ARRIVAL_MAX_RADIUS_PX = 44;
+
 export class CodeKingdomScene extends Phaser.Scene {
   /// Full-window dark fill that sits behind the kingdom map. Drawn
   /// once in `create()` and resized inline if the user grows the
@@ -310,6 +338,12 @@ export class CodeKingdomScene extends Phaser.Scene {
   private seenEventKeys = new Set<string>();
   private eventLog: CopilotEventSummary[] = [];
   private eventPulses: EventPulse[] = [];
+  /// Active arrival sigils. Pushed in `updateEventPulses` when a live
+  /// pulse lands; pruned in the same tick once their age exceeds
+  /// `ARRIVAL_LIFETIME_MS`. Replay pulses don't spawn sigils — they
+  /// fire bursts of historical events at scrub speed and would create
+  /// a noisy strobe.
+  private arrivalEffects: ArrivalEffect[] = [];
   private districtActivityCounts = new Map<string, number>();
   private demoFlowTimer = 0;
   private demoFlowIndex = 0;
@@ -597,6 +631,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     this.overlay?.clear();
     this.moatGeometry = null;
     this.eventPulses = [];
+    this.arrivalEffects = [];
     this.activeEventPulseCount = 0;
     this.eventLog = [];
     this.seenEventKeys.clear();
@@ -2092,32 +2127,94 @@ export class CodeKingdomScene extends Phaser.Scene {
   private updateEventPulses(delta: number) {
     if (!this.flow) return;
     this.flow.clear();
-    if (this.eventPulses.length === 0) {
+    if (this.eventPulses.length === 0 && this.arrivalEffects.length === 0) {
       this.activeEventPulseCount = 0;
       return;
     }
+
+    const s = sceneScale();
+    // ADD blend mode makes overlapping draws brighten rather than
+    // stack flat → reads as glowing magical energy. The whole flow
+    // layer is repainted each frame so the blend state never leaks
+    // into anything else; still restore to NORMAL at the end for
+    // safety in case future code shares the graphics object.
+    this.flow.setBlendMode(Phaser.BlendModes.ADD);
 
     let arrived = false;
     for (const pulse of this.eventPulses) {
       pulse.delay -= delta;
       if (pulse.delay > 0) continue;
       pulse.progress = Math.min(1, pulse.progress + delta / pulse.duration);
+
+      // Glowing comet tail — sample the bezier path BEHIND the head at
+      // PULSE_TRAIL_SPACING_PROGRESS intervals. Each sample fades in
+      // alpha and shrinks toward the back, so the trail tapers to a
+      // wisp instead of cutting off hard. Skip when the pulse hasn't
+      // moved far enough for any samples to be on-screen yet.
+      const headSize = 8 * s;
+      for (let i = PULSE_TRAIL_SAMPLES; i >= 1; i--) {
+        const sampleProgress = pulse.progress - i * PULSE_TRAIL_SPACING_PROGRESS;
+        if (sampleProgress <= 0) continue;
+        const t = i / PULSE_TRAIL_SAMPLES;
+        const trailPoint = pulsePoint({ ...pulse, progress: sampleProgress });
+        const trailSize = headSize * (1 - t * 0.7);
+        const trailAlpha = 0.32 * (1 - t);
+        this.flow.fillStyle(pulse.color, trailAlpha);
+        this.flow.fillCircle(snap(trailPoint.x), snap(trailPoint.y), trailSize);
+      }
+
+      // Pulse head — outer halo + crisp inner square (kept as a rect
+      // to stay visually consistent with the original "box" shape the
+      // user is used to seeing). Halo is intentionally soft so the
+      // ADD blend doesn't blow out into a white smear.
       const point = pulsePoint(pulse);
-      const size = 8 * sceneScale();
-      this.flow.fillStyle(pulse.color, 0.2);
-      this.flow.fillRect(snap(point.x - size), snap(point.y - size), snap(size * 2), snap(size * 2));
+      this.flow.fillStyle(pulse.color, 0.28);
+      this.flow.fillCircle(snap(point.x), snap(point.y), headSize * 1.6);
       this.flow.fillStyle(pulse.color, 0.95);
-      this.flow.fillRect(snap(point.x - size / 2), snap(point.y - size / 2), snap(size), snap(size));
+      this.flow.fillRect(snap(point.x - headSize / 2), snap(point.y - headSize / 2), snap(headSize), snap(headSize));
+
       if (pulse.progress >= 1 && !pulse.arrived) {
         pulse.arrived = true;
         if (pulse.source === 'live') {
           arrived = true;
           this.incrementDistrictActivity(pulse.districtKey);
+          // Sigil at the building's actual center (not the pulse's
+          // arrival point, which is offset above/below the building).
+          const district = this.districts.find(d => d.key === pulse.districtKey);
+          if (district) {
+            this.arrivalEffects.push({
+              x: district.x,
+              y: district.y,
+              color: pulse.color,
+              age: 0,
+              lifetime: ARRIVAL_LIFETIME_MS,
+            });
+          }
         }
       }
     }
 
+    // Arrival sigils — expanding ring + soft inner fill that fades as
+    // it grows. eased so the bloom is fast early then settles.
+    for (const eff of this.arrivalEffects) {
+      eff.age += delta;
+      const t = clamp(eff.age / eff.lifetime, 0, 1);
+      // ease-out cubic so the ring snaps open then slows.
+      const eased = 1 - Math.pow(1 - t, 3);
+      const radius = ARRIVAL_MAX_RADIUS_PX * s * eased;
+      const ringAlpha = 0.75 * (1 - t);
+      const fillAlpha = 0.18 * (1 - t * t);
+      const ringWidth = Math.max(2, 4 * s * (1 - t));
+      this.flow.fillStyle(eff.color, fillAlpha);
+      this.flow.fillCircle(snap(eff.x), snap(eff.y), radius);
+      this.flow.lineStyle(ringWidth, eff.color, ringAlpha);
+      this.flow.strokeCircle(snap(eff.x), snap(eff.y), radius);
+    }
+
+    this.flow.setBlendMode(Phaser.BlendModes.NORMAL);
+
     this.eventPulses = this.eventPulses.filter(pulse => pulse.progress < 1);
+    this.arrivalEffects = this.arrivalEffects.filter(eff => eff.age < eff.lifetime);
     this.activeEventPulseCount = this.eventPulses.length;
     if (arrived) this.renderActivity();
   }
