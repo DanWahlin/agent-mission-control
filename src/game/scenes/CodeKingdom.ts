@@ -1457,24 +1457,34 @@ export class CodeKingdomScene extends Phaser.Scene {
       tokensBottomY = detailsY + 114;
     }
 
-    const actionsY = tokensBottomY + 32;
     const btnH = 28;
-    let btnX = x + 22;
+    const innerW = w - 44;
+    const gap = 8;
+    // Accurate width estimate for Press Start 2P at fontSize 12
+    // (advance ≈ 1em). Old `* 8` under-estimated and let buttons
+    // overrun the panel at narrow widths.
+    const editorLabel = '↗ Open in Editor';
+    const editorW = session.git_root ? Math.max(170, editorLabel.length * 12 + 24) : 0;
+    const tcalls = session.recent_tool_calls?.length ?? 0;
+    const transcriptLabel = this.transcriptOpen ? 'Close transcript' : `Transcript (${tcalls})`;
+    const transcriptW = tcalls > 0 ? Math.max(160, transcriptLabel.length * 12 + 18) : 0;
+    // If both buttons + gap exceed the panel inner width, stack them
+    // vertically so neither spills past the panel edge.
+    const stacked = editorW > 0 && transcriptW > 0 && editorW + transcriptW + gap > innerW;
+    const actionsY = tokensBottomY + 32;
     if (session.git_root) {
-      const label = '↗ Open in Editor';
-      const btnW = Math.max(170, label.length * 8 + 24);
-      this.drawSmallButton(btnX, actionsY, btnW, btnH, label, '#61d6ff');
-      this.openInEditorRect = { x: btnX, y: actionsY, w: btnW, h: btnH };
-      btnX += btnW + 8;
+      const btnW = stacked ? Math.min(editorW, innerW) : editorW;
+      this.drawSmallButton(x + 22, actionsY, btnW, btnH, editorLabel, '#61d6ff');
+      this.openInEditorRect = { x: x + 22, y: actionsY, w: btnW, h: btnH };
     } else {
       this.openInEditorRect = null;
     }
-    const tcalls = session.recent_tool_calls?.length ?? 0;
     if (tcalls > 0) {
-      const tLabel = this.transcriptOpen ? 'Close transcript' : `Transcript (${tcalls})`;
-      const tW = Math.max(160, tLabel.length * 8 + 18);
-      this.drawSmallButton(btnX, actionsY, tW, btnH, tLabel, this.transcriptOpen ? '#ffd54a' : '#a5b1d8');
-      this.transcriptToggleRect = { x: btnX, y: actionsY, w: tW, h: btnH };
+      const btnW = stacked ? Math.min(transcriptW, innerW) : transcriptW;
+      const btnX = stacked ? x + 22 : x + 22 + editorW + (editorW > 0 ? gap : 0);
+      const btnY = stacked && editorW > 0 ? actionsY + btnH + gap : actionsY;
+      this.drawSmallButton(btnX, btnY, btnW, btnH, transcriptLabel, this.transcriptOpen ? '#ffd54a' : '#a5b1d8');
+      this.transcriptToggleRect = { x: btnX, y: btnY, w: btnW, h: btnH };
     } else {
       this.transcriptToggleRect = null;
     }
