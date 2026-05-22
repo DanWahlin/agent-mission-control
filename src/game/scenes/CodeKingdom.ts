@@ -1072,15 +1072,29 @@ export class CodeKingdomScene extends Phaser.Scene {
       const light = theme.mode === 'light';
       // Colored pedestal under each building. Idle districts (no 24h
       // activity) drop to a near-grey wash so the dashboard naturally
-      // foregrounds whatever is actually working *now*.
-      const liveOuter = light ? (focused ? 0.55 : 0.34) : (focused ? 0.2 : 0.08);
-      const liveInner = light ? (focused ? 0.78 : 0.55) : (focused ? 0.38 : 0.2);
-      const outerAlpha = idle ? (light ? 0.10 : 0.04) : liveOuter;
-      const innerAlpha = idle ? (light ? 0.16 : 0.08) : liveInner;
+      // foregrounds whatever is actually working *now*. Dark-mode
+      // alphas have to be substantially higher than light-mode ones
+      // because color tinted over near-black at low alpha is nearly
+      // invisible — even at the same alpha as light mode, the result
+      // reads darker because the canvas drags the value down. Both
+      // outer (the wider halo) and inner (the brighter core) use
+      // bumped values for parity with the soft pastel that light
+      // mode produces.
+      const liveOuter = light ? (focused ? 0.55 : 0.34) : (focused ? 0.7 : 0.5);
+      const liveInner = light ? (focused ? 0.78 : 0.55) : (focused ? 0.92 : 0.75);
+      const outerAlpha = idle ? (light ? 0.10 : 0.18) : liveOuter;
+      const innerAlpha = idle ? (light ? 0.16 : 0.28) : liveInner;
       const pedestalColor = idle ? (light ? 0x9aa6c3 : 0x3a4564) : district.color;
+      // Draw the panel/backdrop FIRST so the colored pedestal circles
+      // can layer on top of it in dark mode. (Previously the outer
+      // circle was drawn first and then the near-opaque dark panel
+      // covered it, which is why the colored halos that were so
+      // visible in light mode disappeared in dark mode.) Light mode
+      // skips the panel fill entirely, so the circles still read
+      // directly against the kingdom backdrop.
+      this.drawPixelPanel(district.x - size / 2, panelTop, size, frameH, district.color, focused, s, idle);
       this.map.fillStyle(pedestalColor, outerAlpha);
       this.map.fillCircle(district.x, district.y - 8 * s, 54 * s);
-      this.drawPixelPanel(district.x - size / 2, panelTop, size, frameH, district.color, focused, s, idle);
       this.map.fillStyle(pedestalColor, innerAlpha);
       this.map.fillCircle(district.x, district.y - 18 * s, 30 * s);
       const texture = DISTRICT_TEXTURES[district.key] ?? 'ts-house-blue';
@@ -1261,13 +1275,13 @@ export class CodeKingdomScene extends Phaser.Scene {
     // (compact 18px / normal 22px) + bottom gap. Keep the row count in
     // sync with `drawWorkMixBars` — that's the single source of truth
     // for which categories appear here.
-    const barRowPitch = compact ? 18 : 22;
-    const barsHeaderH = compact ? 22 : 28;
-    const barsBottomGap = compact ? 12 : 16;
+    const barRowPitch = compact ? 16 : 20;
+    const barsHeaderH = compact ? 20 : 26;
+    const barsBottomGap = compact ? 10 : 14;
     const barRowCount = 6;
     const barsContentH = barsHeaderH + barRowCount * barRowPitch + barsBottomGap;
     const cardsAreaH = Math.max(120, insightH - 64 - barsContentH - 16);
-    const cardH = Math.max(56, Math.min(82, (cardsAreaH - cardGap * (cardRows - 1)) / cardRows));
+    const cardH = Math.max(64, Math.min(94, (cardsAreaH - cardGap * (cardRows - 1)) / cardRows));
     const cardW = (panelW - 36 - cardGap) / cardCols;
     for (let i = 0; i < this.insightCards.length; i++) {
       const card = this.insightCards[i];
@@ -1471,14 +1485,17 @@ export class CodeKingdomScene extends Phaser.Scene {
       // Press Start 2P is monospace with advance ≈ 1em, so use the
       // font size as the per-character width. Older 7.4/7.6 estimates
       // were way under, letting the title overrun the chip and the
-      // chip slip past the panel's right edge.
+      // chip slip past the panel's right edge. The hash gets ~8 px of
+      // internal padding inside the row pill (so it doesn't sit flush
+      // against the right border).
       const idLabel = session.id.length > 8 ? session.id.slice(0, 8) : session.id;
       const idWidth = idLabel.length * 10;
+      const hashRightInset = 26;
       const titleStart = x + 48;
-      const titleEnd = x + w - idWidth - 22;
+      const titleEnd = x + w - idWidth - hashRightInset - 8;
       const titleChars = Math.max(10, Math.floor((titleEnd - titleStart) / 12));
       this.addText(titleStart, rowY + 9, truncate(session.title || session.id, titleChars), 12, theme.text).setOrigin(0, 0.5);
-      this.addText(x + w - 18, rowY + 9, idLabel, 10, theme.muted).setOrigin(1, 0.5);
+      this.addText(x + w - hashRightInset, rowY + 9, idLabel, 10, theme.muted).setOrigin(1, 0.5);
       this.sessionPickerRows.push({ id: session.id, x: x + 18, y: rowY - 4, w: w - 36, h: 26 });
     }
     const extraActive = pickerOptions.length - visibleSessions.length;

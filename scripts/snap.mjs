@@ -64,9 +64,12 @@ async function waitForServer() {
   throw new Error('server did not respond');
 }
 
-async function snap(browser, w, h, label, selectFirstSession) {
+async function snap(browser, w, h, label, selectFirstSession, themeMode = 'dark') {
   const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });
-  await ctx.addInitScript((f) => { window.__kingdomFixture = f; }, FIXTURE);
+  await ctx.addInitScript((args) => {
+    window.__kingdomFixture = args.fixture;
+    try { window.localStorage.setItem('koa_theme', args.theme); } catch {}
+  }, { fixture: FIXTURE, theme: themeMode });
   const page = await ctx.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/game/`);
   await page.waitForFunction(() => {
@@ -97,9 +100,10 @@ async function snap(browser, w, h, label, selectFirstSession) {
     await waitForServer();
     const browser = await chromium.launch();
     try {
-      await snap(browser, 1600, 1000, '1600x1000-selected', true);
-      await snap(browser, 1920, 1200, '1920x1200-selected', true);
-      await snap(browser, 1280, 800, '1280x800-selected', true);
+      await snap(browser, 1600, 1000, '1600x1000-dark-selected', true, 'dark');
+      await snap(browser, 1600, 1000, '1600x1000-light-selected', true, 'light');
+      await snap(browser, 1920, 1200, '1920x1200-dark-selected', true, 'dark');
+      await snap(browser, 1280, 800, '1280x800-dark-selected', true, 'dark');
     } finally {
       await browser.close();
     }
