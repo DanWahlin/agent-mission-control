@@ -163,6 +163,7 @@ declare global {
     __koaOnAgentActivityChanged?: () => void;
     __koaSetTheme?: (mode: 'dark' | 'light') => void;
     __koaUpdateModel?: (model: string) => void;
+    __koaSetPanelsHidden?: (hidden: boolean) => void;
   }
 }
 
@@ -317,6 +318,21 @@ export class CodeKingdomScene extends Phaser.Scene {
   /// drawCastle() each renderActivity() pass; null until first draw.
   private moatGeometry: { x: number; y: number; radius: number; active: boolean } | null = null;
   private textObjects: any[] = [];
+  // Text objects owned by the transcript overlay. Kept separate from
+  // `textObjects` so wheel-scrolling can rebuild only the transcript
+  // rows without tearing down every Phaser.GameObjects.Text in the
+  // scene (full re-render is ~120 destroy+create operations and was
+  // the root cause of laggy scroll). `clearDynamicObjects()` also
+  // destroys these so the standard render path stays correct.
+  private transcriptTextObjects: any[] = [];
+  /// Focus mode: when true, the Summary + Selected Session + Activity
+  /// Feed side panels are skipped and computeLayout() collapses their
+  /// widths to 0 so the kingdom ring (castle + districts) expands to
+  /// fill the full canvas width. The bottom district inspector and
+  /// replay timeline still render so hover/click + scrubber controls
+  /// keep working. Toggled from the topbar button via the global
+  /// `__koaSetPanelsHidden` hook; persisted in localStorage.
+  private panelsHidden = false;
   private selectedDistrict = 0;
   private hoveredDistrictIndex = -1;
   // Sticky last-hover: persists when the pointer leaves the ring so the
@@ -494,6 +510,12 @@ export class CodeKingdomScene extends Phaser.Scene {
       const idx = this.activity.sessions.findIndex(s => s.id === prefs.lastSelectedSessionId);
       if (idx >= 0) this.selectedSessionIndex = idx;
     }
+    // Restore persisted focus-mode preference BEFORE the first render so
+    // the kingdom paints in its final layout instead of flashing the
+    // side panels in for one frame and then collapsing them.
+    try {
+      this.panelsHidden = localStorage.getItem('koa_panels_hidden') === '1';
+    } catch { /* private mode / quota — fall back to default false */ }
     this.renderActivity();
     // Bootstrap is done — any further ingest is a genuine push from
     // the watcher, so animate pulses normally. The async refresh below
@@ -513,6 +535,21 @@ export class CodeKingdomScene extends Phaser.Scene {
       if (!this.scene?.isActive?.()) return;
       setActiveTheme(mode);
       this.redrawBackdrop();
+      this.renderActivity();
+    };
+    // Focus-mode toggle. Hides side panels and re-lays-out the ring so
+    // the castle + districts expand to fill the canvas. Idempotent —
+    // hud.js may call this multiple times during its mount poll. The
+    // initial value is restored from localStorage above (before the
+    // first render) so we early-return when hud.js's first call agrees
+    // with what we already painted.
+    window.__koaSetPanelsHidden = (hidden: boolean) => {
+      if (!this.scene?.isActive?.()) return;
+      const next = !!hidden;
+      if (next === this.panelsHidden) return;
+      this.panelsHidden = next;
+      this.layout = this.computeLayout();
+      this.districts = this.buildDistricts();
       this.renderActivity();
     };
     // Startup retry ramp: the very first invoke can race the Tauri bridge
@@ -544,12 +581,14 @@ export class CodeKingdomScene extends Phaser.Scene {
     this.input.on('pointerdown', this.handleScenePointerDown, this);
     // Wheel scrolling for the transcript drill-down. Phaser fires this
     // for any wheel event on the canvas; we guard so it only acts when
-    // the transcript is open.
+    // the transcript is open. Wheel delta is mapped to rows so a
+    // single notch (dy ≈ 100 on a mouse, 16-40 on a trackpad) jumps
+    // ~3 rows instead of 1 — matches browser scroll feel.
     this.input.on('wheel', (_p: any, _go: any, _dx: number, dy: number) => {
       if (!this.transcriptOpen) return;
-      const step = dy > 0 ? 1 : dy < 0 ? -1 : 0;
-      if (step === 0) return;
-      this.adjustTranscriptScroll(step);
+      if (dy === 0) return;
+      const rows = Math.max(1, Math.round(Math.abs(dy) / 30));
+      this.adjustTranscriptScroll(Math.sign(dy) * rows);
     });
   }
 
@@ -661,6 +700,9 @@ export class CodeKingdomScene extends Phaser.Scene {
     }
     if (window.__koaSetTheme) {
       window.__koaSetTheme = undefined;
+    }
+    if (window.__koaSetPanelsHidden) {
+      window.__koaSetPanelsHidden = undefined;
     }
     // Blank the navbar model chip so a stale model id doesn't linger
     // when the scene tears down (game switch, hot reload, etc.).
@@ -788,13 +830,17 @@ export class CodeKingdomScene extends Phaser.Scene {
     const opsH = 0;
     const topY = opsY + opsH + (compact ? 14 : 22);
 
-    const panelW = compact
-      ? Math.min(320, Math.max(260, W * 0.24))
-      : Math.min(500, Math.max(360, W * 0.28));
-    const rightW = compact
-      ? Math.min(340, Math.max(280, W * 0.26))
-      : Math.min(500, Math.max(380, W * 0.28));
-    const rightX = W - rightW - leftX;
+    const panelW = this.panelsHidden
+      ? 0
+      : compact
+        ? Math.min(320, Math.max(260, W * 0.24))
+        : Math.min(500, Math.max(360, W * 0.28));
+    const rightW = this.panelsHidden
+      ? 0
+      : compact
+        ? Math.min(340, Math.max(280, W * 0.26))
+        : Math.min(500, Math.max(380, W * 0.28));
+    const rightX = this.panelsHidden ? W - leftX : W - rightW - leftX;
 
     const insightH = Math.min(compact ? 370 : 450, Math.max(310, H * 0.42));
     // sessionH floor must accommodate picker header (22) + pickerTop offset
@@ -985,7 +1031,7 @@ export class CodeKingdomScene extends Phaser.Scene {
       { label: 'Active', value: String(this.activity.active_sessions), sub: `${this.activity.scanned_sessions} scanned`, color: this.activity.active_sessions > 0 ? greenAccent : theme.muted },
       { label: 'Tools/min', value: callsPerMin > 0 ? callsPerMin.toFixed(callsPerMin < 10 ? 1 : 0) : '0', sub: `${this.activity.total_tool_calls} total`, color: callsPerMin > 0 ? cyanAccent : theme.muted },
       { label: 'Turns', value: compactNumber(turns), sub: turnsSub, color: turns > 0 ? purpleAccent : theme.muted },
-      { label: 'Tokens · 24h', value: compactNumber(inputTokens + outputTokens), sub: `${compactNumberShort(inputTokens)}/${compactNumberShort(outputTokens)}`, color: goldAccent },
+      { label: 'Tokens · 24h', value: compactNumber(inputTokens + outputTokens), sub: `${compactNumberShort(inputTokens)} in / ${compactNumberShort(outputTokens)} out`, color: goldAccent },
     ];
   }
 
@@ -1255,6 +1301,12 @@ export class CodeKingdomScene extends Phaser.Scene {
     // recommendation, and alert count are surfaced in the top bar via
     // window.__koaUpdateOps (see renderActivity + hud.js).
 
+    // Focus mode skips the three side panels (Summary / Selected
+    // Session / Activity Feed) so the kingdom ring expands to fill
+    // the canvas. The bottom district inspector + replay timeline at
+    // the end of this method still draw so hover/click + scrubber
+    // controls keep working.
+    if (!this.panelsHidden) {
     this.drawPanel(leftX, topY, panelW, insightH, 'Summary');
     // 4-card 2x2 grid sized to fit above the work-mix bars block.
     const cardGap = compact ? 8 : 12;
@@ -1336,6 +1388,7 @@ export class CodeKingdomScene extends Phaser.Scene {
         this.addText(rightX + rightW - 22, y, `${formatAge(ageS)} ago`, 10, theme.muted).setOrigin(1, 0).setAlpha(alpha);
       }
     }
+    } // end if (!this.panelsHidden)
 
     this.drawDistrictInspector(inspectorX, bottomY, inspectorW, bottomH);
 
@@ -1487,17 +1540,18 @@ export class CodeKingdomScene extends Phaser.Scene {
       // Hash chip: dark pill behind the id so it stays readable against
       // any row tint (the selected-row fill can be green, yellow, or
       // red depending on session.status, and a plain muted-grey hash
-      // washes out against the lighter tints). The chip width is
-      // derived from the monospace-advance estimate that drives the
-      // truncation math above; the +12 padding mirrors what looks
-      // natural alongside the 10 px id text.
-      const hashChipW = idWidth + 12;
+      // washes out against the lighter tints). Both the chip rect and
+      // the text use the same `hashCenterX` so the glyphs sit dead-
+      // center horizontally regardless of the stroke padding that
+      // Phaser includes in the text bounding box.
+      const hashChipW = idWidth + 14;
       const hashChipH = 18;
-      const hashChipX = x + w - hashRightInset - hashChipW + 6;
+      const hashCenterX = x + w - hashRightInset - idWidth / 2;
+      const hashChipX = hashCenterX - hashChipW / 2;
       const hashChipY = rowY + 9 - hashChipH / 2;
       this.ui.fillStyle(0x020713, theme.mode === 'light' ? 0.6 : 0.7);
       this.ui.fillRoundedRect(hashChipX, hashChipY, hashChipW, hashChipH, 4);
-      this.addText(x + w - hashRightInset, rowY + 9, idLabel, 10, '#e6ecf8').setOrigin(1, 0.5);
+      this.addText(hashCenterX, rowY + 9, idLabel, 10, '#e6ecf8').setOrigin(0.5, 0.5);
       this.sessionPickerRows.push({ id: session.id, x: x + 18, y: rowY - 4, w: w - 36, h: 26 });
     }
     const extraActive = pickerOptions.length - visibleSessions.length;
@@ -1628,10 +1682,13 @@ export class CodeKingdomScene extends Phaser.Scene {
     this.ui.fillRoundedRect(x, y, w, h, 6);
     this.ui.lineStyle(1, cssToHex(fg), 0.7);
     this.ui.strokeRoundedRect(x, y, w, h, 6);
-    // Center the label vertically inside the button. Origin (0, 0.5)
-    // anchors the text's vertical midpoint to y + h/2 regardless of
-    // button height, so taller buttons stay centered.
-    this.addText(x + 12, y + h / 2, label, 12, fg).setOrigin(0, 0.5);
+    // Center the label both horizontally and vertically inside the
+    // button. Origin (0.5, 0.5) anchors the text's center to the
+    // button's geometric center regardless of label length or button
+    // size — keeps "↗ Editor" and "Transcript (14)" sitting in the
+    // middle of their tier-fitted widths instead of left-aligned with
+    // a hard-coded 12 px gutter.
+    this.addText(x + w / 2, y + h / 2, label, 12, fg).setOrigin(0.5, 0.5);
   }
 
   private drawDistrictInspector(x: number, y: number, w: number, h: number) {
@@ -1740,7 +1797,35 @@ export class CodeKingdomScene extends Phaser.Scene {
     const next = Math.max(0, Math.min(maxOffset, this.transcriptScrollOffset + delta));
     if (next === this.transcriptScrollOffset) return;
     this.transcriptScrollOffset = next;
-    this.renderActivity();
+    // Scroll updates ONLY redraw the transcript overlay (one graphics
+    // layer + ~20 text rows) instead of the whole scene (~120 text
+    // objects, full district + panel + castle redraw). The full
+    // renderActivity path destroyed and recreated every Text on the
+    // canvas per wheel tick, which is what made scrolling feel laggy.
+    this.renderTranscriptOnly();
+  }
+
+  private renderTranscriptOnly() {
+    if (!this.transcriptOpen || !this.selectedSession) return;
+    for (const text of this.transcriptTextObjects) text.destroy();
+    this.transcriptTextObjects = [];
+    this.overlay.clear();
+    this.drawTranscriptOverlay();
+  }
+
+  /// Creates a transcript-overlay text object. Tracked in a separate
+  /// array from `textObjects` so wheel-scroll redraws can rebuild
+  /// only these without tearing down the rest of the scene's text.
+  private addTranscriptText(x: number, y: number, text: string, size: number, color: string) {
+    const obj = this.add.text(x, y, text, {
+      fontFamily: '"Press Start 2P", monospace',
+      fontSize: `${size}px`,
+      color,
+      stroke: theme.mode === 'light' ? '#c6cfe6' : '#020713',
+      strokeThickness: theme.mode === 'light' ? 0 : 3,
+    }).setDepth(51);
+    this.transcriptTextObjects.push(obj);
+    return obj;
   }
 
   /// Drill-down overlay: shows the selected session's last 120 tool
@@ -1756,9 +1841,8 @@ export class CodeKingdomScene extends Phaser.Scene {
     const y = (H - h) / 2;
     // Paint into the dedicated overlay graphics layer (depth 50) so the
     // panel fully covers district labels/badges (text depth 20). Text we
-    // add here gets depth 51 for the same reason.
+    // add here gets depth 51 inside addTranscriptText for the same reason.
     const g = this.overlay;
-    const TD = 51;
     // Dim backdrop so overlay reads as modal.
     g.fillStyle(0x000000, 0.55);
     g.fillRect(0, 0, W, H);
@@ -1767,8 +1851,8 @@ export class CodeKingdomScene extends Phaser.Scene {
     g.fillRoundedRect(x, y, w, h, 16);
     g.lineStyle(2, GOLD, 0.85);
     g.strokeRoundedRect(x, y, w, h, 16);
-    this.addText(x + 24, y + 18, `Tool transcript · ${truncate(session.title || session.id, 32)}`, 14, '#ffd54a').setOrigin(0, 0).setDepth(TD);
-    this.addText(x + 24, y + 42, `${session.repository} / ${session.branch} · ${calls.length} most recent calls`, 11, theme.muted).setOrigin(0, 0).setDepth(TD);
+    this.addTranscriptText(x + 24, y + 18, `Tool transcript · ${truncate(session.title || session.id, 32)}`, 14, '#ffd54a').setOrigin(0, 0);
+    this.addTranscriptText(x + 24, y + 42, `${session.repository} / ${session.branch} · ${calls.length} most recent calls`, 11, theme.muted).setOrigin(0, 0);
 
     const closeW = 32;
     const closeH = 24;
@@ -1780,11 +1864,11 @@ export class CodeKingdomScene extends Phaser.Scene {
     g.fillRoundedRect(closeX, closeY, closeW, closeH, 6);
     g.lineStyle(1, cssToHex('#ff7a7a'), 0.7);
     g.strokeRoundedRect(closeX, closeY, closeW, closeH, 6);
-    this.addText(closeX + 10, closeY + 5, '✕', 10, '#ff7a7a').setOrigin(0, 0).setDepth(TD);
+    this.addTranscriptText(closeX + 10, closeY + 5, '✕', 10, '#ff7a7a').setOrigin(0, 0);
     this.transcriptCloseRect = { x: closeX, y: closeY, w: closeW, h: closeH };
 
     if (calls.length === 0) {
-      this.addText(x + 24, y + 80, 'No tool calls recorded yet for this session.', 12, theme.muted).setDepth(TD);
+      this.addTranscriptText(x + 24, y + 80, 'No tool calls recorded yet for this session.', 12, theme.muted);
       this.transcriptScrollUpRect = null;
       this.transcriptScrollDownRect = null;
       this.transcriptRowCount = 0;
@@ -1820,16 +1904,16 @@ export class CodeKingdomScene extends Phaser.Scene {
       g.fillRoundedRect(rowLeftX, ry - 2, rowW, rowH - 4, 6);
       g.fillStyle(color, 1);
       g.fillCircle(rowLeftX + 14, ry + 10, 4);
-      this.addText(rowLeftX + 28, ry + 2, truncate(call.tool, 28), 12, theme.text).setOrigin(0, 0).setDepth(TD);
-      this.addText(rowLeftX + 28 + 250, ry + 2, call.category, 10, theme.muted).setOrigin(0, 0).setDepth(TD);
+      this.addTranscriptText(rowLeftX + 28, ry + 2, truncate(call.tool, 28), 12, theme.text).setOrigin(0, 0);
+      this.addTranscriptText(rowLeftX + 28 + 250, ry + 2, call.category, 10, theme.muted).setOrigin(0, 0);
       const dur = typeof call.duration_ms === 'number' ? formatDuration(call.duration_ms) : '·';
-      this.addText(rowRightX - 8, ry + 2, `${dur}  ${formatClock(call.timestamp)}`, 10, theme.muted).setOrigin(1, 0).setDepth(TD);
+      this.addTranscriptText(rowRightX - 8, ry + 2, `${dur}  ${formatClock(call.timestamp)}`, 10, theme.muted).setOrigin(1, 0);
     }
 
     // Scrollbar — only render when there's overflow. Track + thumb +
     // up/down nudge buttons. Wheel events also scroll (see input setup).
     if (calls.length > maxRows) {
-      this.drawTranscriptScrollbar(x + w, rowY0, maxRows, rowH, scrollbarW, scrollGutter, calls.length, maxOffset, offset, TD);
+      this.drawTranscriptScrollbar(x + w, rowY0, maxRows, rowH, scrollbarW, scrollGutter, calls.length, maxOffset, offset);
     } else {
       this.transcriptScrollUpRect = null;
       this.transcriptScrollDownRect = null;
@@ -1850,7 +1934,6 @@ export class CodeKingdomScene extends Phaser.Scene {
     rowCount: number,
     maxOffset: number,
     offset: number,
-    depth: number,
   ) {
     const g = this.overlay;
     const sbX = panelRight - scrollbarW - scrollGutter;
@@ -1862,7 +1945,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     g.fillRoundedRect(sbX, rowY0, scrollbarW, arrowH, 4);
     g.lineStyle(1, cssToHex('#a5b1d8'), 0.6);
     g.strokeRoundedRect(sbX, rowY0, scrollbarW, arrowH, 4);
-    this.addText(sbX + scrollbarW / 2, rowY0 + arrowH / 2 - 1, '▲', 9, theme.text).setOrigin(0.5, 0.5).setDepth(depth);
+    this.addTranscriptText(sbX + scrollbarW / 2, rowY0 + arrowH / 2 - 1, '▲', 9, theme.text).setOrigin(0.5, 0.5);
     this.transcriptScrollUpRect = { x: sbX, y: rowY0, w: scrollbarW, h: arrowH };
     // Track
     g.fillStyle(0x1a2448, 0.5);
@@ -1878,7 +1961,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     g.fillRoundedRect(sbX, downY, scrollbarW, arrowH, 4);
     g.lineStyle(1, cssToHex('#a5b1d8'), 0.6);
     g.strokeRoundedRect(sbX, downY, scrollbarW, arrowH, 4);
-    this.addText(sbX + scrollbarW / 2, downY + arrowH / 2 - 1, '▼', 9, theme.text).setOrigin(0.5, 0.5).setDepth(depth);
+    this.addTranscriptText(sbX + scrollbarW / 2, downY + arrowH / 2 - 1, '▼', 9, theme.text).setOrigin(0.5, 0.5);
     this.transcriptScrollDownRect = { x: sbX, y: downY, w: scrollbarW, h: arrowH };
   }
 
@@ -2687,6 +2770,8 @@ export class CodeKingdomScene extends Phaser.Scene {
   private clearDynamicObjects() {
     for (const text of this.textObjects) text.destroy();
     this.textObjects = [];
+    for (const text of this.transcriptTextObjects) text.destroy();
+    this.transcriptTextObjects = [];
     this.sessionPickerRows = [];
     this.replayPlayButtonRect = null;
     this.replayLiveButtonRect = null;

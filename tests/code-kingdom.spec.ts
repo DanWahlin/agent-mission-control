@@ -354,6 +354,67 @@ test.describe('Kingdom of Agents — Dashboard', () => {
   });
 });
 
+test.describe('Kingdom of Agents — Focus Mode', () => {
+  test('topbar panels button toggles side panels and resizes the ring', async ({ page }) => {
+    await installFixture(page);
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    const before = await getKingdomState(page);
+    expect(before!.layout!.panelW).toBeGreaterThan(0);
+    expect(before!.layout!.rightW).toBeGreaterThan(0);
+
+    await page.locator('#panels-btn').click();
+    // Wait for the re-render to settle.
+    await page.waitForFunction(() => {
+      const scene = (window as any).__phaserGame?.scene?.getScene?.('code-kingdom');
+      return scene?.layout?.panelW === 0 && scene?.layout?.rightW === 0;
+    }, { timeout: 2000 });
+
+    const after = await getKingdomState(page);
+    expect(after!.layout!.panelW).toBe(0);
+    expect(after!.layout!.rightW).toBe(0);
+    // Inspector still draws — its rect should grow to span between leftX
+    // and the right edge minus margins.
+    expect(after!.layout!.inspectorW).toBeGreaterThan(before!.layout!.inspectorW);
+
+    // Clicking again restores panels.
+    await page.locator('#panels-btn').click();
+    await page.waitForFunction(() => {
+      const scene = (window as any).__phaserGame?.scene?.getScene?.('code-kingdom');
+      return (scene?.layout?.panelW ?? 0) > 0;
+    }, { timeout: 2000 });
+    const restored = await getKingdomState(page);
+    expect(restored!.layout!.panelW).toBe(before!.layout!.panelW);
+    expect(restored!.layout!.rightW).toBe(before!.layout!.rightW);
+  });
+
+  test('focus-mode preference persists across reloads via localStorage', async ({ page }) => {
+    await installFixture(page);
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await page.locator('#panels-btn').click();
+    await page.waitForFunction(() => {
+      const scene = (window as any).__phaserGame?.scene?.getScene?.('code-kingdom');
+      return scene?.layout?.panelW === 0;
+    }, { timeout: 2000 });
+
+    const stored = await page.evaluate(() => localStorage.getItem('koa_panels_hidden'));
+    expect(stored).toBe('1');
+
+    // Reload — the scene should paint in focus mode on the first frame
+    // (no flash of panels-visible state).
+    await page.reload();
+    await waitForGame(page);
+    const state = await getKingdomState(page);
+    expect(state!.layout!.panelW).toBe(0);
+    expect(state!.layout!.rightW).toBe(0);
+  });
+});
+
 test.describe('Kingdom of Agents — Ops Rules', () => {
   test('reports idle when no sessions are active', async ({ page }) => {
     const fixture = {

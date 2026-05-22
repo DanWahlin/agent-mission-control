@@ -150,4 +150,63 @@
       modelEl.title = 'Active model: ' + next;
     }
   };
+
+  // -------------------------------------------------------------------
+  // Panels toggle — hide/show the Summary + Selected Session + Activity
+  // Feed side panels so the castle/buildings ring can expand to take up
+  // the full width. The district inspector below the buildings + the
+  // replay timeline stay visible so hover/click behavior + scrubber
+  // controls keep working in focus mode.
+  // -------------------------------------------------------------------
+
+  var panelsBtn = $('panels-btn');
+  var panelsHidden = safeGet('koa_panels_hidden') === '1';
+
+  // Two-state icon: inward chevrons (`>|<`) when panels are visible
+  // (clicking will hide them = pinch toward center), outward chevrons
+  // (`<|>`) when panels are hidden (clicking will restore them = push
+  // back out). The fixed vertical bars on both edges represent the
+  // window/canvas boundary; the chevrons show the direction of motion.
+  var ICON_HIDE = '<svg viewBox="0 0 16 16" aria-hidden="true">'
+    + '<path d="M2 3v10M14 3v10"/>'
+    + '<path d="M5 4l3 4-3 4M11 4l-3 4 3 4"/>'
+    + '</svg>';
+  var ICON_SHOW = '<svg viewBox="0 0 16 16" aria-hidden="true">'
+    + '<path d="M2 3v10M14 3v10"/>'
+    + '<path d="M8 4l-3 4 3 4M8 4l3 4-3 4"/>'
+    + '</svg>';
+
+  function applyPanelsState() {
+    if (panelsBtn) {
+      panelsBtn.innerHTML = panelsHidden ? ICON_SHOW : ICON_HIDE;
+      panelsBtn.title = panelsHidden
+        ? 'Show side panels'
+        : 'Hide side panels for focus mode';
+      panelsBtn.setAttribute('aria-pressed', panelsHidden ? 'true' : 'false');
+    }
+    if (typeof window.__koaSetPanelsHidden === 'function') {
+      window.__koaSetPanelsHidden(panelsHidden);
+    }
+  }
+
+  function togglePanels() {
+    panelsHidden = !panelsHidden;
+    safeSet('koa_panels_hidden', panelsHidden ? '1' : '0');
+    applyPanelsState();
+  }
+
+  if (panelsBtn) panelsBtn.addEventListener('click', togglePanels);
+
+  // Apply once now (paints the icon), then poll briefly for the scene
+  // hook the same way the theme toggle does so the initial state hits
+  // Phaser once the scene is mounted.
+  applyPanelsState();
+  var panelsAttempts = 0;
+  var panelsPoll = setInterval(function () {
+    panelsAttempts++;
+    if (typeof window.__koaSetPanelsHidden === 'function' || panelsAttempts > 40) {
+      clearInterval(panelsPoll);
+      applyPanelsState();
+    }
+  }, 100);
 })();

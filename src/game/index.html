@@ -155,6 +155,27 @@
       background: rgba(15, 30, 70, 0.06);
       border-color: rgba(138, 93, 0, 0.6);
     }
+    /* Panels-toggle button — collapse/expand side panels for a focused
+       kingdom-only view. Sits left of the theme button. Uses inline SVG
+       so the icon stays crisp in both themes and morphs between the
+       "hide" (inward arrows) and "show" (outward arrows) states. */
+    #panels-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 26px;
+      padding: 0;
+    }
+    #panels-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
     /* Theme toggle button — the icon shows the *target* theme (moon in
        light mode → click to go dark; sun in dark mode → click to go
        light). The button bg mirrors that target so the button reads as
@@ -225,6 +246,7 @@
   <div id="topbar">
     <span class="brand"><span class="crown">🏰</span> Kingdom of Agents</span>
     <span id="model-chip" class="empty" title="Active model for the selected session"></span>
+    <button id="panels-btn" type="button" title="Hide side panels for focus mode"></button>
     <button id="theme-btn" type="button" title="Toggle light/dark theme">🌙</button>
   </div>
 
