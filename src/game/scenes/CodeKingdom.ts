@@ -406,6 +406,14 @@ export class CodeKingdomScene extends Phaser.Scene {
   public activeEventPulseCount = 0;
   public districtEventBadges: Record<string, number> = {};
   public hoveredDistrictKey: string | null = null;
+  /// `renderActivity()` destroys ~50 Phaser Text objects and recreates
+  /// them — each Text uploads a fresh canvas2d → WebGL texture, so
+  /// one rebuild can cost 30-100ms. If that spike lands while comet
+  /// pulses are flying it drops 3-6 frames and the user sees stutter.
+  /// `requestRender()` flips this flag during pulse activity instead
+  /// of rebuilding immediately; the per-frame `update()` loop then
+  /// flushes a single render once pulses settle.
+  private renderPending = false;
   public replayState = {
     paused: false,
     cursor: 0,
@@ -553,6 +561,33 @@ export class CodeKingdomScene extends Phaser.Scene {
     this.updateMoatPulse();
     this.updateCursorStyle();
     this.tickAttentionEscalation();
+    // Flush a deferred render once pulses settle so the heavy Text
+    // teardown/rebuild doesn't interleave with the comet animations.
+    this.flushPendingRender();
+  }
+
+  /// Coalesces background-driven renders. If pulses are queued or
+  /// flying we flip a flag and let the per-frame `flushPendingRender()`
+  /// pick it up the moment things settle; if the scene is otherwise
+  /// idle we render immediately so the user never sees a stale
+  /// dashboard. We check `eventPulses.length` (not the per-frame
+  /// `activeEventPulseCount`) because `requestRender` typically fires
+  /// straight after `ingestActivityEvents` queues new pulses — those
+  /// haven't been counted by `updateEventPulses` yet.
+  private requestRender() {
+    if (this.eventPulses.length > 0) {
+      this.renderPending = true;
+      return;
+    }
+    this.renderPending = false;
+    this.renderActivity();
+  }
+
+  private flushPendingRender() {
+    if (!this.renderPending) return;
+    if (this.eventPulses.length > 0) return;
+    this.renderPending = false;
+    this.renderActivity();
   }
 
   /// Animated overlay on top of the static moat ring. Only paints when
@@ -638,6 +673,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     this.eventPulses = [];
     this.arrivalEffects = [];
     this.activeEventPulseCount = 0;
+    this.renderPending = false;
     this.eventLog = [];
     this.seenEventKeys.clear();
     this.replayCursor = 0;
@@ -696,7 +732,7 @@ export class CodeKingdomScene extends Phaser.Scene {
       }
       this.lastRefresh = performance.now();
       this.ingestActivityEvents(this.activity.recent_events);
-      this.renderActivity();
+      this.requestRender();
     } finally {
       this.loading = false;
     }
