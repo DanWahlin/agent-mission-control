@@ -287,10 +287,12 @@ const PULSE_STAGGER_MS = 120;
 /// Number of fading samples drawn behind the pulse head to form a
 /// glowing comet tail. Each sample is offset along the bezier path by
 /// `PULSE_TRAIL_SPACING_PROGRESS`, so the visible trail length is
-/// `samples * spacing` of the total journey. 6 × 0.045 ≈ 27% of the
-/// path — short enough to read as a tail, long enough to feel mystical.
-const PULSE_TRAIL_SAMPLES = 6;
-const PULSE_TRAIL_SPACING_PROGRESS = 0.045;
+/// `samples * spacing` of the total journey. 4 × 0.055 ≈ 22% of the
+/// path — short enough to read as a tail, long enough to feel
+/// mystical. Tuned down from 6 for fps — every extra sample is a fill
+/// call per pulse per frame.
+const PULSE_TRAIL_SAMPLES = 4;
+const PULSE_TRAIL_SPACING_PROGRESS = 0.055;
 
 /// Arrival sigil — the expanding ring that blooms at a building when a
 /// pulse lands. Lifetime is short so concurrent arrivals don't pile up
@@ -451,7 +453,11 @@ export class CodeKingdomScene extends Phaser.Scene {
     // without rebuilding the whole scene. Depth 2 keeps it above the
     // map background but below district sprites (depth 5+).
     this.moat = this.add.graphics().setDepth(2);
-    this.flow = this.add.graphics().setDepth(8);
+    // ADD blend on the flow layer is set ONCE here (not toggled per
+    // frame in updateEventPulses) because nothing else draws to this
+    // layer — every pulse trail sample, head, and arrival sigil
+    // should blend additively for the mystical glow.
+    this.flow = this.add.graphics().setDepth(8).setBlendMode(Phaser.BlendModes.ADD);
     this.ui = this.add.graphics().setDepth(10);
     // Modal overlays (transcript drill-down) sit above district labels
     // and badges (depth 20-21) so they fully occlude what's behind them.
@@ -2100,8 +2106,11 @@ export class CodeKingdomScene extends Phaser.Scene {
     if (!district) return;
 
     const s = sceneScale();
-    const castleX = W * 0.5;
-    const castleY = H * 0.52;
+    // Real castle center, cached when drawCastle() ran. Falls back to
+    // the previous heuristic only on pre-bootstrap rendering when the
+    // geometry isn't populated yet (rare; one frame at most).
+    const castleX = this.moatGeometry?.x ?? W * 0.5;
+    const castleY = this.moatGeometry?.y ?? H * 0.52;
     // Pulse color matches the bracket line color so the dot that flies
     // toward a building reads as the same visual element. In light mode
     // brackets are darkened for contrast, so the pulse follows.
@@ -2110,11 +2119,19 @@ export class CodeKingdomScene extends Phaser.Scene {
       id: `${source}:${eventKey(event)}:${performance.now()}`,
       districtKey,
       color: pulseColor,
+      // Spawn from the castle center so every pulse — including those
+      // bound for diagonal districts (Guild Hall, Tome Hall, Signal
+      // Tower, MCP) — visibly leaves the castle. Previously startY was
+      // offset by ±100px which made pulses to diagonals appear to
+      // spawn well above or below the castle, breaking the metaphor.
       startX: castleX,
-      startY: castleY + (district.y < castleY ? -112 * s : 70 * s),
+      startY: castleY,
       midX: district.x,
       endX: district.x,
-      endY: district.y + (district.y < castleY ? 58 * s : -58 * s),
+      // Stop just short of the district sprite center so the arrival
+      // sigil at district.x/y reads as the building "receiving" the
+      // pulse rather than the pulse driving through it.
+      endY: district.y + (district.y < castleY ? -36 * s : 36 * s),
       progress: 0,
       duration: 900,
       delay,
@@ -2133,12 +2150,22 @@ export class CodeKingdomScene extends Phaser.Scene {
     }
 
     const s = sceneScale();
-    // ADD blend mode makes overlapping draws brighten rather than
-    // stack flat → reads as glowing magical energy. The whole flow
-    // layer is repainted each frame so the blend state never leaks
-    // into anything else; still restore to NORMAL at the end for
-    // safety in case future code shares the graphics object.
-    this.flow.setBlendMode(Phaser.BlendModes.ADD);
+    const headSize = 8 * s;
+    const halfHead = headSize / 2;
+    // Pre-derived trail sizes so we don't recompute per pulse.
+    // Each sample i in [1..PULSE_TRAIL_SAMPLES] shrinks the size and
+    // alpha linearly toward the back so the tail tapers off as a wisp.
+    // Pre-computed once per frame — was per-sample-per-pulse before.
+    const trailSizes = new Array(PULSE_TRAIL_SAMPLES);
+    const trailHalves = new Array(PULSE_TRAIL_SAMPLES);
+    const trailAlphas = new Array(PULSE_TRAIL_SAMPLES);
+    for (let i = 1; i <= PULSE_TRAIL_SAMPLES; i++) {
+      const t = i / PULSE_TRAIL_SAMPLES;
+      const sz = headSize * (1 - t * 0.65);
+      trailSizes[i - 1] = sz;
+      trailHalves[i - 1] = sz / 2;
+      trailAlphas[i - 1] = 0.32 * (1 - t);
+    }
 
     let arrived = false;
     for (const pulse of this.eventPulses) {
@@ -2146,32 +2173,42 @@ export class CodeKingdomScene extends Phaser.Scene {
       if (pulse.delay > 0) continue;
       pulse.progress = Math.min(1, pulse.progress + delta / pulse.duration);
 
-      // Glowing comet tail — sample the bezier path BEHIND the head at
-      // PULSE_TRAIL_SPACING_PROGRESS intervals. Each sample fades in
-      // alpha and shrinks toward the back, so the trail tapers to a
-      // wisp instead of cutting off hard. Skip when the pulse hasn't
-      // moved far enough for any samples to be on-screen yet.
-      const headSize = 8 * s;
-      for (let i = PULSE_TRAIL_SAMPLES; i >= 1; i--) {
-        const sampleProgress = pulse.progress - i * PULSE_TRAIL_SPACING_PROGRESS;
+      // Glowing comet tail — sample the bezier path BEHIND the head.
+      // Math is inlined (no pulsePoint(...spread) call) — that previous
+      // spread allocated a fresh object 4× per pulse per frame which
+      // showed up as GC stutter once a few pulses were in flight.
+      // We also use fillRect (matches the head silhouette and is
+      // cheaper than fillCircle on the WebGL Graphics pipeline).
+      for (let i = 0; i < PULSE_TRAIL_SAMPLES; i++) {
+        const sampleProgress = pulse.progress - (i + 1) * PULSE_TRAIL_SPACING_PROGRESS;
         if (sampleProgress <= 0) continue;
-        const t = i / PULSE_TRAIL_SAMPLES;
-        const trailPoint = pulsePoint({ ...pulse, progress: sampleProgress });
-        const trailSize = headSize * (1 - t * 0.7);
-        const trailAlpha = 0.32 * (1 - t);
-        this.flow.fillStyle(pulse.color, trailAlpha);
-        this.flow.fillCircle(snap(trailPoint.x), snap(trailPoint.y), trailSize);
+        let tx: number;
+        let ty: number;
+        if (sampleProgress < 0.55) {
+          const local = sampleProgress / 0.55;
+          tx = pulse.startX + (pulse.midX - pulse.startX) * local;
+          ty = pulse.startY;
+        } else {
+          const local = (sampleProgress - 0.55) / 0.45;
+          tx = pulse.endX;
+          ty = pulse.startY + (pulse.endY - pulse.startY) * local;
+        }
+        const sz = trailSizes[i];
+        const half = trailHalves[i];
+        this.flow.fillStyle(pulse.color, trailAlphas[i]);
+        this.flow.fillRect(snap(tx - half), snap(ty - half), snap(sz), snap(sz));
       }
 
-      // Pulse head — outer halo + crisp inner square (kept as a rect
-      // to stay visually consistent with the original "box" shape the
-      // user is used to seeing). Halo is intentionally soft so the
-      // ADD blend doesn't blow out into a white smear.
+      // Pulse head — soft square halo + crisp inner box. Both are
+      // rects, both blend additively via the flow layer's once-set
+      // ADD blend mode. The halo is ~2× the head size to bloom under
+      // the additive blend without smearing.
       const point = pulsePoint(pulse);
-      this.flow.fillStyle(pulse.color, 0.28);
-      this.flow.fillCircle(snap(point.x), snap(point.y), headSize * 1.6);
+      const haloHalf = headSize;
+      this.flow.fillStyle(pulse.color, 0.22);
+      this.flow.fillRect(snap(point.x - haloHalf), snap(point.y - haloHalf), snap(haloHalf * 2), snap(haloHalf * 2));
       this.flow.fillStyle(pulse.color, 0.95);
-      this.flow.fillRect(snap(point.x - headSize / 2), snap(point.y - headSize / 2), snap(headSize), snap(headSize));
+      this.flow.fillRect(snap(point.x - halfHead), snap(point.y - halfHead), snap(headSize), snap(headSize));
 
       if (pulse.progress >= 1 && !pulse.arrived) {
         pulse.arrived = true;
@@ -2195,23 +2232,25 @@ export class CodeKingdomScene extends Phaser.Scene {
     }
 
     // Arrival sigils — expanding ring + soft inner fill that fades as
-    // it grows. eased so the bloom is fast early then settles.
+    // it grows. Eased so the bloom is fast early then settles.
+    // Strokes are cheaper than nested fills; one stroke + one fill per
+    // sigil per frame keeps the cost bounded.
     for (const eff of this.arrivalEffects) {
       eff.age += delta;
-      const t = clamp(eff.age / eff.lifetime, 0, 1);
+      const t = eff.age >= eff.lifetime ? 1 : eff.age / eff.lifetime;
       // ease-out cubic so the ring snaps open then slows.
       const eased = 1 - Math.pow(1 - t, 3);
       const radius = ARRIVAL_MAX_RADIUS_PX * s * eased;
       const ringAlpha = 0.75 * (1 - t);
       const fillAlpha = 0.18 * (1 - t * t);
       const ringWidth = Math.max(2, 4 * s * (1 - t));
+      const ex = snap(eff.x);
+      const ey = snap(eff.y);
       this.flow.fillStyle(eff.color, fillAlpha);
-      this.flow.fillCircle(snap(eff.x), snap(eff.y), radius);
+      this.flow.fillCircle(ex, ey, radius);
       this.flow.lineStyle(ringWidth, eff.color, ringAlpha);
-      this.flow.strokeCircle(snap(eff.x), snap(eff.y), radius);
+      this.flow.strokeCircle(ex, ey, radius);
     }
-
-    this.flow.setBlendMode(Phaser.BlendModes.NORMAL);
 
     this.eventPulses = this.eventPulses.filter(pulse => pulse.progress < 1);
     this.arrivalEffects = this.arrivalEffects.filter(eff => eff.age < eff.lifetime);
