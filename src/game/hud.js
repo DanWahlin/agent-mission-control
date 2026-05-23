@@ -162,18 +162,21 @@
   var panelsBtn = $('panels-btn');
   var panelsHidden = safeGet('koa_panels_hidden') === '1';
 
-  // Two-state icon: open eye = panels currently visible (click hides
-  // them); eye with a diagonal slash = panels currently hidden (click
-  // restores them). Matches the standard password-toggle convention so
-  // the icon reads as the *current state*, not the action that will fire.
-  var ICON_EYE_OPEN = '<svg viewBox="0 0 16 16" aria-hidden="true">'
-    + '<path d="M1.5 8 Q 8 2.5 14.5 8 Q 8 13.5 1.5 8 Z"/>'
-    + '<circle cx="8" cy="8" r="2"/>'
+  // Two-state icon (state-based, like password-field toggles): icon
+  // shows what's currently visible. Open eye when panels are shown,
+  // eye-with-slash when panels are hidden. The tooltip describes the
+  // click action so the meaning stays unambiguous either way.
+  // Deep almond curve (peaks at y=3 / y=21 in a 24x24 box) + filled
+  // pupil so the icon reads at the topbar size without looking like a
+  // squashed slit.
+  var ICON_EYE_OPEN = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    + '<path d="M2 12 Q 12 3 22 12 Q 12 21 2 12 Z"/>'
+    + '<circle class="pupil" cx="12" cy="12" r="3.5"/>'
     + '</svg>';
-  var ICON_EYE_SLASH = '<svg viewBox="0 0 16 16" aria-hidden="true">'
-    + '<path d="M1.5 8 Q 8 2.5 14.5 8 Q 8 13.5 1.5 8 Z"/>'
-    + '<circle cx="8" cy="8" r="2"/>'
-    + '<path d="M2.5 13.5 L 13.5 2.5"/>'
+  var ICON_EYE_SLASH = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    + '<path d="M2 12 Q 12 3 22 12 Q 12 21 2 12 Z"/>'
+    + '<circle class="pupil" cx="12" cy="12" r="3.5"/>'
+    + '<path d="M4 20 L 20 4"/>'
     + '</svg>';
 
   function applyPanelsState() {

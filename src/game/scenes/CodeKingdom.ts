@@ -1528,14 +1528,29 @@ export class CodeKingdomScene extends Phaser.Scene {
     const barX = x + 78;
     const barEndX = x + w - countLabelW - 6;
     const barAvailW = Math.max(40, barEndX - barX);
+    const trackRadius = 6;
+    const cap = barH / 2;
     for (let i = 0; i < rows.length; i++) {
       const [label, value, color] = rows[i];
       const rowY = y + headerOffset + i * rowPitch;
       this.addText(x, rowY - 1, label, 11, theme.text).setOrigin(0, 0);
       this.ui.fillStyle(0x1a2448, 0.82);
-      this.ui.fillRoundedRect(barX, rowY, barAvailW, barH, 6);
+      this.ui.fillRoundedRect(barX, rowY, barAvailW, barH, trackRadius);
       this.ui.fillStyle(color, 0.95);
-      this.ui.fillRoundedRect(barX, rowY, Math.max(4, barAvailW * (value / max)), barH, 6);
+      // Min fill width = barH so the rounded left cap always has room
+      // to render as a full half-circle (otherwise it gets clipped and
+      // looks like a jagged sliver).
+      const fillW = Math.max(barH, barAvailW * (value / max));
+      if (fillW >= barAvailW - 0.5) {
+        this.ui.fillRoundedRect(barX, rowY, fillW, barH, trackRadius);
+      } else {
+        // Partial fill: smooth rounded left cap via fillCircle (uses
+        // many segments, so it doesn't pixelate at small widths the way
+        // fillRoundedRect's tessellated corners do) + flat-right body
+        // from the cap's center across the remaining width.
+        this.ui.fillCircle(barX + cap, rowY + cap, cap);
+        this.ui.fillRect(barX + cap, rowY, fillW - cap, barH);
+      }
       this.addText(barX + barAvailW + 6, rowY - 3, String(value), 11, theme.muted).setOrigin(0, 0);
     }
   }
