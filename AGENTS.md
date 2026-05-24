@@ -20,7 +20,11 @@ src-tauri/               — Tauri 2 Rust backend
   src/lib.rs             — Tauri commands + tray + window-state plugin
   src/agent.rs           — AgentProvider trait + CopilotProvider + fs watcher
   tauri.conf.json        — Windowed, decorated, resizable, opaque, 1280×800
-assets/kingdom/          — Curated CC0 Tiny Swords subset (with LICENSE.txt)
+assets/space/              — Space-themed sprite atlas (Phaser texture)
+  atlas.png                — Combined atlas: spritesheet2 (top) + spritesheet3 (bottom)
+  atlas.json               — Phaser JSONArray frame definitions (56 named frames)
+  source/                  — Original spritesheets used to build atlas.png
+assets/icon.png            — App icon (square, used by tools that need a single PNG)
 docs/                    — GitHub Pages site
   img/                   — README + landing-page screenshots (regenerable)
 scripts/release.js       — Version bump + git-cliff + tag + push

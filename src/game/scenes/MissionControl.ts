@@ -237,16 +237,16 @@ function loadInitialThemeMode(): ThemeMode {
 
 setActiveTheme(loadInitialThemeMode());
 const QUARTER_TEXTURES: Record<string, string> = {
-  forge: 'facility_tower',
-  library: 'moon_base',
-  terminal: 'control_console',
-  signal: 'satellite_dish',
-  delegates: 'ship_cargo',
-  skills: 'tablet_console',
-  court: 'captain_chair_white',
-  mcp: 'satellite',
+  forge: 'dome_glass_blue',
+  library: 'outpost_disc',
+  terminal: 'console_wide_teal',
+  signal: 'telescope_blue',
+  delegates: 'ship_fighter_blue',
+  skills: 'satellite_dish_stand',
+  court: 'console_sphere',
+  mcp: 'satellite_8panel',
 };
-const CENTER_TEXTURE = 'space_station';
+const CENTER_TEXTURE = 'outpost_domed_island';
 
 /// Single source of truth for quarter hues. Both `buildQuarters` and
 /// `categoryColor` read from this map — previously they each had their
@@ -1167,40 +1167,39 @@ export class MissionControlScene extends Phaser.Scene {
       const labelBlockH = Math.round(38 * Math.max(s, 0.85));
       const frameH = size + labelBlockH;
       const light = theme.mode === 'light';
-      const liveOuter = light ? (focused ? 0.55 : 0.34) : (focused ? 0.7 : 0.5);
-      const liveInner = light ? (focused ? 0.78 : 0.55) : (focused ? 0.92 : 0.75);
+      // Single colored halo per quarter (used to be two stacked discs —
+      // an outer faint disc + an inner brighter disc). Tuned to be
+      // translucent so the sprite reads as the focal point and the
+      // halo acts as a colored glow rather than a solid color chip.
+      const haloAlpha = light ? (focused ? 0.55 : 0.36) : (focused ? 0.62 : 0.45);
       // Every quarter renders with the same colored pedestal regardless
       // of 24h activity count. We used to dim idle quarters to a grey
       // wash, but that read as a visual "bug" against the surrounding
       // active quarters — the activity badge in the corner already
       // signals zero activity, so the desaturation was redundant noise.
-      const outerAlpha = liveOuter;
-      const innerAlpha = liveInner;
       const pedestalColor = quarter.color;
-      // Draw the panel/backdrop FIRST so the colored pedestal circles
+      // Draw the panel/backdrop FIRST so the colored pedestal circle
       // can layer on top of it in dark mode. (Previously the outer
       // circle was drawn first and then the near-opaque dark panel
       // covered it, which is why the colored halos that were so
       // visible in light mode disappeared in dark mode.) Light mode
-      // skips the panel fill entirely, so the circles still read
+      // skips the panel fill entirely, so the circle still reads
       // directly against the mission backdrop.
       this.drawPixelPanel(quarter.x - size / 2, panelTop, size, frameH, quarter.color, focused, s);
-      // Halo circles scale with quarterR (via pedestalUnit) instead of
-      // raw scene scale so they keep their visual proportion when
+      // Halo radius scales with quarterR (via pedestalUnit) instead of
+      // raw scene scale so it keeps its visual proportion when
       // focus-mode bumps the quarter sprite size. labelStackH in
       // computeLayout uses the same unit so labels follow.
       const pedestalUnit = quarterR / 64;
-      this.map.fillStyle(pedestalColor, outerAlpha);
+      this.map.fillStyle(pedestalColor, haloAlpha);
       this.map.fillCircle(quarter.x, quarter.y - 8 * pedestalUnit, 54 * pedestalUnit);
-      this.map.fillStyle(pedestalColor, innerAlpha);
-      this.map.fillCircle(quarter.x, quarter.y - 18 * pedestalUnit, 30 * pedestalUnit);
       const texture = QUARTER_TEXTURES[quarter.key] ?? CENTER_TEXTURE;
-      // Constrain the sprite inside a square box (max W = max H = size * 0.62)
-      // centered on the halo pedestal. The space atlas frames are tight to the
-      // visible pixels (Tiny Swords had transparent padding) so the box has to
-      // be tighter than the old 0.74 to keep tall buildings (tower, chair,
-      // tablet) inside the colored halo and the bracket frame.
-      const spriteBox = size * 0.62;
+      // Constrain the sprite inside a square box (max W = max H = size * 0.72)
+      // centered on the halo pedestal. v2 atlas frames are mostly wide/square
+      // (aspect 0.9-1.5), so a 0.72 box fills the halo nicely without
+      // overflowing the bracket frame — the halo outer diameter is roughly
+      // size * 0.84, leaving ~10-15px breathing room.
+      const spriteBox = size * 0.72;
       const fit = this.fitSpriteToBox(texture, spriteBox, spriteBox);
       const haloCenterY = quarter.y - 8 * pedestalUnit;
       const sprite = this.add.image(quarter.x, haloCenterY, SPACE_ATLAS_KEY, texture)
@@ -1330,23 +1329,25 @@ export class MissionControlScene extends Phaser.Scene {
       active: active > 0,
     };
 
-    // Native space_station frame is 151x116; size to roughly match the old
-    // castle's visual mass (210x168). Center the sprite on the moat center
-    // with origin 0.5/0.5 — the new atlas frames are tight to the visible
-    // pixels (unlike Tiny Swords PNGs which had padding), so the old 0.62
-    // origin + offset combo would push the antennas out of the moat circle.
-    const castleFit = this.fitSpriteToBox(CENTER_TEXTURE, 200 * castleScale, 160 * castleScale);
-    const castle = this.add.image(x, y, SPACE_ATLAS_KEY, CENTER_TEXTURE)
+    // outpost_domed_island has its visual mass split: the dome/structure
+    // sits on the upper half of the frame and a rocky base hangs below.
+    // Geometrically centering it on the moat would push the rocky base
+    // down into the ACTIVE pill. Lift the sprite by ~15% of castleScale so
+    // the building reads as centered on the moat and the rock hangs below.
+    // Box bumped from 200x160 to 220x190 to better fill the moat circle.
+    const castleFit = this.fitSpriteToBox(CENTER_TEXTURE, 220 * castleScale, 190 * castleScale);
+    const castle = this.add.image(x, y - 28 * castleScale, SPACE_ATLAS_KEY, CENTER_TEXTURE)
       .setOrigin(0.5, 0.5)
       .setDepth(6);
     castle.setDisplaySize(castleFit.w, castleFit.h);
     this.textObjects.push(castle);
-    // Active-sessions badge — sits in the moat just below the castle.
-    // With sprite anchor at y - 10s, sprite bottom = y + 54*castleScale.
+    // Active-sessions badge — sits in the moat below the castle.
+    // Sprite is anchored at y - 28*castleScale with half-height 95*castleScale,
+    // so sprite bottom ≈ y + 67*castleScale. The pill goes just below that.
     const pillW = Math.max(88, 96 * castleScale);
     const pillH = Math.max(28, 32 * castleScale);
     const pillX = x - pillW / 2;
-    const pillY = y + 64 * castleScale;
+    const pillY = y + 78 * castleScale;
     const activeFill = active > 0 ? 0x2d6cb0 : 0x2a3556;
     // Pill keeps the same blue background in both themes, so the text
     // can stay white/light for high contrast regardless of mode.
