@@ -132,20 +132,14 @@
 
   // ---------- Screenshot carousel ----------
   // Two animated previews of the dashboard. Each GIF runs a fixed
-  // 5-second loop, so the carousel dwells on each one long enough
-  // for a viewer to see the loop play through twice.
+  // ~10-second loop, so the carousel dwells on each one long enough
+  // for a viewer to see the loop play through. Order is fixed —
+  // dashboard.gif is always shown first so a visitor's first impression
+  // is the full instrumented view, not the stripped focus mode.
   const SHOTS = [
     { src: 'img/dashboard.gif',  label: '🛰 Full dashboard', duration: 10000 },
     { src: 'img/focus-mode.gif', label: '👁 Focus mode',     duration: 10000 },
   ];
-
-  function shuffle(arr) {
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
-  }
 
   function initCarousel() {
     const display = document.getElementById('gif-display');
@@ -153,7 +147,7 @@
     const indicatorWrap = document.getElementById('gif-indicators');
     if (!display || !label || !indicatorWrap) return;
 
-    const order = shuffle([...Array(SHOTS.length).keys()]);
+    const order = [...Array(SHOTS.length).keys()];
     let currentIdx = 0;
 
     order.forEach((_, i) => {
