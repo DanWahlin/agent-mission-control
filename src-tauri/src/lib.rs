@@ -1,4 +1,4 @@
-// Kingdom of Agents — Tauri backend.
+// Copilot Mission Control — Tauri backend.
 // A windowed observability dashboard for the GitHub Copilot CLI.
 //
 // Backend responsibilities:
@@ -161,7 +161,7 @@ pub fn run() {
 
             // Build a minimal system tray with Show/Hide and Quit.
             let is_mac = cfg!(target_os = "macos");
-            let toggle_label = "Show / Hide Kingdom of Agents";
+            let toggle_label = "Show / Hide Copilot Mission Control";
             let quit_label = if is_mac { "Quit  (⌘Q)" } else { "Quit  (Ctrl+Q)" };
 
             let toggle_item = MenuItemBuilder::with_id("toggle", toggle_label).build(app)?;
@@ -171,7 +171,7 @@ pub fn run() {
                 .build()?;
 
             let _tray = TrayIconBuilder::with_id("main")
-                .tooltip("Kingdom of Agents")
+                .tooltip("Copilot Mission Control")
                 .title("")
                 .icon(tauri::image::Image::from_bytes(TRAY_ICON_BYTES)?)
                 .menu(&menu)
@@ -195,7 +195,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Kingdom of Agents")
+        .expect("error while building Copilot Mission Control")
         .run(|app, event| {
             // macOS: re-show window when the user clicks the dock icon
             // after the window has been hidden.

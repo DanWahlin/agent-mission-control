@@ -1,7 +1,7 @@
 /**
- * Playwright test helpers for Kingdom of Agents.
+ * Playwright test helpers for Copilot Mission Control.
  *
- * The app is a single-scene Phaser canvas (`code-kingdom`) inside a
+ * The app is a single-scene Phaser canvas (`mission-control`) inside a
  * Tauri window; in tests we serve `dist/` over plain HTTP at port 4173
  * (see `playwright.config.ts`) so the renderer runs without Tauri.
  */
@@ -12,9 +12,9 @@ const GAME_URL = 'http://localhost:4173/game/index.html';
 export { GAME_URL };
 
 /**
- * Wait for the Phaser game to boot and for the Code Kingdom scene to
+ * Wait for the Phaser game to boot and for the Mission Control scene to
  * become active. Returns after the canvas is mounted and the scene
- * registry reports the `code-kingdom` scene running.
+ * registry reports the `mission-control` scene running.
  */
 export async function waitForGame(page: Page) {
   await page.waitForSelector('canvas', { timeout: 10_000 });
@@ -22,8 +22,8 @@ export async function waitForGame(page: Page) {
     () => {
       const game = (window as any).__phaserGame;
       if (!game) return false;
-      const scene = game.scene?.getScene?.('code-kingdom');
-      return !!scene && game.scene.isActive('code-kingdom');
+      const scene = game.scene?.getScene?.('mission-control');
+      return !!scene && game.scene.isActive('mission-control');
     },
     { timeout: 10_000, polling: 100 },
   );
@@ -31,7 +31,7 @@ export async function waitForGame(page: Page) {
   await page.waitForTimeout(500);
 }
 
-/** Read the Code Kingdom scene's reported status. */
-export async function getKingdomStatus(page: Page) {
-  return page.evaluate(() => (window as any).__codeKingdom?.getStatus?.() ?? null);
+/** Read the Mission Control scene's reported status. */
+export async function getMissionStatus(page: Page) {
+  return page.evaluate(() => (window as any).__missionControl?.getStatus?.() ?? null);
 }

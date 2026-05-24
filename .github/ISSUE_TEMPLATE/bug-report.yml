@@ -1,5 +1,5 @@
 name: 🐛 Bug Report
-description: Report a bug or unexpected behavior in Kingdom of Agents
+description: Report a bug or unexpected behavior in Copilot Mission Control
 labels: ["bug"]
 body:
   - type: markdown
@@ -22,7 +22,7 @@ body:
       label: Steps to reproduce
       description: How can we reproduce the bug?
       placeholder: |
-        1. Launch Kingdom of Agents
+        1. Launch Copilot Mission Control
         2. Start a Copilot CLI session
         3. ...
     validations:
@@ -48,7 +48,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Kingdom of Agents version
+      label: Copilot Mission Control version
       description: "Check the tray icon menu or the release you downloaded (e.g., v0.1.0)"
       placeholder: "v0.1.0"
 

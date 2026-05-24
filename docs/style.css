@@ -1,8 +1,8 @@
 /* ============================================================
-   Kingdom of Agents — Landing page
-   Theme: Deep-night kingdom, CRT scanlines, royal gold + purple
+   Copilot Mission Control — Landing page
+   Theme: Deep-night mission, CRT scanlines, royal gold + purple
    Patterned after the Agent Arcade landing for visual consistency
-   across the projects, themed for the kingdom dashboard.
+   across the projects, themed for the mission dashboard.
    ============================================================ */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -197,7 +197,7 @@ code {
   .btn-nav { margin-left: 0; text-align: center; }
 }
 
-/* ---------- Starfield + particles (night kingdom) ---------- */
+/* ---------- Starfield + particles (night sky) ---------- */
 #starfield {
   position: fixed;
   inset: 0;

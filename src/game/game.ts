@@ -1,13 +1,13 @@
-// Kingdom of Agents — single-scene bootstrap.
+// Copilot Mission Control — single-scene bootstrap.
 //
 // One Phaser game, one scene, no game-switcher, no ready screen.
-// Boots directly into the Kingdom view as soon as the window has
-// real dimensions. Window size/position is restored across launches
-// by `tauri-plugin-window-state` on the Rust side, so we just sync
-// Phaser to whatever viewport the user ends up with.
+// Boots directly into the Mission Control view as soon as the window
+// has real dimensions. Window size/position is restored across
+// launches by `tauri-plugin-window-state` on the Rust side, so we just
+// sync Phaser to whatever viewport the user ends up with.
 
 import { W, H, refreshDimensions } from './scenes/viewport.js';
-import { CodeKingdomScene } from './scenes/CodeKingdom.js';
+import { MissionControlScene } from './scenes/MissionControl.js';
 
 declare const Phaser: any;
 
@@ -22,7 +22,7 @@ function initGame() {
     width: W,
     height: H,
     backgroundColor: '#0a0e22',
-    scene: [CodeKingdomScene],
+    scene: [MissionControlScene],
     render: { pixelArt: true, antialias: false },
     fps: { target: 60 },
   });
@@ -45,7 +45,7 @@ if (!game) {
 }
 
 // Live resize: relayout the canvas without restarting the scene. The
-// kingdom scene's `computeLayout()` is responsive — it samples W/H
+// mission scene's `computeLayout()` is responsive — it samples W/H
 // every render — so a simple `scale.resize()` is enough.
 let resizeDebounce: number | null = null;
 window.addEventListener('resize', () => {

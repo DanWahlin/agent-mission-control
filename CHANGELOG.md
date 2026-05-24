@@ -1,10 +1,10 @@
 # Changelog
 
-All notable changes to Kingdom of Agents.
+All notable changes to Copilot Mission Control.
 
 ## [0.1.0] - Initial release
 
-- First standalone release of the Kingdom of Agents dashboard.
+- First standalone release of the Copilot Mission Control dashboard.
 - Decorated, resizable Tauri 2 window (not an overlay) with persistent size/position.
 - Single Phaser 4 scene rendering districts, ops panel, replay timeline, and session inspector.
 - Rust `AgentProvider` trait with `CopilotProvider` impl that scans `~/.copilot/session-state/`,

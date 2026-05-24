@@ -24,7 +24,7 @@ const fixture = {
   total_input_tokens: 567000,
   sessions: [
     {
-      id: 'alpha123', title: 'Polish kingdom layout', repository: 'kingdom-of-agents',
+      id: 'alpha123', title: 'Polish mission layout', repository: 'copilot-mission-control',
       branch: 'main', updated_at: '', is_active: true, status: 'working',
       event_count: 920, tool_count: 312, write_count: 71, read_count: 169,
       command_count: 197, web_count: 12, task_count: 3, error_count: 0,
@@ -33,7 +33,7 @@ const fixture = {
       stale_seconds: 4,
     },
     {
-      id: 'beta4567', title: 'Add Claude provider', repository: 'kingdom-of-agents',
+      id: 'beta4567', title: 'Add Claude provider', repository: 'copilot-mission-control',
       branch: 'feat/claude', updated_at: '', is_active: false, status: 'idle',
       event_count: 540, tool_count: 154, write_count: 22, read_count: 60,
       command_count: 48, web_count: 18, task_count: 5, error_count: 1,
@@ -79,17 +79,17 @@ async function snap({ width, height, panelsHidden, out }) {
   });
   const page = await ctx.newPage();
   await page.addInitScript((arg) => {
-    window.__kingdomFixture = arg.fixture;
-    try { localStorage.setItem('koa_panels_hidden', arg.panelsHidden ? '1' : '0'); } catch (_) {}
-    try { localStorage.setItem('koa_muted', '1'); } catch (_) {}
+    window.__missionControlFixture = arg.fixture;
+    try { localStorage.setItem('cmc_panels_hidden', arg.panelsHidden ? '1' : '0'); } catch (_) {}
+    try { localStorage.setItem('cmc_muted', '1'); } catch (_) {}
   }, { fixture, panelsHidden });
   await page.goto('http://localhost:4173/game/index.html');
   await page.waitForSelector('canvas', { timeout: 15000 });
   await page.waitForFunction(() => {
     const g = window.__phaserGame;
     if (!g) return false;
-    const scene = g.scene?.getScene?.('code-kingdom');
-    return !!scene && g.scene.isActive('code-kingdom');
+    const scene = g.scene?.getScene?.('mission-control');
+    return !!scene && g.scene.isActive('mission-control');
   }, { timeout: 15000, polling: 100 });
   await page.waitForTimeout(2200);
   await mkdir(dirname(out), { recursive: true });

@@ -1,8 +1,8 @@
-// Shared viewport dimensions for the Kingdom of Agents scene.
+// Shared viewport dimensions for the Copilot Mission Control scene.
 //
 // We re-export `W` and `H` as live values that callers refresh by
 // invoking `refreshDimensions()` whenever the window resizes. The
-// kingdom layout (`computeLayout()` in CodeKingdom.ts) reads these
+// mission layout (`computeLayout()` in MissionControl.ts) reads these
 // every render, so simply calling refresh + Phaser's `scale.resize()`
 // is enough to relayout the entire view.
 //

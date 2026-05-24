@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    kingdom_of_agents_lib::run()
+    copilot_mission_control_lib::run()
 }

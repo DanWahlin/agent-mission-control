@@ -2,11 +2,11 @@ declare const Phaser: any;
 
 import { W, H } from './viewport.js';
 
-type KingdomCategory = 'forge' | 'library' | 'terminal' | 'signal' | 'delegates' | 'skills' | 'court' | 'mcp' | 'workshop' | 'complete' | 'alert' | 'thinking' | 'waiting' | 'prompt' | 'arrival' | 'activity';
+type MissionCategory = 'forge' | 'library' | 'terminal' | 'signal' | 'delegates' | 'skills' | 'court' | 'mcp' | 'workshop' | 'complete' | 'alert' | 'thinking' | 'waiting' | 'prompt' | 'arrival' | 'activity';
 
 interface CopilotToolMetric {
   name: string;
-  category: KingdomCategory | string;
+  category: MissionCategory | string;
   count: number;
 }
 
@@ -15,7 +15,7 @@ interface CopilotEventSummary {
   timestamp: string;
   kind: string;
   tool: string;
-  category: KingdomCategory | string;
+  category: MissionCategory | string;
   success: boolean;
 }
 
@@ -75,7 +75,7 @@ interface CopilotActivity {
 }
 
 interface Quarter {
-  key: KingdomCategory;
+  key: MissionCategory;
   label: string;
   short: string;
   color: number;
@@ -84,7 +84,7 @@ interface Quarter {
   count: number;
 }
 
-interface KingdomLayout {
+interface MissionLayout {
   s: number;
   compact: boolean;
   leftX: number;
@@ -113,7 +113,7 @@ interface KingdomLayout {
 
 interface EventPulse {
   id: string;
-  quarterKey: KingdomCategory;
+  quarterKey: MissionCategory;
   color: number;
   startX: number;
   startY: number;
@@ -162,12 +162,12 @@ interface OpsSummary {
 
 declare global {
   interface Window {
-    __kingdomFixture?: CopilotActivity;
-    __kingdomAutoFixture?: boolean;
-    __koaOnAgentActivityChanged?: () => void;
-    __koaSetTheme?: (mode: 'dark' | 'light') => void;
-    __koaUpdateModel?: (model: string) => void;
-    __koaSetPanelsHidden?: (hidden: boolean) => void;
+    __missionControlFixture?: CopilotActivity;
+    __missionControlAutoFixture?: boolean;
+    __cmcOnAgentActivityChanged?: () => void;
+    __cmcSetTheme?: (mode: 'dark' | 'light') => void;
+    __cmcUpdateModel?: (model: string) => void;
+    __cmcSetPanelsHidden?: (hidden: boolean) => void;
   }
 }
 
@@ -175,7 +175,7 @@ const GOLD = 0xffd54a;
 const TS_ASSET_ROOT = '../assets/kingdom/tiny-swords';
 
 type ThemeMode = 'dark' | 'light';
-interface KingdomTheme {
+interface MissionTheme {
   mode: ThemeMode;
   backdropFill: number;
   panelBg: number;
@@ -190,7 +190,7 @@ interface KingdomTheme {
   rowBg: number;
 }
 
-const DARK_THEME: KingdomTheme = {
+const DARK_THEME: MissionTheme = {
   mode: 'dark',
   backdropFill: 0x05081a,
   panelBg: 0x0a1024,
@@ -205,7 +205,7 @@ const DARK_THEME: KingdomTheme = {
   rowBg: 0x101833,
 };
 
-const LIGHT_THEME: KingdomTheme = {
+const LIGHT_THEME: MissionTheme = {
   mode: 'light',
   backdropFill: 0xeef2fb,
   panelBg: 0xffffff,
@@ -220,7 +220,7 @@ const LIGHT_THEME: KingdomTheme = {
   rowBg: 0xdde3f1,
 };
 
-let theme: KingdomTheme = DARK_THEME;
+let theme: MissionTheme = DARK_THEME;
 
 function setActiveTheme(mode: ThemeMode) {
   theme = mode === 'light' ? LIGHT_THEME : DARK_THEME;
@@ -228,7 +228,7 @@ function setActiveTheme(mode: ThemeMode) {
 
 function loadInitialThemeMode(): ThemeMode {
   try {
-    const stored = window.localStorage?.getItem('koa_theme');
+    const stored = window.localStorage?.getItem('cmc_theme');
     if (stored === 'light' || stored === 'dark') return stored;
   } catch { /* private mode / no storage — fall through */ }
   return 'dark';
@@ -251,7 +251,7 @@ const QUARTER_TEXTURES: Record<string, string> = {
 /// own hex literals which silently drifted apart whenever one was
 /// tweaked. The 'alert' entry is shared with the attention/error pulse
 /// path and is intentionally not a quarter.
-const QUARTER_COLORS: Record<KingdomCategory, number> = {
+const QUARTER_COLORS: Record<MissionCategory, number> = {
   forge: 0xff8a3d,
   library: 0x61d6ff,
   terminal: 0xa5ff6b,
@@ -261,7 +261,7 @@ const QUARTER_COLORS: Record<KingdomCategory, number> = {
   court: 0xffd54a,
   mcp: 0x4ad6a8,
   alert: 0xff5252,
-  // The remaining KingdomCategory members are event-kind tags, not
+  // The remaining MissionCategory members are event-kind tags, not
   // visual quarters, so they fall back to the muted default in
   // `categoryColor`. Listing them keeps the Record exhaustive.
   workshop: 0x9aa6c8,
@@ -306,8 +306,8 @@ const PULSE_TRAIL_SPACING_PROGRESS = 0.055;
 const ARRIVAL_LIFETIME_MS = 520;
 const ARRIVAL_MAX_RADIUS_PX = 44;
 
-export class CodeKingdomScene extends Phaser.Scene {
-  /// Full-window dark fill that sits behind the kingdom map. Drawn
+export class MissionControlScene extends Phaser.Scene {
+  /// Full-window dark fill that sits behind the mission map. Drawn
   /// once in `create()` and resized inline if the user grows the
   /// window (the renderer uses Graphics primitives that don't
   /// auto-respond to scale.resize, so we keep a handle to redraw).
@@ -331,11 +331,11 @@ export class CodeKingdomScene extends Phaser.Scene {
   private transcriptTextObjects: any[] = [];
   /// Focus mode: when true, the Summary + Selected Session + Activity
   /// Feed side panels are skipped and computeLayout() collapses their
-  /// widths to 0 so the kingdom ring (castle + quarters) expands to
+  /// widths to 0 so the mission ring (castle + quarters) expands to
   /// fill the full canvas width. The bottom quarter inspector and
   /// replay timeline still render so hover/click + scrubber controls
   /// keep working. Toggled from the topbar button via the global
-  /// `__koaSetPanelsHidden` hook; persisted in localStorage.
+  /// `__cmcSetPanelsHidden` hook; persisted in localStorage.
   private panelsHidden = false;
   private hoveredQuarterIndex = -1;
   // Sticky last-hover: persists when the pointer leaves the ring so the
@@ -417,7 +417,7 @@ export class CodeKingdomScene extends Phaser.Scene {
 
   public activity: CopilotActivity = createEmptyActivity();
   public quarters: Quarter[] = [];
-  public layout: KingdomLayout | null = null;
+  public layout: MissionLayout | null = null;
   public insightCards: InsightCard[] = [];
   public opsSummary: OpsSummary = createOpsSummary('Disconnected', 'watch', 'Run GitHub Copilot CLI to populate activity.', 'No activity loaded yet.');
   public selectedSession: CopilotSessionSummary | null = null;
@@ -441,11 +441,11 @@ export class CodeKingdomScene extends Phaser.Scene {
   };
 
   constructor() {
-    super('code-kingdom');
+    super('mission-control');
   }
 
   get displayName() {
-    return 'Kingdom of Agents';
+    return 'Copilot Mission Control';
   }
 
   preload() {
@@ -462,7 +462,7 @@ export class CodeKingdomScene extends Phaser.Scene {
   }
 
   create() {
-    // Full-window dark backdrop. Drawn at depth -100 so all kingdom
+    // Full-window dark backdrop. Drawn at depth -100 so all mission
     // graphics render above it. Redrawn inline on viewport changes.
     this.backdrop = this.add.graphics().setDepth(-100);
     this.redrawBackdrop();
@@ -490,9 +490,9 @@ export class CodeKingdomScene extends Phaser.Scene {
     this.overlay = this.add.graphics().setDepth(50);
 
     // Restore last-session prefs so context survives a window restart.
-    // The migration in loadKingdomPrefs() folds older `pinnedDistrictKey`
+    // The migration in loadMissionPrefs() folds older `pinnedDistrictKey`
     // and `inspectedDistrictKey` storage entries into the new key.
-    const prefs = loadKingdomPrefs();
+    const prefs = loadMissionPrefs();
     this.inspectedQuarterKey = prefs.inspectedQuarterKey ?? null;
     if (prefs.replayPaused) this.replayPaused = true;
     if (prefs.transcriptOpen) this.transcriptOpen = true;
@@ -511,10 +511,10 @@ export class CodeKingdomScene extends Phaser.Scene {
       if (idx >= 0) this.selectedSessionIndex = idx;
     }
     // Restore persisted focus-mode preference BEFORE the first render so
-    // the kingdom paints in its final layout instead of flashing the
+    // the mission paints in its final layout instead of flashing the
     // side panels in for one frame and then collapsing them.
     try {
-      this.panelsHidden = localStorage.getItem('koa_panels_hidden') === '1';
+      this.panelsHidden = localStorage.getItem('cmc_panels_hidden') === '1';
     } catch { /* private mode / quota — fall back to default false */ }
     this.renderActivity();
     // Bootstrap is done — any further ingest is a genuine push from
@@ -527,11 +527,11 @@ export class CodeKingdomScene extends Phaser.Scene {
     });
     // Push: backend watcher calls this on filesystem changes. Defensive
     // check: only refresh if this scene is still the active one.
-    window.__koaOnAgentActivityChanged = () => {
+    window.__cmcOnAgentActivityChanged = () => {
       if (!this.scene?.isActive?.()) return;
       void this.refreshActivity(true);
     };
-    window.__koaSetTheme = (mode: ThemeMode) => {
+    window.__cmcSetTheme = (mode: ThemeMode) => {
       if (!this.scene?.isActive?.()) return;
       setActiveTheme(mode);
       this.redrawBackdrop();
@@ -543,7 +543,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     // initial value is restored from localStorage above (before the
     // first render) so we early-return when hud.js's first call agrees
     // with what we already painted.
-    window.__koaSetPanelsHidden = (hidden: boolean) => {
+    window.__cmcSetPanelsHidden = (hidden: boolean) => {
       if (!this.scene?.isActive?.()) return;
       const next = !!hidden;
       if (next === this.panelsHidden) return;
@@ -554,7 +554,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     };
     // Startup retry ramp: the very first invoke can race the Tauri bridge
     // becoming ready or a Copilot session being mid-write. Re-poll a few
-    // times in the first ~10s so the user sees the kingdom populate
+    // times in the first ~10s so the user sees the mission populate
     // quickly rather than waiting for the long-cadence fallback.
     for (const ms of [500, 1500, 3000, 6000, 10000]) {
       const evt = this.time.delayedCall(ms, () => {
@@ -565,7 +565,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     }
     // Steady-state poll: covers the case where the watcher fails to attach
     // (e.g., state directory doesn't exist yet, watch limits, etc.). 10s
-    // keeps the kingdom responsive when the user starts a Copilot session
+    // keeps the mission responsive when the user starts a Copilot session
     // after the app has been running for a while.
     this.pollEvent = this.time.addEvent({
       delay: 10000,
@@ -695,18 +695,18 @@ export class CodeKingdomScene extends Phaser.Scene {
     // Only clear the push callback if it still belongs to this scene's
     // handler — guards against a newly-created scene's handler being
     // wiped by a stale shutdown.
-    if (window.__koaOnAgentActivityChanged) {
-      window.__koaOnAgentActivityChanged = undefined;
+    if (window.__cmcOnAgentActivityChanged) {
+      window.__cmcOnAgentActivityChanged = undefined;
     }
-    if (window.__koaSetTheme) {
-      window.__koaSetTheme = undefined;
+    if (window.__cmcSetTheme) {
+      window.__cmcSetTheme = undefined;
     }
-    if (window.__koaSetPanelsHidden) {
-      window.__koaSetPanelsHidden = undefined;
+    if (window.__cmcSetPanelsHidden) {
+      window.__cmcSetPanelsHidden = undefined;
     }
     // Blank the navbar model chip so a stale model id doesn't linger
     // when the scene tears down (game switch, hot reload, etc.).
-    try { window.__koaUpdateModel?.(''); } catch { /* no-op */ }
+    try { window.__cmcUpdateModel?.(''); } catch { /* no-op */ }
     this.clearDynamicObjects();
     this.flow?.clear();
     this.moat?.clear();
@@ -781,8 +781,8 @@ export class CodeKingdomScene extends Phaser.Scene {
   }
 
   private resolveFixture(allowAuto = true): CopilotActivity {
-    if (window.__kingdomFixture) return normalizeActivity(window.__kingdomFixture);
-    if (allowAuto && window.__kingdomAutoFixture) return createDemoActivity();
+    if (window.__missionControlFixture) return normalizeActivity(window.__missionControlFixture);
+    if (allowAuto && window.__missionControlAutoFixture) return createDemoActivity();
     return createEmptyActivity();
   }
 
@@ -802,7 +802,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     // DOM). Guarded so tests / non-Tauri contexts without the HUD
     // bridge don't crash.
     try {
-      (window as any).__koaUpdateOps?.(this.opsSummary, this.activity.alerts ?? []);
+      (window as any).__cmcUpdateOps?.(this.opsSummary, this.activity.alerts ?? []);
     } catch { /* DOM not ready yet — next render will catch up */ }
     this.selectedSession = this.pickSelectedSession();
     this.insightCards = this.buildInsightCards();
@@ -817,7 +817,7 @@ export class CodeKingdomScene extends Phaser.Scene {
   // rects first, then derives the ring radii so quarters never
   // collide with the side panels or the bottom inspector. This must
   // run before buildQuarters so sceneScale and rect math agree.
-  private computeLayout(): KingdomLayout {
+  private computeLayout(): MissionLayout {
     const s = sceneScale();
     const compact = W < 1600 || H < 900;
 
@@ -850,7 +850,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     const sessionH = Math.min(compact ? 320 : 360, Math.max(294, H * 0.32));
 
     // Replay strip is hidden in focus mode so the quarter inspector
-    // can drop to the bottom edge and the kingdom ring picks up the
+    // can drop to the bottom edge and the mission ring picks up the
     // recovered vertical room. replayY is parked off-canvas so any
     // stale rect references read as out-of-bounds (the strip is also
     // never drawn — see drawPanels).
@@ -997,7 +997,7 @@ export class CodeKingdomScene extends Phaser.Scene {
       const diagY = isDiagonal ? Math.sign(sinA) * diagonalShift : 0;
       return {
         ...spec,
-        color: QUARTER_COLORS[spec.key as KingdomCategory] ?? 0x9aa6c8,
+        color: QUARTER_COLORS[spec.key as MissionCategory] ?? 0x9aa6c8,
         x: centerX + Math.cos(angle) * radiusX,
         y: centerY + sinA * radiusY - lift + diagY,
         count: counts.get(spec.key) ?? 0,
@@ -1183,7 +1183,7 @@ export class CodeKingdomScene extends Phaser.Scene {
       // covered it, which is why the colored halos that were so
       // visible in light mode disappeared in dark mode.) Light mode
       // skips the panel fill entirely, so the circles still read
-      // directly against the kingdom backdrop.
+      // directly against the mission backdrop.
       this.drawPixelPanel(quarter.x - size / 2, panelTop, size, frameH, quarter.color, focused, s);
       // Halo circles scale with quarterR (via pedestalUnit) instead of
       // raw scene scale so they keep their visual proportion when
@@ -1224,7 +1224,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     const border = Math.max(2, Math.round((focused ? 4 : 2) * s));
     const notch = Math.max(10, Math.round(13 * s));
     // In light mode we drop the panel fill + drop-shadow entirely so the
-    // building sprite reads on the kingdom backdrop and the quarter's
+    // building sprite reads on the mission backdrop and the quarter's
     // colored corner-frame is the only chrome around it. Dark mode keeps
     // the deep card so the sprites pop against the navy backdrop.
     if (theme.mode !== 'light') {
@@ -1361,10 +1361,10 @@ export class CodeKingdomScene extends Phaser.Scene {
 
     // Ops strip is no longer drawn on the canvas — its status word,
     // recommendation, and alert count are surfaced in the top bar via
-    // window.__koaUpdateOps (see renderActivity + hud.js).
+    // window.__cmcUpdateOps (see renderActivity + hud.js).
 
     // Focus mode skips the three side panels (Summary / Selected
-    // Session / Activity Feed) so the kingdom ring expands to fill
+    // Session / Activity Feed) so the mission ring expands to fill
     // the canvas. The bottom quarter inspector + replay timeline at
     // the end of this method still draw so hover/click + scrubber
     // controls keep working.
@@ -1421,8 +1421,8 @@ export class CodeKingdomScene extends Phaser.Scene {
     const feed = enrichedFeed;
     if (feed.length === 0) {
       const message = this.activity.available
-        ? 'No recent Copilot events found. Start a Copilot CLI session and this kingdom will wake up.'
-        : 'Copilot CLI was not detected. Install or run Copilot CLI to populate this kingdom.';
+        ? 'No recent Copilot events found. Start a Copilot CLI session and this mission control will wake up.'
+        : 'Copilot CLI was not detected. Install or run Copilot CLI to populate this mission.';
       this.addWrappedText(rightX + 22, feedY + 58, message, rightW - 44, 13, theme.muted);
     } else {
       // Slim per-row pitch (32 px) so compact layouts can show multiple
@@ -2185,7 +2185,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     if (theme.mode === 'light') {
       // Soft moat-blue header — mirrors the castle's moat color
       // (0x2960c0) at low alpha so panel chrome reads as part of the
-      // same kingdom palette as the central scene focus.
+      // same mission palette as the central scene focus.
       this.ui.fillStyle(0x2960c0, 0.18);
       this.ui.fillRoundedRect(x + 10, y + 10, w - 20, 34, 10);
       this.ui.lineStyle(1, 0x2960c0, 0.55);
@@ -2295,7 +2295,7 @@ export class CodeKingdomScene extends Phaser.Scene {
         if (lastSeen !== event.timestamp) {
           this.turnEndSeen.set(event.session_id, event.timestamp);
           this.playChime('turn-end');
-          this.maybeNotify(`Copilot finished — ${event.session_id}`, 'Open the kingdom to review the results.');
+          this.maybeNotify(`Copilot finished — ${event.session_id}`, 'Open Mission Control to review the results.');
         }
       }
     }
@@ -2373,7 +2373,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     if (typeof Notification === 'undefined') return;
     const fire = () => {
       try {
-        new Notification(title, { body, tag: tag ?? 'kingdom', silent: false });
+        new Notification(title, { body, tag: tag ?? 'mission-control', silent: false });
       } catch { /* ignore */ }
     };
     if (Notification.permission === 'granted') {
@@ -2615,7 +2615,7 @@ export class CodeKingdomScene extends Phaser.Scene {
   /// to redraw the same number, which destroyed framerate during
   /// bursts (8+ full scene rebuilds/second). The arrival sigil is now
   /// the sole visual feedback for "pulse landed".
-  private incrementQuarterActivity(_key: KingdomCategory) {
+  private incrementQuarterActivity(_key: MissionCategory) {
     // intentionally empty — see comment above.
   }
 
@@ -2683,7 +2683,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     // between scans, so tracking by id keeps the user pinned to the
     // session they were actually inspecting.
     if (this.userSelectedSession) {
-      const prefs = loadKingdomPrefs();
+      const prefs = loadMissionPrefs();
       if (prefs.lastSelectedSessionId) {
         const idx = sessions.findIndex(s => s.id === prefs.lastSelectedSessionId);
         if (idx >= 0) {
@@ -2705,7 +2705,7 @@ export class CodeKingdomScene extends Phaser.Scene {
   }
 
   /// Push the currently-selected session's model id to the navbar
-  /// chip via the global `__koaUpdateModel` hook. Fires on every
+  /// chip via the global `__cmcUpdateModel` hook. Fires on every
   /// `renderActivity()` call so it covers (1) initial bootstrap,
   /// (2) the user clicking a different session, and (3) a mid-session
   /// model switch where the same session's `last_model` changes
@@ -2714,7 +2714,7 @@ export class CodeKingdomScene extends Phaser.Scene {
   private pushSelectedModelToNavbar() {
     try {
       const model = this.selectedSession?.last_model ?? '';
-      window.__koaUpdateModel?.(model);
+      window.__cmcUpdateModel?.(model);
     } catch {
       /* DOM not ready yet — next render will catch up */
     }
@@ -2826,7 +2826,7 @@ export class CodeKingdomScene extends Phaser.Scene {
     }
   }
 
-  private getQuarterSessionStats(key: KingdomCategory) {
+  private getQuarterSessionStats(key: MissionCategory) {
     const sessions = this.activity.sessions.filter(session => this.pickQuarterForSession(session).key === key);
     // For the Commands quarter we deliberately don't count
     // error_count toward "needs review" — failed bash commands are
@@ -3049,10 +3049,10 @@ function createDemoActivity(): CopilotActivity {
     total_tool_calls: 140,
     total_output_tokens: 24380,
     sessions: [
-      { id: 'alpha123', title: 'Build Kingdom', repository: 'kingdom-of-agents', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 128, tool_count: 55, write_count: 16, read_count: 22, command_count: 10, web_count: 3, task_count: 4, error_count: 0, output_tokens: 9800, last_tool: 'apply_patch', last_event_category: 'forge' },
-      { id: 'beta4567', title: 'Review Tests', repository: 'kingdom-of-agents', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 96, tool_count: 42, write_count: 5, read_count: 14, command_count: 18, web_count: 0, task_count: 5, error_count: 2, output_tokens: 6120, last_tool: 'bash', last_event_category: 'alert' },
+      { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 128, tool_count: 55, write_count: 16, read_count: 22, command_count: 10, web_count: 3, task_count: 4, error_count: 0, output_tokens: 9800, last_tool: 'apply_patch', last_event_category: 'forge' },
+      { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 96, tool_count: 42, write_count: 5, read_count: 14, command_count: 18, web_count: 0, task_count: 5, error_count: 2, output_tokens: 6120, last_tool: 'bash', last_event_category: 'alert' },
       { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '', is_active: true, status: 'thinking', event_count: 74, tool_count: 28, write_count: 1, read_count: 11, command_count: 1, web_count: 13, task_count: 2, error_count: 0, output_tokens: 5450, last_tool: 'web_fetch', last_event_category: 'signal' },
-      { id: 'delta321', title: 'Plan Refactor', repository: 'kingdom-of-agents', branch: 'feature/kingdom', updated_at: '', is_active: false, status: 'idle', event_count: 62, tool_count: 15, write_count: 2, read_count: 8, command_count: 1, web_count: 1, task_count: 3, error_count: 0, output_tokens: 3010, last_tool: 'task', last_event_category: 'delegates' },
+      { id: 'delta321', title: 'Plan Refactor', repository: 'copilot-mission-control', branch: 'feature/mission', updated_at: '', is_active: false, status: 'idle', event_count: 62, tool_count: 15, write_count: 2, read_count: 8, command_count: 1, web_count: 1, task_count: 3, error_count: 0, output_tokens: 3010, last_tool: 'task', last_event_category: 'delegates' },
     ],
     tools: [
       { name: 'view', category: 'library', count: 33 },
@@ -3186,7 +3186,7 @@ function eventKey(event: CopilotEventSummary) {
   return `${event.timestamp}|${event.session_id}|${event.kind}|${event.tool}|${event.category}|${event.success}`;
 }
 
-function quarterKeyForEvent(event: CopilotEventSummary): KingdomCategory | null {
+function quarterKeyForEvent(event: CopilotEventSummary): MissionCategory | null {
   const category = event.category;
   if (category === 'forge' || category === 'library' || category === 'terminal' || category === 'signal' || category === 'delegates' || category === 'skills' || category === 'court' || category === 'mcp') {
     return category;
@@ -3217,7 +3217,7 @@ function pulsePoint(pulse: EventPulse) {
 }
 
 function categoryColor(category: string) {
-  return QUARTER_COLORS[category as KingdomCategory] ?? 0x9aa6c8;
+  return QUARTER_COLORS[category as MissionCategory] ?? 0x9aa6c8;
 }
 
 function colorToCss(color: number) {
@@ -3309,9 +3309,9 @@ function feedLabel(event: CopilotEventSummary) {
   return event.kind;
 }
 
-const PREFS_KEY = 'koa_prefs';
+const PREFS_KEY = 'cmc_prefs';
 
-interface KingdomPrefs {
+interface MissionPrefs {
   /// Sticky last-hovered quarter. Persists across window restarts so
   /// the inspector resumes on whatever the user was last looking at.
   inspectedQuarterKey?: string | null;
@@ -3320,13 +3320,13 @@ interface KingdomPrefs {
   transcriptOpen?: boolean;
 }
 
-function loadKingdomPrefs(): KingdomPrefs {
+function loadMissionPrefs(): MissionPrefs {
   try {
     const raw = window.localStorage?.getItem(PREFS_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
-      const prefs = parsed as KingdomPrefs & {
+      const prefs = parsed as MissionPrefs & {
         // Legacy fields that may still be in old users' localStorage:
         //  - `pinnedDistrictKey`: original click-to-pin key (v0.1).
         //  - `inspectedDistrictKey`: renamed sticky-hover key (v0.1.x).
@@ -3362,9 +3362,9 @@ function loadKingdomPrefs(): KingdomPrefs {
   return {};
 }
 
-function savePref<K extends keyof KingdomPrefs>(key: K, value: KingdomPrefs[K]) {
+function savePref<K extends keyof MissionPrefs>(key: K, value: MissionPrefs[K]) {
   try {
-    const current = loadKingdomPrefs();
+    const current = loadMissionPrefs();
     current[key] = value;
     window.localStorage?.setItem(PREFS_KEY, JSON.stringify(current));
   } catch { /* ignore — quota/private-mode is non-fatal */ }
@@ -3401,13 +3401,13 @@ function cssToHex(css: string): number {
   return Number.isFinite(n) ? n : 0xffffff;
 }
 
-/// Mirror the mute flag that hud.js stores in localStorage. The kingdom
+/// Mirror the mute flag that hud.js stores in localStorage. Mission Control
 /// chimes use a separate Web Audio context (not Phaser's master mixer),
 /// so the HUD's mute button doesn't reach them directly — this helper
 /// gives them a single source of truth to consult.
 function isHudMuted(): boolean {
   try {
-    return window.localStorage?.getItem('koa_muted') === '1';
+    return window.localStorage?.getItem('cmc_muted') === '1';
   } catch {
     return false;
   }

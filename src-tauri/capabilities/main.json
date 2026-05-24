@@ -1,6 +1,6 @@
 {
   "identifier": "main-capability",
-  "description": "Main window capability for Kingdom of Agents",
+  "description": "Main window capability for Copilot Mission Control",
   "windows": ["main"],
   "permissions": [
     "core:window:default",

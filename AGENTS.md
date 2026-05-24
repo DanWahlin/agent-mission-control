@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Kingdom of Agents is a windowed, decorated, resizable Tauri 2 desktop app that visualizes live activity from the [GitHub Copilot CLI](https://github.com/github/copilot-cli). It runs as an opaque normal-level window (not an overlay) so devs can park it on a second monitor while interacting with Copilot CLI in their primary terminal.
+Copilot Mission Control is a windowed, decorated, resizable Tauri 2 desktop app that visualizes live activity from the [GitHub Copilot CLI](https://github.com/github/copilot-cli). It runs as an opaque normal-level window (not an overlay) so devs can park it on a second monitor while interacting with Copilot CLI in their primary terminal.
 
 The architecture is **provider-agnostic by design** — the `AgentProvider` trait in `src-tauri/src/agent.rs` is the privacy boundary, and `CopilotProvider` is the only implementation that ships today. Adding Claude Code, Codex, or other CLIs is a matter of dropping in another provider (see "Adding a Provider" below).
 
@@ -11,7 +11,7 @@ The architecture is **provider-agnostic by design** — the `AgentProvider` trai
 ```
 src/game/                — Frontend code (TypeScript, Phaser 4)
 src/game/scenes/         — Phaser scenes
-  CodeKingdom.ts         — The product. One scene; the entire dashboard
+  MissionControl.ts      — The product. One scene; the entire dashboard
   viewport.ts            — W/H exports + refreshDimensions() (resize helper)
 src/game/game.ts         — Single-scene Phaser bootstrap (~55 lines)
 src/game/index.html      — Slim 32 px top bar + #game div
@@ -26,9 +26,9 @@ docs/                    — GitHub Pages site
 scripts/release.js       — Version bump + git-cliff + tag + push
 scripts/snap-readme.mjs  — Playwright screenshotter for docs/img/
 tests/                   — Playwright (Chromium, headless)
-  app.spec.ts            — App shell smoke tests
-  code-kingdom.spec.ts   — Scene behavior + multi-viewport layout regressions
-  helpers.ts             — waitForGame() + getKingdomStatus()
+  app.spec.ts                — App shell smoke tests
+  mission-control.spec.ts    — Scene behavior + multi-viewport layout regressions
+  helpers.ts                 — waitForGame() + getMissionStatus()
 .github/workflows/
   build.yml              — Build & Release on v* tags
   ci.yml                 — type-check + build + Playwright on PRs
@@ -39,8 +39,8 @@ tests/                   — Playwright (Chromium, headless)
 
 - **Desktop shell:** Tauri 2 — decorated, resizable, opaque window. Tray icon with Show/Hide and Quit. Window size and position persisted via `tauri-plugin-window-state`.
 - **Frontend:** Phaser 4 (Graphics + Image sprites), TypeScript (ES2022, strict, `verbatimModuleSyntax: true`, `.js` import extensions).
-- **Backend:** Rust 2021. Owns `~/.copilot/session-state/` scanning, normalization, allowlisting, and the `notify = 8` filesystem watcher that pushes updates to the renderer via `window.__koaOnAgentActivityChanged()` calls.
-- **Tests:** Playwright headless Chromium. The renderer is fully testable without Tauri because `window.__kingdomFixture` lets a test inject deterministic activity data.
+- **Backend:** Rust 2021. Owns `~/.copilot/session-state/` scanning, normalization, allowlisting, and the `notify = 8` filesystem watcher that pushes updates to the renderer via `window.__cmcOnAgentActivityChanged()` calls.
+- **Tests:** Playwright headless Chromium. The renderer is fully testable without Tauri because `window.__missionControlFixture` lets a test inject deterministic activity data.
 
 ## Build & Run
 
@@ -54,22 +54,21 @@ npm start                  # frontend + cargo tauri dev (launches the window)
 ## Testing
 
 ```bash
-npm test                                       # full suite (build + Playwright)
-npx playwright test tests/code-kingdom.spec.ts # scene tests only
-npx playwright test --headed                   # visible browser
+npm test                                          # full suite (build + Playwright)
+npx playwright test tests/mission-control.spec.ts # scene tests only
+npx playwright test --headed                      # visible browser
 ```
 
 The Playwright `webServer` config serves `dist/` over `python3 -m http.server 4173`. The current suite is **27 tests** covering startup, dashboard panels, replay/scrubber, session selection, ops mode classification, and a six-viewport layout regression.
 
 ## Key Patterns
 
-- **`CodeKingdomScene` extends `Phaser.Scene` directly.** There is no `BaseScene`. The scene paints its own full-window backdrop in `create()` (depth -100) and redraws it on `scale.resize`.
-- **Single scene.** Boot Phaser → instantiate `CodeKingdomScene` → resize listener calls `refreshDimensions()` + `scale.resize(W, H)` so the scene re-lays-out the dashboard on every window change.
-- **Push-driven updates.** The Rust watcher debounces FS events (~300 ms) and calls `win.eval("window.__koaOnAgentActivityChanged && window.__koaOnAgentActivityChanged()")`. The 30 s poll in the scene is a fallback for environments where the watcher fails to attach.
+- **`MissionControlScene` extends `Phaser.Scene` directly.** There is no `BaseScene`. The scene paints its own full-window backdrop in `create()` (depth -100) and redraws it on `scale.resize`.
+- **Single scene.** Boot Phaser → instantiate `MissionControlScene` → resize listener calls `refreshDimensions()` + `scale.resize(W, H)` so the scene re-lays-out the dashboard on every window change.
+- **Push-driven updates.** The Rust watcher debounces FS events (~300 ms) and calls `win.eval("window.__cmcOnAgentActivityChanged && window.__cmcOnAgentActivityChanged()")`. The 30 s poll in the scene is a fallback for environments where the watcher fails to attach.
 - **Privacy invariant.** The `AgentProvider::scan()` boundary is the only place where Copilot session data is read. Only allowlisted fields cross into `AgentEventSummary` / `AgentSessionSummary` — never raw prompts, tool args, command output, file paths, or diffs.
-- **`window.__codeKingdom`** exposes `getStatus()` / `saveSnapshot()` / `restartReplay()` / `clearCurrent()` / `clearAll()` / `disconnect()` for the top bar and for tests.
 - **`window.__phaserGame`** is set so Playwright can reach into the scene registry without DOM scraping.
-- **LocalStorage keys** are prefixed `koa_` (e.g., `koa_muted`, `koa_panels_hidden`, `koa_prefs`).
+- **LocalStorage keys** are prefixed `cmc_` (e.g., `cmc_muted`, `cmc_panels_hidden`, `cmc_prefs`).
 
 ## Adding a Provider
 

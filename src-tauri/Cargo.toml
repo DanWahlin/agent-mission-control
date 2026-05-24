@@ -1,12 +1,12 @@
 [package]
-name = "kingdom-of-agents"
+name = "copilot-mission-control"
 version = "0.1.0"
-description = "Kingdom of Agents — a live dashboard for the GitHub Copilot CLI"
+description = "Copilot Mission Control — a live dashboard for the GitHub Copilot CLI"
 authors = ["Dan Wahlin"]
 edition = "2021"
 
 [lib]
-name = "kingdom_of_agents_lib"
+name = "copilot_mission_control_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { GAME_URL, waitForGame } from './helpers';
 
-const KINGDOM_FIXTURE = {
+const MISSION_FIXTURE = {
   available: true,
   source: 'playwright-fixture',
   scanned_sessions: 3,
@@ -11,8 +11,8 @@ const KINGDOM_FIXTURE = {
   total_tool_calls: 47,
   total_output_tokens: 8120,
   sessions: [
-    { id: 'alpha123', title: 'Build Kingdom', repository: 'kingdom-of-agents', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 1, error_count: 0, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 12 },
-    { id: 'beta4567', title: 'Review Tests', repository: 'kingdom-of-agents', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, write_count: 2, read_count: 7, command_count: 6, web_count: 0, task_count: 2, error_count: 1, output_tokens: 2920, last_tool: 'bash', last_event_kind: 'tool.execution_complete', last_event_category: 'alert', stale_seconds: 25 },
+    { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 1, error_count: 0, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 12 },
+    { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, write_count: 2, read_count: 7, command_count: 6, web_count: 0, task_count: 2, error_count: 1, output_tokens: 2920, last_tool: 'bash', last_event_kind: 'tool.execution_complete', last_event_category: 'alert', stale_seconds: 25 },
     { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '', is_active: false, status: 'idle', event_count: 38, tool_count: 7, write_count: 0, read_count: 3, command_count: 0, web_count: 4, task_count: 0, error_count: 0, output_tokens: 1000, last_tool: 'web_fetch', last_event_kind: 'tool.execution_start', last_event_category: 'signal', stale_seconds: 900 },
   ],
   tools: [
@@ -33,9 +33,9 @@ const KINGDOM_FIXTURE = {
   generated_at_ms: Date.now(),
 };
 
-async function installFixture(page: Page, fixture = KINGDOM_FIXTURE) {
+async function installFixture(page: Page, fixture = MISSION_FIXTURE) {
   await page.addInitScript((fixtureArg) => {
-    (window as any).__kingdomFixture = fixtureArg;
+    (window as any).__missionControlFixture = fixtureArg;
   }, fixture);
 }
 
@@ -51,11 +51,11 @@ async function canvasOffset(page: Page) {
   });
 }
 
-async function getKingdomState(page: Page) {
+async function getMissionState(page: Page) {
   return page.evaluate(() => {
     const game = (window as any).__phaserGame;
     if (!game) return null;
-    const scene = game.scene.getScene('code-kingdom') as any;
+    const scene = game.scene.getScene('mission-control') as any;
     if (!scene) return null;
 
     return {
@@ -104,17 +104,17 @@ async function getKingdomState(page: Page) {
   });
 }
 
-test.describe('Kingdom of Agents — Startup', () => {
+test.describe('Copilot Mission Control — Startup', () => {
   test.beforeEach(async ({ page }) => {
     await installFixture(page);
     await page.goto(GAME_URL);
     await waitForGame(page);
   });
 
-  test('renders Copilot CLI activity as kingdom insights', async ({ page }) => {
-    const state = await getKingdomState(page);
+  test('renders Copilot CLI activity as mission insights', async ({ page }) => {
+    const state = await getMissionState(page);
     expect(state).not.toBeNull();
-    expect(state!.sceneName).toBe('code-kingdom');
+    expect(state!.sceneName).toBe('mission-control');
     expect(state!.available).toBe(true);
     expect(state!.source).toBe('playwright-fixture');
     expect(state!.activeSessions).toBe(2);
@@ -134,7 +134,7 @@ test.describe('Kingdom of Agents — Startup', () => {
   });
 });
 
-test.describe('Kingdom of Agents — Dashboard', () => {
+test.describe('Copilot Mission Control — Dashboard', () => {
   test.beforeEach(async ({ page }) => {
     await installFixture(page);
     await page.goto(GAME_URL);
@@ -142,20 +142,20 @@ test.describe('Kingdom of Agents — Dashboard', () => {
   });
 
   test('dashboard renders fixture activity without manual refresh', async ({ page }) => {
-    const state = await getKingdomState(page);
+    const state = await getMissionState(page);
     expect(state!.toolCalls).toBe(47);
     expect(state!.sessionCount).toBe(3);
   });
 
   test('bootstrap suppresses live pulses so historical events do not animate', async ({ page }) => {
-    // The 4 events in KINGDOM_FIXTURE.recent_events are the snapshot
+    // The 4 events in MISSION_FIXTURE.recent_events are the snapshot
     // history — they were already counted by the backend. Animating
     // them as "live" pulses on cold start makes boxes flow into
     // buildings while the 24h badge counts never change, which reads
     // as "is anything actually working?". The bootstrapCompleted flag
     // gates the pulse queue so initial ingest is silent.
     await page.waitForTimeout(800);
-    const state = await getKingdomState(page);
+    const state = await getMissionState(page);
     expect(state!.activeEventPulseCount).toBe(0);
     // Badges only increment from arrived live pulses, so they should
     // stay empty during bootstrap.
@@ -168,10 +168,10 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     // Wait for bootstrap to fully settle.
     await page.waitForTimeout(800);
     // Inject a NEW event into the fixture and trigger the watcher
-    // hook the Rust backend uses (window.__koaOnAgentActivityChanged).
+    // hook the Rust backend uses (window.__cmcOnAgentActivityChanged).
     // bootstrapCompleted is now true → pulses should fire.
     const queued = await page.evaluate(() => {
-      const fixture = (window as any).__kingdomFixture;
+      const fixture = (window as any).__missionControlFixture;
       const newEvent = {
         session_id: 'alpha123',
         timestamp: new Date().toISOString(),
@@ -181,19 +181,19 @@ test.describe('Kingdom of Agents — Dashboard', () => {
         success: true,
       };
       fixture.recent_events = [newEvent, ...fixture.recent_events];
-      (window as any).__koaOnAgentActivityChanged?.();
+      (window as any).__cmcOnAgentActivityChanged?.();
       return true;
     });
     expect(queued).toBe(true);
     // Pulses are queued with PULSE_STAGGER_MS delay and ~900ms duration
     // — sample mid-flight before they arrive.
     await page.waitForTimeout(250);
-    const mid = await getKingdomState(page);
+    const mid = await getMissionState(page);
     expect(mid!.activeEventPulseCount).toBeGreaterThan(0);
   });
 
   test('replay timeline ingests events into the log and stays live by default', async ({ page }) => {
-    const state = await getKingdomState(page);
+    const state = await getMissionState(page);
     expect(state!.replayState.total).toBe(4);
     expect(state!.replayState.cursor).toBe(4);
     expect(state!.replayState.atLive).toBe(true);
@@ -203,39 +203,39 @@ test.describe('Kingdom of Agents — Dashboard', () => {
   });
 
   test('clicking pause freezes replay; clicking live resumes', async ({ page }) => {
-    const before = await getKingdomState(page);
+    const before = await getMissionState(page);
     const playBtn = before!.replayPlayButton;
     expect(playBtn).toBeTruthy();
     const off = await canvasOffset(page);
     await page.mouse.click(off.x + playBtn.x + playBtn.w / 2, off.y + playBtn.y + playBtn.h / 2);
     await page.waitForTimeout(120);
-    let state = await getKingdomState(page);
+    let state = await getMissionState(page);
     expect(state!.replayState.paused).toBe(true);
 
     const liveBtn = state!.replayLiveButton;
     expect(liveBtn).toBeTruthy();
     await page.mouse.click(off.x + liveBtn.x + liveBtn.w / 2, off.y + liveBtn.y + liveBtn.h / 2);
     await page.waitForTimeout(120);
-    state = await getKingdomState(page);
+    state = await getMissionState(page);
     expect(state!.replayState.paused).toBe(false);
     expect(state!.replayState.atLive).toBe(true);
   });
 
   test('clicking the timeline scrubs the cursor backward', async ({ page }) => {
-    const before = await getKingdomState(page);
+    const before = await getMissionState(page);
     expect(before!.replayState.total).toBe(4);
     const track = before!.replayTrack;
     expect(track).toBeTruthy();
     const off = await canvasOffset(page);
     await page.mouse.click(off.x + track.x + track.w * 0.25, off.y + track.y + track.h / 2);
     await page.waitForTimeout(120);
-    const after = await getKingdomState(page);
+    const after = await getMissionState(page);
     expect(after!.replayState.cursor).toBeLessThan(before!.replayState.cursor);
     expect(after!.replayState.atLive).toBe(false);
   });
 
   test('clicking a running session selects it for inspection', async ({ page }) => {
-    const before = await getKingdomState(page);
+    const before = await getMissionState(page);
     expect(before!.selectedSessionId).toBe('beta4567');
     const alphaRow = before!.sessionPickerRows.find((row: any) => row.id === 'alpha123');
     expect(alphaRow).toBeTruthy();
@@ -244,19 +244,19 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     await page.mouse.click(off.x + alphaRow.x + alphaRow.w / 2, off.y + alphaRow.y + alphaRow.h / 2);
     await page.waitForTimeout(150);
 
-    const after = await getKingdomState(page);
+    const after = await getMissionState(page);
     expect(after!.selectedSessionId).toBe('alpha123');
   });
 
   test('navbar model chip mirrors the selected session and updates on session switch', async ({ page }) => {
     // Inject a fixture where each session reports a different model
     // so we can verify the chip swaps when the selection changes.
-    const fixture = JSON.parse(JSON.stringify(KINGDOM_FIXTURE));
+    const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
     fixture.sessions[0].last_model = 'gpt-5.5';   // alpha123
     fixture.sessions[1].last_model = 'claude-sonnet-4.6'; // beta4567 (default-selected: review)
     fixture.sessions[2].last_model = 'gpt-4.1';   // gamma890
 
-    await page.addInitScript((f) => { (window as any).__kingdomFixture = f; }, fixture);
+    await page.addInitScript((f) => { (window as any).__missionControlFixture = f; }, fixture);
     await page.goto(GAME_URL);
     await waitForGame(page);
 
@@ -266,7 +266,7 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     await expect(page.locator('#model-chip')).not.toHaveClass(/empty/);
 
     // Click into alpha123 → chip should switch to its model.
-    const before = await getKingdomState(page);
+    const before = await getMissionState(page);
     const alphaRow = before!.sessionPickerRows.find((row: any) => row.id === 'alpha123');
     expect(alphaRow).toBeTruthy();
     const off = await canvasOffset(page);
@@ -289,7 +289,7 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     // sticky-hover model promotes whatever the cursor enters into
     // `inspectedQuarterKey` and persists it to localStorage so the
     // inspector resumes on the same quarter after a window restart.
-    const before = await getKingdomState(page);
+    const before = await getMissionState(page);
     const library = before!.quarterRects.find((d: any) => d.key === 'library');
     expect(library).toBeTruthy();
 
@@ -299,7 +299,7 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     // few frames to register the new hover position.
     await page.waitForTimeout(150);
 
-    const hovered = await getKingdomState(page);
+    const hovered = await getMissionState(page);
     expect(hovered!.inspectedQuarterKey).toBe('library');
     expect(hovered!.hoveredQuarterIndex).toBeGreaterThanOrEqual(0);
 
@@ -308,13 +308,13 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     // that's the whole point. The hover index should clear back to -1.
     await page.mouse.move(off.x + 5, off.y + 5);
     await page.waitForTimeout(150);
-    const released = await getKingdomState(page);
+    const released = await getMissionState(page);
     expect(released!.hoveredQuarterIndex).toBe(-1);
     expect(released!.inspectedQuarterKey).toBe('library');
 
     // Verify it was written to localStorage under the new key.
     const stored = await page.evaluate(() => {
-      const raw = window.localStorage.getItem('koa_prefs');
+      const raw = window.localStorage.getItem('cmc_prefs');
       return raw ? JSON.parse(raw) : null;
     });
     expect(stored).toBeTruthy();
@@ -323,17 +323,17 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     // Reload and confirm the scene restores the sticky quarter.
     await page.reload();
     await waitForGame(page);
-    const restored = await getKingdomState(page);
+    const restored = await getMissionState(page);
     expect(restored!.inspectedQuarterKey).toBe('library');
   });
 
-  test('loadKingdomPrefs migrates legacy pinnedDistrictKey to inspectedQuarterKey', async ({ page }) => {
+  test('loadMissionPrefs migrates legacy pinnedDistrictKey to inspectedQuarterKey', async ({ page }) => {
     // Seed localStorage with the v0.1 legacy field name BEFORE the
-    // scene boots so loadKingdomPrefs has a chance to migrate it.
+    // scene boots so loadMissionPrefs has a chance to migrate it.
     // Existing users have this key already; it must continue to be
     // honored across the district -> quarter rename.
     await page.addInitScript(() => {
-      window.localStorage.setItem('koa_prefs', JSON.stringify({
+      window.localStorage.setItem('cmc_prefs', JSON.stringify({
         pinnedDistrictKey: 'court',
         replayPaused: false,
       }));
@@ -341,13 +341,13 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     await page.goto(GAME_URL);
     await waitForGame(page);
 
-    const state = await getKingdomState(page);
+    const state = await getMissionState(page);
     expect(state!.inspectedQuarterKey).toBe('court');
 
     // The legacy fields must be deleted after migration so they don't
     // linger in storage forever.
     const stored = await page.evaluate(() => {
-      const raw = window.localStorage.getItem('koa_prefs');
+      const raw = window.localStorage.getItem('cmc_prefs');
       return raw ? JSON.parse(raw) : null;
     });
     expect(stored.pinnedDistrictKey).toBeUndefined();
@@ -355,11 +355,11 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     expect(stored.inspectedQuarterKey).toBe('court');
   });
 
-  test('loadKingdomPrefs migrates legacy inspectedDistrictKey to inspectedQuarterKey', async ({ page }) => {
+  test('loadMissionPrefs migrates legacy inspectedDistrictKey to inspectedQuarterKey', async ({ page }) => {
     // Intermediate-generation field (v0.1.x). Some users will have
     // this set instead of pinnedDistrictKey.
     await page.addInitScript(() => {
-      window.localStorage.setItem('koa_prefs', JSON.stringify({
+      window.localStorage.setItem('cmc_prefs', JSON.stringify({
         inspectedDistrictKey: 'library',
         replayPaused: false,
       }));
@@ -367,11 +367,11 @@ test.describe('Kingdom of Agents — Dashboard', () => {
     await page.goto(GAME_URL);
     await waitForGame(page);
 
-    const state = await getKingdomState(page);
+    const state = await getMissionState(page);
     expect(state!.inspectedQuarterKey).toBe('library');
 
     const stored = await page.evaluate(() => {
-      const raw = window.localStorage.getItem('koa_prefs');
+      const raw = window.localStorage.getItem('cmc_prefs');
       return raw ? JSON.parse(raw) : null;
     });
     expect(stored.inspectedDistrictKey).toBeUndefined();
@@ -379,25 +379,25 @@ test.describe('Kingdom of Agents — Dashboard', () => {
   });
 });
 
-test.describe('Kingdom of Agents — Focus Mode', () => {
+test.describe('Copilot Mission Control — Focus Mode', () => {
   test('topbar panels button toggles side panels and resizes the ring', async ({ page }) => {
     await installFixture(page);
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.goto(GAME_URL);
     await waitForGame(page);
 
-    const before = await getKingdomState(page);
+    const before = await getMissionState(page);
     expect(before!.layout!.panelW).toBeGreaterThan(0);
     expect(before!.layout!.rightW).toBeGreaterThan(0);
 
     await page.locator('#panels-btn').click();
     // Wait for the re-render to settle.
     await page.waitForFunction(() => {
-      const scene = (window as any).__phaserGame?.scene?.getScene?.('code-kingdom');
+      const scene = (window as any).__phaserGame?.scene?.getScene?.('mission-control');
       return scene?.layout?.panelW === 0 && scene?.layout?.rightW === 0;
     }, { timeout: 2000 });
 
-    const after = await getKingdomState(page);
+    const after = await getMissionState(page);
     expect(after!.layout!.panelW).toBe(0);
     expect(after!.layout!.rightW).toBe(0);
     // Inspector still draws — its rect should grow to span between leftX
@@ -407,10 +407,10 @@ test.describe('Kingdom of Agents — Focus Mode', () => {
     // Clicking again restores panels.
     await page.locator('#panels-btn').click();
     await page.waitForFunction(() => {
-      const scene = (window as any).__phaserGame?.scene?.getScene?.('code-kingdom');
+      const scene = (window as any).__phaserGame?.scene?.getScene?.('mission-control');
       return (scene?.layout?.panelW ?? 0) > 0;
     }, { timeout: 2000 });
-    const restored = await getKingdomState(page);
+    const restored = await getMissionState(page);
     expect(restored!.layout!.panelW).toBe(before!.layout!.panelW);
     expect(restored!.layout!.rightW).toBe(before!.layout!.rightW);
   });
@@ -423,36 +423,36 @@ test.describe('Kingdom of Agents — Focus Mode', () => {
 
     await page.locator('#panels-btn').click();
     await page.waitForFunction(() => {
-      const scene = (window as any).__phaserGame?.scene?.getScene?.('code-kingdom');
+      const scene = (window as any).__phaserGame?.scene?.getScene?.('mission-control');
       return scene?.layout?.panelW === 0;
     }, { timeout: 2000 });
 
-    const stored = await page.evaluate(() => localStorage.getItem('koa_panels_hidden'));
+    const stored = await page.evaluate(() => localStorage.getItem('cmc_panels_hidden'));
     expect(stored).toBe('1');
 
     // Reload — the scene should paint in focus mode on the first frame
     // (no flash of panels-visible state).
     await page.reload();
     await waitForGame(page);
-    const state = await getKingdomState(page);
+    const state = await getMissionState(page);
     expect(state!.layout!.panelW).toBe(0);
     expect(state!.layout!.rightW).toBe(0);
   });
 });
 
-test.describe('Kingdom of Agents — Ops Rules', () => {
+test.describe('Copilot Mission Control — Ops Rules', () => {
   test('reports idle when no sessions are active', async ({ page }) => {
     const fixture = {
-      ...KINGDOM_FIXTURE,
+      ...MISSION_FIXTURE,
       active_sessions: 0,
-      sessions: KINGDOM_FIXTURE.sessions.map(session => ({ ...session, is_active: false, error_count: 0, status: 'idle' })),
+      sessions: MISSION_FIXTURE.sessions.map(session => ({ ...session, is_active: false, error_count: 0, status: 'idle' })),
       alerts: [],
     };
     await installFixture(page, fixture);
     await page.goto(GAME_URL);
     await waitForGame(page);
 
-    const state = await getKingdomState(page);
+    const state = await getMissionState(page);
     expect(state!.opsMode).toBe('Idle');
     expect(state!.opsAttention).toBe('ok');
     expect(state!.opsRecommendation).toContain('Safe to context-switch');
@@ -460,10 +460,10 @@ test.describe('Kingdom of Agents — Ops Rules', () => {
 
   test('reports editing when active work is edit-heavy', async ({ page }) => {
     const fixture = {
-      ...KINGDOM_FIXTURE,
+      ...MISSION_FIXTURE,
       active_sessions: 1,
       sessions: [
-        { ...KINGDOM_FIXTURE.sessions[0], is_active: true, error_count: 0, read_count: 1, write_count: 12, command_count: 1, web_count: 0, task_count: 0, status: 'working' },
+        { ...MISSION_FIXTURE.sessions[0], is_active: true, error_count: 0, read_count: 1, write_count: 12, command_count: 1, web_count: 0, task_count: 0, status: 'working' },
       ],
       alerts: [],
     };
@@ -471,7 +471,7 @@ test.describe('Kingdom of Agents — Ops Rules', () => {
     await page.goto(GAME_URL);
     await waitForGame(page);
 
-    const state = await getKingdomState(page);
+    const state = await getMissionState(page);
     expect(state!.opsMode).toBe('Editing');
     expect(state!.opsAttention).toBe('watch');
     expect(state!.opsRecommendation).toContain('review diffs');
@@ -488,13 +488,13 @@ const VIEWPORTS = [
 ];
 
 for (const vp of VIEWPORTS) {
-  test(`Kingdom of Agents renders at ${vp.name} (${vp.width}x${vp.height})`, async ({ page }) => {
+  test(`Copilot Mission Control renders at ${vp.name} (${vp.width}x${vp.height})`, async ({ page }) => {
     await installFixture(page);
     await page.setViewportSize({ width: vp.width, height: vp.height });
     await page.goto(GAME_URL);
     await waitForGame(page);
 
-    const state = await getKingdomState(page);
+    const state = await getMissionState(page);
     expect(state).not.toBeNull();
     expect(state!.screenW).toBe(vp.width);
     expect(state!.screenH).toBe(vp.height);

@@ -6,7 +6,7 @@
 //! summary fields (no prompts, no tool args, no command output, no file
 //! contents, no diffs). The merger [`collect_agent_activity`] composes
 //! provider scans into the [`AgentActivity`] shape consumed by the
-//! Kingdom of Agents scene.
+//! Copilot Mission Control scene.
 //!
 //! A filesystem watcher (see [`start_watcher`]) replaces the previous
 //! 5-second renderer poll by emitting a JS callback whenever any
@@ -1162,7 +1162,7 @@ fn categorize_event(event_type: &str) -> &'static str {
 
 /// Spawn a background thread that watches each provider's state root
 /// and, on any filesystem change, debounces to ~300 ms before invoking
-/// `window.__koaOnAgentActivityChanged()` in the renderer.
+/// `window.__cmcOnAgentActivityChanged()` in the renderer.
 ///
 /// Returns nothing intentionally: the watcher lives for the entire app
 /// lifetime and is dropped automatically on shutdown.
@@ -1240,8 +1240,8 @@ pub fn start_watcher(app: AppHandle) {
                 pending_clone.store(false, Ordering::SeqCst);
                 if let Some(win) = app_clone.get_webview_window("main") {
                     let _ = win.eval(
-                        "window.__koaOnAgentActivityChanged && \
-                         window.__koaOnAgentActivityChanged()",
+                        "window.__cmcOnAgentActivityChanged && \
+                         window.__cmcOnAgentActivityChanged()",
                     );
                 }
             });
@@ -1540,7 +1540,7 @@ mod tests {
 
     /// Sanity check: every Copilot CLI built-in tool we've observed
     /// must land in one of the eight known quarter keys. No tool
-    /// should ever be invisible in the kingdom.
+    /// should ever be invisible on the mission map.
     #[test]
     fn every_observed_builtin_routes_to_a_known_quarter() {
         let allowlist = HashSet::new();

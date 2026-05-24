@@ -1,12 +1,12 @@
 /**
- * Visual layout snapshot tool for Kingdom of Agents.
+ * Visual layout snapshot tool for Copilot Mission Control.
  *
  * Boots `dist/game/index.html` in headless Chromium at a sequence of
  * viewport sizes (with the deterministic fixture installed) and writes
  * one PNG per size to ../.snapshots/ at the repo root. Intended as a
  * developer aid for iterating on the dashboard layout — *not* a CI
  * gate. Layout regressions are still asserted in
- * `tests/code-kingdom.spec.ts`.
+ * `tests/mission-control.spec.ts`.
  *
  * Usage:
  *   node scripts/snap-layouts.js                  # default viewport set
@@ -43,8 +43,8 @@ const KINGDOM_FIXTURE = {
   total_tool_calls: 70,
   total_output_tokens: 25_300,
   sessions: [
-    { id: 'alpha123', title: 'Build Kingdom', repository: 'kingdom-of-agents', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 1, error_count: 0, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 12 },
-    { id: 'beta4567', title: 'Review Tests', repository: 'kingdom-of-agents', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, write_count: 2, read_count: 7, command_count: 6, web_count: 0, task_count: 2, error_count: 1, output_tokens: 2920, last_tool: 'bash', last_event_kind: 'tool.execution_complete', last_event_category: 'alert', stale_seconds: 25 },
+    { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 1, error_count: 0, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 12 },
+    { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, write_count: 2, read_count: 7, command_count: 6, web_count: 0, task_count: 2, error_count: 1, output_tokens: 2920, last_tool: 'bash', last_event_kind: 'tool.execution_complete', last_event_category: 'alert', stale_seconds: 25 },
     { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '', is_active: false, status: 'idle', event_count: 38, tool_count: 7, write_count: 0, read_count: 3, command_count: 0, web_count: 4, task_count: 0, error_count: 0, output_tokens: 1000, last_tool: 'web_fetch', last_event_kind: 'tool.execution_start', last_event_category: 'signal', stale_seconds: 900 },
   ],
   tools: [
@@ -92,12 +92,12 @@ function startServer() {
 async function snapshot(page, viewport) {
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   await page.addInitScript(fixture => {
-    window.__kingdomFixture = fixture;
+    window.__missionControlFixture = fixture;
   }, KINGDOM_FIXTURE);
   await page.goto('http://localhost:4173/game/index.html');
   await page.waitForFunction(() => {
     const g = window.__phaserGame;
-    return !!g && g.scene?.isActive?.('code-kingdom');
+    return !!g && g.scene?.isActive?.('mission-control');
   }, { timeout: 10_000 });
   // Settle a beat so the first renderActivity has run.
   await page.waitForTimeout(600);

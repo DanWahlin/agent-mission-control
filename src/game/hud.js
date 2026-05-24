@@ -1,12 +1,12 @@
-// Kingdom of Agents — slim DOM HUD.
+// Copilot Mission Control — slim DOM HUD.
 //
 // Responsibilities (deliberately tiny):
 //   - Theme toggle (sun/moon) that flips body.theme-light and persists
-//     the choice in `koa_theme` localStorage. The Phaser scene listens
-//     via `window.__koaSetTheme(mode)` and re-renders with light/dark
+//     the choice in `cmc_theme` localStorage. The Phaser scene listens
+//     via `window.__cmcSetTheme(mode)` and re-renders with light/dark
 //     color tokens.
 //   - Ops status surface in the top bar (chip + recommendation +
-//     alerts badge). The scene calls `window.__koaUpdateOps(summary,
+//     alerts badge). The scene calls `window.__cmcUpdateOps(summary,
 //     alerts)` each time it recomputes opsSummary.
 //
 // No score/lives/level/pause/game-switcher/settings — this is an
@@ -32,7 +32,7 @@
   // -------------------------------------------------------------------
 
   var themeBtn = $('theme-btn');
-  var currentTheme = safeGet('koa_theme') === 'light' ? 'light' : 'dark';
+  var currentTheme = safeGet('cmc_theme') === 'light' ? 'light' : 'dark';
 
   function applyTheme() {
     var isLight = currentTheme === 'light';
@@ -42,27 +42,27 @@
       themeBtn.textContent = isLight ? '🌙' : '☀️';
       themeBtn.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
     }
-    if (typeof window.__koaSetTheme === 'function') {
-      window.__koaSetTheme(currentTheme);
+    if (typeof window.__cmcSetTheme === 'function') {
+      window.__cmcSetTheme(currentTheme);
     }
   }
 
   function toggleTheme() {
     currentTheme = currentTheme === 'light' ? 'dark' : 'light';
-    safeSet('koa_theme', currentTheme);
+    safeSet('cmc_theme', currentTheme);
     applyTheme();
   }
 
   if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
 
   // Apply immediately so the topbar is correct before Phaser mounts,
-  // then re-apply once the scene installs __koaSetTheme so the canvas
+  // then re-apply once the scene installs __cmcSetTheme so the canvas
   // picks up the same mode.
   applyTheme();
   var attempts = 0;
   var poll = setInterval(function () {
     attempts++;
-    if (typeof window.__koaSetTheme === 'function' || attempts > 40) {
+    if (typeof window.__cmcSetTheme === 'function' || attempts > 40) {
       clearInterval(poll);
       applyTheme();
     }
@@ -110,7 +110,7 @@
   }
 
   // Public API the scene calls after each opsSummary recompute.
-  window.__koaUpdateOps = function (summary, alerts) {
+  window.__cmcUpdateOps = function (summary, alerts) {
     if (!summary) {
       setChip('idle', 'calm');
       setRecommendation('', true);
@@ -135,7 +135,7 @@
   var modelEl = $('model-chip');
   var lastModel = '';
 
-  window.__koaUpdateModel = function (model) {
+  window.__cmcUpdateModel = function (model) {
     if (!modelEl) return;
     var next = (model == null ? '' : String(model)).trim();
     if (next === lastModel) return;
@@ -160,7 +160,7 @@
   // -------------------------------------------------------------------
 
   var panelsBtn = $('panels-btn');
-  var panelsHidden = safeGet('koa_panels_hidden') === '1';
+  var panelsHidden = safeGet('cmc_panels_hidden') === '1';
 
   // Two-state icon (state-based, like password-field toggles): icon
   // shows what's currently visible. Open eye when panels are shown,
@@ -187,14 +187,14 @@
         : 'Hide side panels for focus mode';
       panelsBtn.setAttribute('aria-pressed', panelsHidden ? 'true' : 'false');
     }
-    if (typeof window.__koaSetPanelsHidden === 'function') {
-      window.__koaSetPanelsHidden(panelsHidden);
+    if (typeof window.__cmcSetPanelsHidden === 'function') {
+      window.__cmcSetPanelsHidden(panelsHidden);
     }
   }
 
   function togglePanels() {
     panelsHidden = !panelsHidden;
-    safeSet('koa_panels_hidden', panelsHidden ? '1' : '0');
+    safeSet('cmc_panels_hidden', panelsHidden ? '1' : '0');
     applyPanelsState();
   }
 
@@ -207,7 +207,7 @@
   var panelsAttempts = 0;
   var panelsPoll = setInterval(function () {
     panelsAttempts++;
-    if (typeof window.__koaSetPanelsHidden === 'function' || panelsAttempts > 40) {
+    if (typeof window.__cmcSetPanelsHidden === 'function' || panelsAttempts > 40) {
       clearInterval(panelsPoll);
       applyPanelsState();
     }

@@ -22,8 +22,8 @@ const FIXTURE = {
   total_input_tokens: 924800,
   total_output_tokens: 330700,
   sessions: [
-    { id: 'a1b2c3d4', title: 'Audit Layout Constants', repository: 'kingdom-of-agents', branch: 'main', updated_at: new Date().toISOString(), is_active: true, status: 'working', event_count: 482, tool_count: 137, write_count: 24, read_count: 58, command_count: 22, web_count: 8, task_count: 11, error_count: 0, output_tokens: 64200, input_tokens: 184000, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 4, git_root: '/Users/danwahlin/Desktop/projects/kingdom-of-agents', recent_tool_calls: Array.from({ length: 14 }, (_, i) => ({ ts: new Date(Date.now() - i * 3000).toISOString(), tool: ['apply_patch', 'view', 'bash'][i % 3], category: ['forge', 'library', 'terminal'][i % 3], success: true })) },
-    { id: 'e5f6a7b8', title: 'Run Test Suite', repository: 'kingdom-of-agents', branch: 'feature/x', updated_at: new Date().toISOString(), is_active: true, status: 'needs-attention', event_count: 312, tool_count: 87, write_count: 4, read_count: 22, command_count: 14, web_count: 1, task_count: 3, error_count: 2, output_tokens: 24200, input_tokens: 92000, last_tool: 'bash', last_event_kind: 'tool.execution_complete', last_event_category: 'alert', stale_seconds: 18, git_root: '/Users/danwahlin/repo', recent_tool_calls: Array.from({ length: 8 }, (_, i) => ({ ts: new Date(Date.now() - i * 5000).toISOString(), tool: 'bash', category: 'terminal', success: i !== 3 })) },
+    { id: 'a1b2c3d4', title: 'Audit Layout Constants', repository: 'copilot-mission-control', branch: 'main', updated_at: new Date().toISOString(), is_active: true, status: 'working', event_count: 482, tool_count: 137, write_count: 24, read_count: 58, command_count: 22, web_count: 8, task_count: 11, error_count: 0, output_tokens: 64200, input_tokens: 184000, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 4, git_root: '/Users/danwahlin/Desktop/projects/copilot-mission-control', recent_tool_calls: Array.from({ length: 14 }, (_, i) => ({ ts: new Date(Date.now() - i * 3000).toISOString(), tool: ['apply_patch', 'view', 'bash'][i % 3], category: ['forge', 'library', 'terminal'][i % 3], success: true })) },
+    { id: 'e5f6a7b8', title: 'Run Test Suite', repository: 'copilot-mission-control', branch: 'feature/x', updated_at: new Date().toISOString(), is_active: true, status: 'needs-attention', event_count: 312, tool_count: 87, write_count: 4, read_count: 22, command_count: 14, web_count: 1, task_count: 3, error_count: 2, output_tokens: 24200, input_tokens: 92000, last_tool: 'bash', last_event_kind: 'tool.execution_complete', last_event_category: 'alert', stale_seconds: 18, git_root: '/Users/danwahlin/repo', recent_tool_calls: Array.from({ length: 8 }, (_, i) => ({ ts: new Date(Date.now() - i * 5000).toISOString(), tool: 'bash', category: 'terminal', success: i !== 3 })) },
     { id: 'c9d0e1f2', title: 'Refactor inspector panel', repository: 'docs', branch: 'main', updated_at: new Date().toISOString(), is_active: false, status: 'idle', event_count: 188, tool_count: 42, write_count: 0, read_count: 12, command_count: 0, web_count: 16, task_count: 0, error_count: 0, output_tokens: 14200, input_tokens: 38000, last_tool: 'web_fetch', last_event_kind: 'tool.execution_start', last_event_category: 'signal', stale_seconds: 920 },
   ],
   tools: [
@@ -67,22 +67,22 @@ async function waitForServer() {
 async function snap(browser, w, h, label, selectFirstSession, themeMode = 'dark') {
   const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });
   await ctx.addInitScript((args) => {
-    window.__kingdomFixture = args.fixture;
-    try { window.localStorage.setItem('koa_theme', args.theme); } catch {}
+    window.__missionControlFixture = args.fixture;
+    try { window.localStorage.setItem('cmc_theme', args.theme); } catch {}
   }, { fixture: FIXTURE, theme: themeMode });
   const page = await ctx.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/game/`);
   await page.waitForFunction(() => {
     const game = window.__phaserGame;
     if (!game) return false;
-    const s = game.scene?.getScene?.('code-kingdom');
-    return !!s && game.scene.isActive('code-kingdom');
+    const s = game.scene?.getScene?.('mission-control');
+    return !!s && game.scene.isActive('mission-control');
   }, { timeout: 15000, polling: 100 });
   await page.waitForTimeout(800);
   if (selectFirstSession) {
     await page.evaluate(() => {
       const game = window.__phaserGame;
-      const scene = game.scene.getScene('code-kingdom');
+      const scene = game.scene.getScene('mission-control');
       const first = scene.activity?.sessions?.[0];
       if (first) scene.selectSessionById?.(first.id);
     });

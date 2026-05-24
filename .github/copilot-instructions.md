@@ -1,4 +1,4 @@
-# Copilot Instructions — Kingdom of Agents
+# Copilot Instructions — Copilot Mission Control
 
 ## Language & Framework Conventions
 
@@ -20,26 +20,25 @@
 
 ## Scene Conventions
 
-There is **one** Phaser scene, `CodeKingdomScene`, in `src/game/scenes/CodeKingdom.ts`. It extends `Phaser.Scene` directly (no `BaseScene`).
+There is **one** Phaser scene, `MissionControlScene`, in `src/game/scenes/MissionControl.ts`. It extends `Phaser.Scene` directly (no `BaseScene`).
 
 - `create()` paints its own backdrop at depth `-100`, registers a `scale.resize` handler to repaint it, and listens for `shutdown` once to release timers/listeners/audio/graphics.
-- The scene exposes a small testable surface on `window.__codeKingdom` (`getStatus()`, `saveSnapshot()`, `restartReplay()`, `clearCurrent()`, `clearAll()`, `disconnect()`).
 - `window.__phaserGame` is set so Playwright can reach into the scene registry.
 
 ## Backend Conventions
 
 - All renderer-facing data comes from one Tauri command: `get_agent_activity`. (`get_copilot_activity` exists as a legacy alias and delegates to the same merger.)
-- The watcher in `agent.rs` debounces filesystem events with an `AtomicBool pending` flag + sleeping spawn thread (~300 ms trailing edge), then calls `win.eval("window.__koaOnAgentActivityChanged && window.__koaOnAgentActivityChanged()")`.
+- The watcher in `agent.rs` debounces filesystem events with an `AtomicBool pending` flag + sleeping spawn thread (~300 ms trailing edge), then calls `win.eval("window.__cmcOnAgentActivityChanged && window.__cmcOnAgentActivityChanged()")`.
 - Window size and position are persisted automatically by `tauri-plugin-window-state` — do not hand-roll a window-state file.
 
 ## Test Conventions
 
 - **Runner:** Playwright (Chromium, headless), single worker, no retries.
-- **Tests:** `tests/app.spec.ts` (app shell smoke), `tests/code-kingdom.spec.ts` (scene behavior + multi-viewport layout).
-- **Helpers:** `tests/helpers.ts` exports `waitForGame()` and `getKingdomStatus()`. Keep helpers minimal.
-- **Fixtures:** `window.__kingdomFixture` lets a test inject a deterministic `AgentActivity` object that the scene picks up in place of a real Tauri scan.
+- **Tests:** `tests/app.spec.ts` (app shell smoke), `tests/mission-control.spec.ts` (scene behavior + multi-viewport layout).
+- **Helpers:** `tests/helpers.ts` exports `waitForGame()` and `getMissionStatus()`. Keep helpers minimal.
+- **Fixtures:** `window.__missionControlFixture` lets a test inject a deterministic `AgentActivity` object that the scene picks up in place of a real Tauri scan.
 - **Build first:** `npm run build:frontend` must run before tests (`npm test` does this automatically).
-- **Canvas offset:** the 32 px top bar means click coordinates must be offset by `canvas.getBoundingClientRect().left/top` — see the `canvasOffset` helper in `code-kingdom.spec.ts`.
+- **Canvas offset:** the 32 px top bar means click coordinates must be offset by `canvas.getBoundingClientRect().left/top` — see the `canvasOffset` helper in `mission-control.spec.ts`.
 
 ## Asset Rules
 
@@ -51,7 +50,7 @@ There is **one** Phaser scene, `CodeKingdomScene`, in `src/game/scenes/CodeKingd
 
 | Change Made | Files to Update |
 |-------------|-----------------|
-| **Scene behavior changed** | Update `tests/code-kingdom.spec.ts`; run all 27 tests |
+| **Scene behavior changed** | Update `tests/mission-control.spec.ts`; run all 27 tests |
 | **Top bar HTML/CSS changed** | Update `tests/app.spec.ts` selectors if id/class names change |
 | **Rust command added/removed** | Update `src-tauri/capabilities/main.json` permissions; `cargo check`; verify renderer invocation site |
 | **AgentProvider added** | Add to `default_providers()`; verify allowlist in `scan()`; watcher attaches automatically |

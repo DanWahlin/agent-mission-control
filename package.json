@@ -1,7 +1,7 @@
 {
-  "name": "kingdom-of-agents",
+  "name": "copilot-mission-control",
   "version": "0.1.0",
-  "description": "Kingdom of Agents — a live, medieval-themed dashboard for the GitHub Copilot CLI",
+  "description": "Copilot Mission Control — a live dashboard for the GitHub Copilot CLI",
   "scripts": {
     "build:frontend": "rm -rf dist/game dist/assets && tsc -p tsconfig.renderer.json && cp src/game/index.html dist/game/ && cp src/game/hud.js dist/game/ && cp node_modules/phaser/dist/phaser.min.js dist/game/ && cp -R assets dist/assets",
     "build": "npm run build:frontend && cd src-tauri && cargo build",

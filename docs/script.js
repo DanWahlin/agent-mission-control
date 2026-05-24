@@ -1,18 +1,18 @@
 /* ============================================================
-   Kingdom of Agents — landing page interactions
+   Copilot Mission Control — landing page interactions
    Starfield + particles + screenshot carousel + scroll reveal
    ============================================================ */
 
 (function () {
   'use strict';
 
-  // ---------- Starfield (night kingdom) ----------
+  // ---------- Starfield (night sky) ----------
   const canvas = document.getElementById('starfield');
   const ctx = canvas.getContext('2d');
   let stars = [];
   const STAR_COUNT = 110;
   // Slightly warmer palette than a pure space site — leans into the
-  // golden lantern / royal purple vibe of the kingdom theme.
+  // golden lantern / royal purple vibe of the mission theme.
   const COLORS = ['#ffffff', '#c8c8ff', '#ffe8a8', '#a8d8ff', '#e0c8ff'];
 
   function resize() {

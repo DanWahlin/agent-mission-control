@@ -1,24 +1,24 @@
-# 🏰 Kingdom of Agents
+# 🛰️ Copilot Mission Control
 
-A live, medieval-themed dashboard for the [GitHub Copilot CLI](https://github.com/github/copilot-cli). Watch your active Copilot sessions become a living kingdom of tools, agents, and alerts.
+A live, second-monitor dashboard for the [GitHub Copilot CLI](https://github.com/github/copilot-cli). Every tool call, sub-agent dispatch, and permission prompt becomes a live signal so you can spot stalls and "needs attention" the moment they happen — without scrolling back through terminal output.
 
 Built with [Tauri 2](https://v2.tauri.app/), [Phaser 4](https://phaser.io/), and TypeScript.
 
-🔗 Website: [https://danwahlin.github.io/kingdom-of-agents](https://danwahlin.github.io/kingdom-of-agents)
+🔗 Website: [https://danwahlin.github.io/copilot-mission-control](https://danwahlin.github.io/copilot-mission-control)
 
-![Kingdom of Agents dashboard](docs/img/dashboard.png)
+![Copilot Mission Control dashboard](docs/img/dashboard.png)
 
 ## What it does
 
-Kingdom of Agents reads the local session state Copilot CLI already writes under `~/.copilot/session-state/` and turns each session into a quarter in a small medieval kingdom:
+Copilot Mission Control reads the local session state Copilot CLI already writes under `~/.copilot/session-state/` and groups every tool call into one of eight categories:
 
-| Quarter | What it tracks |
+| Category | What it tracks |
 |----------|----------------|
 | **Forge** (Edits) | File writes / `apply_patch` calls |
 | **Library** (Reads) | Reads / search / `view` calls |
 | **Terminal Keep** (Commands) | Shell commands / `bash` calls |
 | **Signal Tower** (Web/Docs) | Web fetches / external lookups |
-| **Guild Hall** (Agents) | Sub-agent (`task`) calls |
+| **Guild Hall** (Sub-Agents) | Sub-agent (`task`) calls |
 | **Tome Hall** (Skills) | Skill (`skill`) calls |
 | **Envoy House** (MCP) | MCP tool calls |
 | **Royal Court** (Intent) | Permission prompts and alerts |
@@ -29,13 +29,13 @@ Only sanitized session summaries cross the renderer bridge — prompts, tool arg
 
 ### Focus mode
 
-Click the 👁 button in the top-right to hide the side panels and put the kingdom front-and-center. Great for a second monitor.
+Click the 👁 button in the top-right to hide the side panels and put the mission map front-and-center. Great for a second monitor.
 
 ![Focus mode](docs/img/focus-mode.png)
 
 ## Install
 
-Builds for macOS, Windows, and Linux are produced from the [latest GitHub Release](https://github.com/DanWahlin/kingdom-of-agents/releases). The app is not code-signed; see the release notes for platform-specific quarantine/SmartScreen unlock instructions.
+Builds for macOS, Windows, and Linux are produced from the [latest GitHub Release](https://github.com/DanWahlin/copilot-mission-control/releases). The app is not code-signed; see the release notes for platform-specific quarantine/SmartScreen unlock instructions.
 
 ## Develop
 
@@ -54,19 +54,19 @@ npx playwright test      # tests only (build:frontend must run first)
 cd src-tauri && cargo check
 ```
 
-The frontend mounts at `dist/game/index.html` and Playwright serves it via `python3 -m http.server 4173 --directory dist`. Phaser runs inside the Tauri webview but is fully testable in plain Chromium because the `__kingdomFixture` global lets tests inject deterministic activity data.
+The frontend mounts at `dist/game/index.html` and Playwright serves it via `python3 -m http.server 4173 --directory dist`. Phaser runs inside the Tauri webview but is fully testable in plain Chromium because the `__missionControlFixture` global lets tests inject deterministic activity data.
 
 ## Architecture (brief)
 
 - **`src-tauri/src/agent.rs`** — `AgentProvider` trait + `CopilotProvider` impl. Scans `~/.copilot/session-state/`, normalizes events, and watches the directory with `notify = 8` so the UI updates within ~300 ms of any change. Returns only allowlisted fields.
 - **`src-tauri/src/lib.rs`** — Tauri commands (`get_agent_activity`, `open_in_editor`, etc.) and the tray icon. Uses `tauri-plugin-window-state` to persist window size/position across launches.
-- **`src/game/scenes/CodeKingdom.ts`** — the single Phaser scene. Renders quarters, ops panel, replay timeline, session inspector, and the Tiny Swords assets in `assets/kingdom/tiny-swords/`.
+- **`src/game/scenes/MissionControl.ts`** — the single Phaser scene. Renders the mission map, ops panel, replay timeline, session inspector, and the Tiny Swords assets in `assets/kingdom/tiny-swords/`.
 - **`src/game/game.ts`** — minimal Phaser bootstrap. One scene, opaque background, resizes with the window.
 - **`src/game/index.html` + `hud.js`** — slim 32 px top bar with brand, panels toggle, and theme toggle.
 
 ## Assets
 
-Visuals come from the **CC0 Tiny Swords** archive (Pixel Frog). The curated subset committed under `assets/kingdom/tiny-swords/` includes a `LICENSE.txt` provenance note. Do not mix in the paid (non-redistributable) Tiny Swords pack.
+The current visuals are from the **CC0 Tiny Swords** archive (Pixel Frog), kept under `assets/kingdom/tiny-swords/` with a `LICENSE.txt` provenance note. A space-themed visual pass is planned. Do not mix in the paid (non-redistributable) Tiny Swords pack.
 
 ## Releasing
 

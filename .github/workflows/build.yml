@@ -66,7 +66,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kingdom-of-agents-${{ matrix.platform }}
+          name: copilot-mission-control-${{ matrix.platform }}
           path: |
             src-tauri/target/**/release/bundle/**/*.dmg
             src-tauri/target/**/release/bundle/**/*.exe
@@ -115,16 +115,16 @@ jobs:
           draft: false
           prerelease: false
           body: |
-            ## 🏰 Download Kingdom of Agents
+            ## 🛰️ Download Copilot Mission Control
 
-            A live, medieval-themed dashboard for the GitHub Copilot CLI. Watch your Copilot sessions become a living kingdom of tools, agents, and alerts.
+            A live, second-monitor dashboard for the GitHub Copilot CLI. Every tool call, sub-agent dispatch, and permission prompt becomes a live signal so you can spot stalls and "needs attention" the moment they happen.
 
             ### 🤖 Install this using the Copilot CLI
 
-            If you have [GitHub Copilot CLI](https://github.com/features/copilot/cli/) installed, you can install Kingdom of Agents with a single prompt:
+            If you have [GitHub Copilot CLI](https://github.com/features/copilot/cli/) installed, you can install Copilot Mission Control with a single prompt:
 
             ```
-            copilot --allow-all -p "Install the latest version of this app for me https://github.com/DanWahlin/kingdom-of-agents/releases"
+            copilot --allow-all -p "Install the latest version of this app for me https://github.com/DanWahlin/copilot-mission-control/releases"
             ```
 
             > **Note:** The app is not code-signed, so after installing you'll still need to manually run the commands shown below for your operating system.
@@ -140,7 +140,7 @@ jobs:
             >
             > **Note:** The app is not code-signed. After installing, open Terminal and run:
             > ```
-            > sudo xattr -rd com.apple.quarantine /Applications/Kingdom\ of\ Agents.app
+            > sudo xattr -rd com.apple.quarantine /Applications/Copilot\ Mission\ Control.app
             > ```
 
             ### 🪟 Windows
@@ -165,8 +165,8 @@ jobs:
             >
             > **Note:** For the AppImage, make it executable first:
             > ```
-            > chmod +x Kingdom-of-Agents_*.AppImage
-            > ./Kingdom-of-Agents_*.AppImage
+            > chmod +x Copilot-Mission-Control_*.AppImage
+            > ./Copilot-Mission-Control_*.AppImage
             > ```
 
             ---

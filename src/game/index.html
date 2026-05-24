@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' blob:;">
-  <title>Kingdom of Agents</title>
+  <title>Copilot Mission Control</title>
   <style>
     html, body {
       margin: 0;
@@ -21,7 +21,7 @@
     /* Top navigation bar — app brand, live ops status, and the theme
        toggle. The ops chip + recommendation + alerts that used to live
        in the canvas as a separate panel are surfaced here so the
-       kingdom view itself stays uncluttered. */
+       mission view itself stays uncluttered. */
     #topbar {
       position: fixed;
       top: 0;
@@ -156,7 +156,7 @@
       border-color: rgba(138, 93, 0, 0.6);
     }
     /* Panels-toggle button — collapse/expand side panels for a focused
-       kingdom-only view. Sits left of the theme button. Uses inline SVG
+       mission-only view. Sits left of the theme button. Uses inline SVG
        so the icon stays crisp in both themes and morphs between the
        "hide" (inward arrows) and "show" (outward arrows) states. */
     #panels-btn {
@@ -248,7 +248,7 @@
 </head>
 <body>
   <div id="topbar">
-    <span class="brand"><span class="crown">🏰</span> Kingdom of Agents</span>
+    <span class="brand"><span class="crown">🛰️</span> Copilot Mission Control</span>
     <span id="model-chip" class="empty" title="Active model for the selected session"></span>
     <button id="panels-btn" type="button" title="Hide side panels for focus mode"></button>
     <button id="theme-btn" type="button" title="Toggle light/dark theme">🌙</button>
