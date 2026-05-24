@@ -243,6 +243,42 @@ code {
   z-index: 0;
 }
 
+/* Hero banner — wide art tile under the navbar, before the copy/stage grid.
+   The wrap stretches to viewport edges with a soft top/bottom vignette so
+   the banner reads as part of the page surface, not a slab. */
+.hero-banner-wrap {
+  position: relative;
+  width: 100vw;
+  margin-bottom: 32px;
+  padding: 20px 0;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    rgba(10,6,24,0.35) 12%,
+    rgba(10,6,24,0.5) 50%,
+    rgba(10,6,24,0.35) 88%,
+    transparent 100%
+  );
+  display: flex;
+  justify-content: center;
+  animation: bannerFloat 6s ease-in-out infinite;
+  z-index: 1;
+}
+
+.hero-banner {
+  width: 100%;
+  max-width: 1200px;
+  height: auto;
+  display: block;
+  filter: drop-shadow(0 0 40px rgba(155,109,255,0.22)) drop-shadow(0 0 80px rgba(97,214,255,0.10));
+  -webkit-mask-image: radial-gradient(ellipse 62% 62% at 48% 48%, black 67%, transparent 84%);
+  mask-image: radial-gradient(ellipse 62% 62% at 48% 48%, black 67%, transparent 84%);
+}
+
+@keyframes bannerFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
 .hero-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
