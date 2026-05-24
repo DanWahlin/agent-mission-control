@@ -85,18 +85,18 @@ The whole point of the `AgentProvider` trait is making this cheap. To add Claude
 
 The watcher automatically attaches to each provider's `state_root()`, the merger handles top-N truncation globally across providers, and the renderer is provider-agnostic.
 
-## Regenerating the README screenshots
+## Regenerating the README previews
 
-`docs/img/dashboard.png` and `docs/img/focus-mode.png` are referenced from the README and the GitHub Pages landing page. Regenerate them after any noticeable UI change:
+`docs/img/dashboard.gif` and `docs/img/focus-mode.gif` are the animated previews referenced from the README and the GitHub Pages landing page. A static `docs/img/dashboard.png` is also written as the social `og:image` fallback. Regenerate them after any noticeable UI change:
 
 ```bash
 npm run build:frontend
 (cd dist && python3 -m http.server 4173) &
-node scripts/snap-readme.mjs   # writes both PNGs at 1440x900 @ 2x
+node scripts/snap-readme-gifs.mjs   # 5 s loops at 1280 wide / 15 fps
 kill %1
 ```
 
-The script uses a deterministic rich fixture so the dashboard looks active. If you change the fixture, mirror the changes back into the README's "What it does" copy so the screenshot still matches the description.
+The script uses the same deterministic rich fixture as the old PNG script and then drives a scripted burst of `tool.execution_start` events over 5 seconds so sector counts tick up and pulses fly through the map. Requires `ffmpeg` on PATH (used for two-pass palette + GIF encode). If you change the fixture, mirror the changes back into the README's "What it does" copy so the GIF still matches the description.
 
 ## Releasing
 

@@ -27,7 +27,7 @@
         <span></span><span></span><span></span>
       </button>
       <ul class="navbar-links" id="navbar-links">
-        <li><a href="#quarters">Quarters</a></li>
+        <li><a href="#sectors">Sectors</a></li>
         <li><a href="#how">How It Works</a></li>
         <li><a href="#story">Story</a></li>
         <li><a href="#credits">Credits</a></li>
@@ -93,20 +93,20 @@
     <span class="lightbox-label" id="lightbox-label"></span>
   </div>
 
-  <section class="section quarters" id="quarters">
+  <section class="section sectors" id="sectors">
     <div class="container">
       <h2 class="section-title"><span class="title-icon">🛰️</span> Mission Control</h2>
-      <p class="section-lede">Each Copilot tool category becomes a quarter in the ring around your central castle. Buildings light up as work flows through them.</p>
+      <p class="section-lede">Each Copilot tool category becomes a sector on the mission ring around the central outpost. Each sector lights up as work flows through it.</p>
       <div class="games-grid">
         <div class="game-card forge">
           <div class="game-card-glow"></div>
           <div class="game-card-content">
             <div class="game-header">
               <div class="game-icon-emoji">⚒️</div>
-              <h3>Forge <span class="quarter-sub">/ Edits</span></h3>
+              <h3>Edits</h3>
             </div>
-            <p>File writes and <code>apply_patch</code> calls. The forge fires brightest when edits are flying.</p>
-            <div class="quarter-tools"><span class="tool-tag">apply_patch</span><span class="tool-tag">write</span></div>
+            <p>File writes and <code>apply_patch</code> calls. Lights up brightest when edits are flying.</p>
+            <div class="sector-tools"><span class="tool-tag">apply_patch</span><span class="tool-tag">write</span></div>
           </div>
         </div>
 
@@ -115,10 +115,10 @@
           <div class="game-card-content">
             <div class="game-header">
               <div class="game-icon-emoji">📚</div>
-              <h3>Library <span class="quarter-sub">/ Reads</span></h3>
+              <h3>Reads</h3>
             </div>
-            <p>Reads, search, and code navigation. Usually the busiest quarter in any session.</p>
-            <div class="quarter-tools"><span class="tool-tag">view</span><span class="tool-tag">rg</span><span class="tool-tag">grep</span></div>
+            <p>Reads, search, and code navigation. Usually the busiest sector in any session.</p>
+            <div class="sector-tools"><span class="tool-tag">view</span><span class="tool-tag">rg</span><span class="tool-tag">grep</span></div>
           </div>
         </div>
 
@@ -127,10 +127,10 @@
           <div class="game-card-content">
             <div class="game-header">
               <div class="game-icon-emoji">⚙️</div>
-              <h3>Terminal Keep <span class="quarter-sub">/ Commands</span></h3>
+              <h3>Commands</h3>
             </div>
             <p>Shell commands the agent runs — builds, tests, lints, anything that touches a process.</p>
-            <div class="quarter-tools"><span class="tool-tag">bash</span><span class="tool-tag">shell</span></div>
+            <div class="sector-tools"><span class="tool-tag">bash</span><span class="tool-tag">shell</span></div>
           </div>
         </div>
 
@@ -139,10 +139,10 @@
           <div class="game-card-content">
             <div class="game-header">
               <div class="game-icon-emoji">📡</div>
-              <h3>Signal Tower <span class="quarter-sub">/ Web&nbsp;·&nbsp;Docs</span></h3>
+              <h3>Web&nbsp;/&nbsp;Docs</h3>
             </div>
             <p>External lookups — web fetches, docs research, anything reaching beyond your machine.</p>
-            <div class="quarter-tools"><span class="tool-tag">web_fetch</span><span class="tool-tag">web_search</span></div>
+            <div class="sector-tools"><span class="tool-tag">web_fetch</span><span class="tool-tag">web_search</span></div>
           </div>
         </div>
 
@@ -151,10 +151,10 @@
           <div class="game-card-content">
             <div class="game-header">
               <div class="game-icon-emoji">🛡️</div>
-              <h3>Guild Hall <span class="quarter-sub">/ Sub-Agents</span></h3>
+              <h3>Sub-Agents</h3>
             </div>
             <p>Sub-agent delegations. Watch the main agent dispatch specialized workers.</p>
-            <div class="quarter-tools"><span class="tool-tag">task</span><span class="tool-tag">agent</span></div>
+            <div class="sector-tools"><span class="tool-tag">task</span><span class="tool-tag">agent</span></div>
           </div>
         </div>
 
@@ -163,10 +163,10 @@
           <div class="game-card-content">
             <div class="game-header">
               <div class="game-icon-emoji">📖</div>
-              <h3>Tome Hall <span class="quarter-sub">/ Skills</span></h3>
+              <h3>Skills</h3>
             </div>
             <p>Skill invocations — the agent pulling in pre-built playbooks for specialized work.</p>
-            <div class="quarter-tools"><span class="tool-tag">skill</span></div>
+            <div class="sector-tools"><span class="tool-tag">skill</span></div>
           </div>
         </div>
 
@@ -175,10 +175,10 @@
           <div class="game-card-content">
             <div class="game-header">
               <div class="game-icon-emoji">🪶</div>
-              <h3>Envoy House <span class="quarter-sub">/ MCP</span></h3>
+              <h3>MCP</h3>
             </div>
             <p>MCP tool calls — external servers extending the agent's capabilities.</p>
-            <div class="quarter-tools"><span class="tool-tag">mcp.*</span></div>
+            <div class="sector-tools"><span class="tool-tag">mcp.*</span></div>
           </div>
         </div>
 
@@ -187,10 +187,10 @@
           <div class="game-card-content">
             <div class="game-header">
               <div class="game-icon-emoji">👑</div>
-              <h3>Royal Court <span class="quarter-sub">/ Intent&nbsp;·&nbsp;Alerts</span></h3>
+              <h3>Intent&nbsp;/&nbsp;Alerts</h3>
             </div>
-            <p>Permission prompts and alerts. When the court summons you, the agent needs a decision.</p>
-            <div class="quarter-tools"><span class="tool-tag">prompt</span><span class="tool-tag">alert</span></div>
+            <p>Permission prompts and alerts. When this sector lights up, the agent needs a decision.</p>
+            <div class="sector-tools"><span class="tool-tag">prompt</span><span class="tool-tag">alert</span></div>
           </div>
         </div>
       </div>
@@ -219,7 +219,7 @@
           <div class="step-number">03</div>
           <div class="step-content">
             <h3>Watch Mission Control react</h3>
-            <p>Tool calls light up quarters within ~300 ms of happening. Use the replay scrubber to rewind. Click the 👁 button to hide the side panels and put Mission Control front-and-center on a second monitor.</p>
+            <p>Tool calls light up sectors within ~300 ms of happening. Use the replay scrubber to rewind. Click the 👁 button to hide the side panels and put Mission Control front-and-center on a second monitor.</p>
           </div>
         </div>
       </div>
@@ -242,11 +242,6 @@
     <div class="container">
       <h2 class="section-title"><span class="title-icon">🙏</span> Credits</h2>
       <div class="credits-grid">
-        <div class="credit-item">
-          <div class="credit-icon">🏰</div>
-          <h4>Tiny Swords (CC0)</h4>
-          <p><a href="https://pixelfrog-assets.itch.io/tiny-swords" target="_blank">Tiny Swords</a> by Pixel Frog — the pixel-art castles and buildings powering Mission Control.</p>
-        </div>
         <div class="credit-item">
           <div class="credit-icon">🦀</div>
           <h4>Tauri 2</h4>
@@ -280,7 +275,7 @@
           <a href="https://github.com/DanWahlin/copilot-mission-control" target="_blank">GitHub</a>
           <a href="https://github.com/DanWahlin/copilot-mission-control/releases" target="_blank">Releases</a>
         </div>
-        <p class="footer-copy">MIT licensed · Tiny Swords assets CC0 from Pixel Frog</p>
+        <p class="footer-copy">MIT licensed</p>
       </div>
     </div>
   </footer>

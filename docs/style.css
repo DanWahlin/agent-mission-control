@@ -580,7 +580,7 @@ code {
   font-size: 1.05rem;
 }
 
-/* ---------- Quarter cards (replaces game cards) ---------- */
+/* ---------- Sector cards ---------- */
 .games-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -609,7 +609,7 @@ code {
 
 .game-card:hover .game-card-glow { opacity: 1; }
 
-/* Per-quarter accent colors mirror the in-app quarter colors. */
+/* Per-sector accent colors mirror the in-app sector colors. */
 .forge    .game-card-glow { background: radial-gradient(ellipse at 30% 20%, rgba(255,143,80,0.10), transparent 70%); }
 .forge:hover    { box-shadow: 0 0 40px rgba(255,143,80,0.12), 0 20px 50px rgba(0,0,0,0.4); }
 
@@ -655,15 +655,6 @@ code {
   color: var(--white);
 }
 
-.quarter-sub {
-  color: var(--white-dim);
-  font-weight: 500;
-  font-size: 0.78em;
-  letter-spacing: 0.02em;
-  margin-left: 4px;
-  white-space: nowrap;
-}
-
 .game-icon-emoji {
   width: 52px;
   height: 52px;
@@ -684,7 +675,7 @@ code {
   font-size: 0.95rem;
 }
 
-.quarter-tools {
+.sector-tools {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;

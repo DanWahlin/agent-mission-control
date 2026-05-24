@@ -131,14 +131,12 @@
   }
 
   // ---------- Screenshot carousel ----------
-  // Each shot rotates through the showcase frame in the hero. Durations
-  // are deliberately long because screenshots aren't animated GIFs —
-  // a viewer needs time to read the dashboard.
+  // Two animated previews of the dashboard. Each GIF runs a fixed
+  // 5-second loop, so the carousel dwells on each one long enough
+  // for a viewer to see the loop play through twice.
   const SHOTS = [
-    { src: 'img/dashboard.png',           label: '🏰 Full dashboard',          duration: 7000 },
-    { src: 'img/focus-mode.png',          label: '👁 Focus mode',              duration: 6000 },
-    { src: 'img/dashboard-wide.png',      label: '🖥 Wide layout',             duration: 7000 },
-    { src: 'img/focus-mode-compact.png',  label: '📐 Focus mode · compact',    duration: 6000 },
+    { src: 'img/dashboard.gif',  label: '🛰 Full dashboard', duration: 10000 },
+    { src: 'img/focus-mode.gif', label: '👁 Focus mode',     duration: 10000 },
   ];
 
   function shuffle(arr) {
