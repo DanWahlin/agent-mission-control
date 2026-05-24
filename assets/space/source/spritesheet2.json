@@ -1,0 +1,39 @@
+{
+  "image": "spritesheet.png",
+  "width": 1168,
+  "height": 784,
+  "sprites": {
+    "spaceship_small_blue": { "x": 20, "y": 20, "w": 90, "h": 50 },
+    "planet_earth": { "x": 130, "y": 10, "w": 80, "h": 80 },
+    "planet_mars": { "x": 230, "y": 10, "w": 80, "h": 80 },
+    "planet_jupiter1": { "x": 330, "y": 10, "w": 80, "h": 80 },
+    "planet_jupiter2": { "x": 430, "y": 10, "w": 80, "h": 80 },
+    "planet_saturn": { "x": 530, "y": 10, "w": 100, "h": 80 },
+    "planet_purple": { "x": 650, "y": 10, "w": 80, "h": 80 },
+    "planet_moon": { "x": 750, "y": 20, "w": 60, "h": 60 },
+
+    "spaceship_large_cruiser": { "x": 20, "y": 130, "w": 220, "h": 100 },
+    "spaceship_fighter1": { "x": 260, "y": 130, "w": 120, "h": 70 },
+    "spaceship_fighter2": { "x": 400, "y": 130, "w": 130, "h": 70 },
+    "spaceship_explorer": { "x": 550, "y": 130, "w": 140, "h": 80 },
+
+    "control_console_large": { "x": 20, "y": 260, "w": 180, "h": 110 },
+    "control_console_small": { "x": 220, "y": 270, "w": 100, "h": 90 },
+    "control_console_circular": { "x": 340, "y": 270, "w": 90, "h": 90 },
+    "satellite_hub": { "x": 450, "y": 250, "w": 80, "h": 80 },
+    "satellite_dish": { "x": 550, "y": 250, "w": 90, "h": 70 },
+
+    "control_panel_wide": { "x": 20, "y": 390, "w": 170, "h": 100 },
+    "satellite_array1": { "x": 210, "y": 390, "w": 110, "h": 80 },
+    "satellite_array2": { "x": 340, "y": 390, "w": 100, "h": 90 },
+    "satellite_array3": { "x": 460, "y": 390, "w": 110, "h": 70 },
+    "telescope_large": { "x": 590, "y": 390, "w": 90, "h": 80 },
+
+    "space_station_ring": { "x": 20, "y": 520, "w": 110, "h": 90 },
+    "space_station_dome": { "x": 150, "y": 520, "w": 90, "h": 100 },
+    "lunar_base": { "x": 270, "y": 520, "w": 130, "h": 90 },
+    "communication_tower1": { "x": 420, "y": 520, "w": 70, "h": 120 },
+    "communication_tower2": { "x": 510, "y": 520, "w": 80, "h": 130 },
+    "planetary_outpost": { "x": 610, "y": 530, "w": 120, "h": 80 }
+  }
+}

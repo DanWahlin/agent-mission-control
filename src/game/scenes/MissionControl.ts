@@ -1195,13 +1195,16 @@ export class MissionControlScene extends Phaser.Scene {
       this.map.fillStyle(pedestalColor, innerAlpha);
       this.map.fillCircle(quarter.x, quarter.y - 18 * pedestalUnit, 30 * pedestalUnit);
       const texture = QUARTER_TEXTURES[quarter.key] ?? CENTER_TEXTURE;
-      // Constrain the sprite inside a square box (max W = max H = size * 0.74)
-      // and scale uniformly so wide consoles, tall towers, and square dishes
-      // all read at the same visual weight without distortion.
-      const spriteBox = size * 0.74;
+      // Constrain the sprite inside a square box (max W = max H = size * 0.62)
+      // centered on the halo pedestal. The space atlas frames are tight to the
+      // visible pixels (Tiny Swords had transparent padding) so the box has to
+      // be tighter than the old 0.74 to keep tall buildings (tower, chair,
+      // tablet) inside the colored halo and the bracket frame.
+      const spriteBox = size * 0.62;
       const fit = this.fitSpriteToBox(texture, spriteBox, spriteBox);
-      const sprite = this.add.image(quarter.x, panelTop + size * 0.36, SPACE_ATLAS_KEY, texture)
-        .setOrigin(0.5, 0.62)
+      const haloCenterY = quarter.y - 8 * pedestalUnit;
+      const sprite = this.add.image(quarter.x, haloCenterY, SPACE_ATLAS_KEY, texture)
+        .setOrigin(0.5, 0.5)
         .setDepth(7)
         .setAlpha(focused ? 1 : 0.9);
       sprite.setDisplaySize(fit.w, fit.h);
@@ -1327,12 +1330,14 @@ export class MissionControlScene extends Phaser.Scene {
       active: active > 0,
     };
 
-    // Native space_station frame is 151x116; old castle was sized at 210x168.
-    // Preserve native aspect by fitting the sprite inside the legacy castle
-    // bounding box, so the visual mass stays similar after the swap.
-    const castleFit = this.fitSpriteToBox(CENTER_TEXTURE, 210 * castleScale, 168 * castleScale);
-    const castle = this.add.image(x, y - 10 * castleScale, SPACE_ATLAS_KEY, CENTER_TEXTURE)
-      .setOrigin(0.5, 0.62)
+    // Native space_station frame is 151x116; size to roughly match the old
+    // castle's visual mass (210x168). Center the sprite on the moat center
+    // with origin 0.5/0.5 — the new atlas frames are tight to the visible
+    // pixels (unlike Tiny Swords PNGs which had padding), so the old 0.62
+    // origin + offset combo would push the antennas out of the moat circle.
+    const castleFit = this.fitSpriteToBox(CENTER_TEXTURE, 200 * castleScale, 160 * castleScale);
+    const castle = this.add.image(x, y, SPACE_ATLAS_KEY, CENTER_TEXTURE)
+      .setOrigin(0.5, 0.5)
       .setDepth(6);
     castle.setDisplaySize(castleFit.w, castleFit.h);
     this.textObjects.push(castle);

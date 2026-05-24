@@ -89,5 +89,5 @@ kill %1
 
 ## License
 
-MIT — see [`LICENSE`](./LICENSE). Tiny Swords assets are CC0 from Pixel Frog.
+MIT [`LICENSE`](./LICENSE).
 
