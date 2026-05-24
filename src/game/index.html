@@ -58,12 +58,52 @@
       font-weight: 700;
       text-transform: uppercase;
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-      margin-right: auto;
+      white-space: nowrap;
     }
     body.theme-light #topbar .brand {
       color: #1e3a5f;
       text-shadow: none;
     }
+    #topbar-metrics {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .topbar-metric {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      max-width: 150px;
+      padding: 4px 9px;
+      border: 1px solid rgba(127, 151, 239, 0.36);
+      border-radius: 999px;
+      background: rgba(16, 24, 51, 0.72);
+      color: #e8ecff;
+      white-space: nowrap;
+    }
+    .topbar-metric-label {
+      color: #93a4d8;
+      font-size: 9px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    .topbar-metric-value {
+      color: var(--metric-color, #ffd54a);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    body.theme-light .topbar-metric {
+      background: #f8fafc;
+      border-color: #cbd5e1;
+      color: #334155;
+    }
+    body.theme-light .topbar-metric-label { color: #64748b; }
     #topbar .divider {
       width: 1px;
       height: 18px;
@@ -437,7 +477,9 @@
       display: block;
       font-weight: 700;
       color: #f5f7ff;
-      overflow-wrap: anywhere;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     body.theme-light .inspector-row-title { color: #1f2937; }
     .inspector-row-sub,
@@ -489,6 +531,7 @@
     .inspector-related-item {
       display: flex;
       justify-content: space-between;
+      align-items: flex-start;
       gap: 12px;
       padding: 8px 10px;
       border-radius: 8px;
@@ -496,6 +539,34 @@
       border: 1px solid rgba(96, 255, 154, 0.22);
       font-size: 12px;
     }
+    .inspector-related-main {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+    .inspector-related-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+    }
+    .inspector-related-sub {
+      color: #93a4d8;
+      font-size: 11px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .inspector-related-meta {
+      flex: 0 0 auto;
+      color: #93a4d8;
+      font-size: 11px;
+      line-height: 1.35;
+      text-align: right;
+      white-space: nowrap;
+    }
+    body.theme-light .inspector-related-sub,
+    body.theme-light .inspector-related-meta { color: #64748b; }
     .inspector-related-item.failed {
       background: rgba(255, 82, 82, 0.12);
       border-color: rgba(255, 82, 82, 0.25);
@@ -528,6 +599,65 @@
       pointer-events: none;
       font-family: '"Press Start 2P"', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
+    .dashboard-loading {
+      position: fixed;
+      inset: 40px 0 0 0;
+      z-index: 5;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      box-sizing: border-box;
+      background:
+        radial-gradient(circle at 50% 45%, rgba(13, 97, 245, 0.24), transparent 36%),
+        #05081a;
+      transition: opacity 0.18s ease, visibility 0.18s ease;
+    }
+    .dashboard-loading-card {
+      width: min(980px, 82vw);
+      border: 2px solid rgba(255, 213, 74, 0.42);
+      border-radius: 18px;
+      overflow: hidden;
+      background: rgba(5, 8, 26, 0.82);
+      box-shadow:
+        0 0 0 1px rgba(97, 214, 255, 0.22) inset,
+        0 28px 90px rgba(0, 0, 0, 0.56);
+    }
+    .dashboard-loading-card img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    .dashboard-loading-caption {
+      padding: 14px 18px;
+      color: #ffd54a;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-align: center;
+      text-transform: uppercase;
+      background: linear-gradient(180deg, rgba(37, 52, 108, 0.88), rgba(16, 24, 51, 0.92));
+    }
+    body.theme-light .dashboard-loading {
+      background:
+        radial-gradient(circle at 50% 45%, rgba(13, 97, 245, 0.14), transparent 36%),
+        #f4f7fb;
+    }
+    body.theme-light .dashboard-loading-card {
+      background: rgba(255, 255, 255, 0.92);
+      border-color: rgba(13, 97, 245, 0.25);
+      box-shadow: 0 28px 80px rgba(15, 23, 42, 0.18);
+    }
+    body.theme-light .dashboard-loading-caption {
+      color: #1e3a5f;
+      background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(238, 242, 247, 0.96));
+    }
+    body.dashboard-ready .dashboard-loading {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    body:not(.dashboard-ready) #dashboard-overlay .cmc-panel {
+      display: none;
+    }
     .cmc-panel {
       position: absolute;
       pointer-events: auto;
@@ -541,7 +671,7 @@
       overflow: hidden;
     }
     #dom-session {
-      padding-bottom: 54px;
+      padding-bottom: 16px;
     }
     body.theme-light .cmc-panel {
       background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
@@ -575,44 +705,70 @@
       color: #1e3a5f;
       border: 1px solid #cbd5e1;
     }
-    #dom-summary .cmc-panel-body { display: block; }
-    .cmc-card-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px 10px;
-    }
-    .cmc-card {
-      min-height: 58px;
-      border-radius: 10px;
-      border: 1px solid rgba(49, 67, 122, 0.8);
-      background: rgba(16, 24, 51, 0.9);
-      padding: 10px 12px;
-    }
-    body.theme-light .cmc-card { background: #ffffff; border-color: #d6dee9; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04); }
     .cmc-label, .cmc-muted { color: #93a4d8; }
     body.theme-light .cmc-label, body.theme-light .cmc-muted { color: #64748b; }
     .cmc-label { font-size: 12px; line-height: 1.4; }
     .cmc-value { margin-top: 8px; font-size: 19px; line-height: 1.1; color: #e8ecff; }
     body.theme-light .cmc-value { color: #1f2937; }
     .cmc-sub { margin-top: 6px; font-size: 10px; color: #93a4d8; line-height: 1.3; }
-    .cmc-workmix { min-height: 0; margin-top: 28px; }
-    .cmc-workmix-title { font-size: 12px; margin-bottom: 8px; color: #93a4d8; }
-    .cmc-work-row { display: grid; grid-template-columns: 58px 1fr 34px; gap: 10px; align-items: center; margin: 6px 0; font-size: 11px; }
+    #dom-workmix .cmc-panel-body {
+      overflow: hidden;
+    }
+    .cmc-workmix { min-height: 0; margin-top: 0; }
+    .cmc-workmix-controls {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 10px;
+    }
+    .cmc-select {
+      min-width: 0;
+      height: 28px;
+      border-radius: 7px;
+      border: 1px solid rgba(127, 151, 239, 0.48);
+      background: rgba(16, 24, 51, 0.92);
+      color: #e8ecff;
+      padding: 0 8px;
+      font: inherit;
+      font-size: 10px;
+    }
+    body.theme-light .cmc-select {
+      background: #ffffff;
+      color: #1f2937;
+      border-color: #cbd5e1;
+    }
+    .cmc-workmix-title { font-size: 12px; margin-bottom: 6px; color: #93a4d8; }
+    .cmc-work-row {
+      display: grid;
+      grid-template-columns: 58px 1fr 34px;
+      gap: 10px;
+      align-items: center;
+      margin: 3px 0;
+      font-size: 11px;
+      line-height: 1.1;
+    }
     .cmc-bar { height: 10px; border-radius: 999px; background: #1a2448; overflow: hidden; }
     .cmc-bar span { display: block; height: 100%; min-width: 12px; border-radius: 999px; background: var(--bar-color, #61d6ff); }
-    .cmc-session-list { display: grid; gap: 8px; margin-bottom: 14px; }
+    .cmc-session-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-bottom: 8px;
+    }
     .cmc-session-row, .cmc-feed-row {
       width: 100%;
       border: 1px solid rgba(127, 151, 239, 0.44);
       border-radius: 8px;
       background: rgba(16, 24, 51, 0.82);
       color: inherit;
-      padding: 7px 10px;
+      padding: 6px 8px;
       box-sizing: border-box;
       font: inherit;
       text-align: left;
     }
-    .cmc-session-row { display: grid; grid-template-columns: 12px 1fr auto; gap: 10px; align-items: center; cursor: pointer; }
+    .cmc-session-row { display: grid; grid-template-columns: 10px 1fr; gap: 8px; align-items: center; cursor: pointer; }
     .cmc-session-row.selected { background: rgba(96, 255, 154, 0.20); border-color: rgba(96, 255, 154, 0.9); }
     body.theme-light .cmc-session-row,
     body.theme-light .cmc-feed-row {
@@ -624,11 +780,13 @@
       border-color: #86efac;
     }
     .cmc-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dot, #60ff9a); }
-    .cmc-session-title { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cmc-session-title { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cmc-session-id { font-size: 10px; padding: 4px 7px; border-radius: 4px; background: rgba(2, 7, 19, 0.7); color: #e6ecf8; }
     body.theme-light .cmc-session-id { background: #334155; color: #f8fafc; }
-    .cmc-detail-rows { display: grid; gap: 8px; margin: 10px 0 62px; font-size: 12px; line-height: 1.35; }
-    .cmc-actions { position: absolute; left: 22px; right: 22px; bottom: 10px; display: flex; gap: 8px; }
+    .cmc-session-picker { margin-bottom: 8px; }
+    .cmc-session-picker .cmc-select { width: 100%; }
+    .cmc-detail-rows { display: grid; gap: 4px; margin: 6px 0 8px; font-size: 11px; line-height: 1.25; }
+    .cmc-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
     .cmc-button {
       border: 1px solid rgba(165, 177, 216, 0.7);
       background: #1a2448;
@@ -640,6 +798,10 @@
       cursor: pointer;
     }
     .cmc-button.accent { color: #61d6ff; border-color: rgba(97, 214, 255, 0.7); }
+    .cmc-button.disabled {
+      opacity: 0.48;
+      cursor: not-allowed;
+    }
     body.theme-light .cmc-button {
       background: #f8fafc;
       color: #334155;
@@ -653,8 +815,18 @@
     #dom-feed .cmc-panel-body {
       overflow-y: auto;
       scrollbar-gutter: stable;
-      padding-right: 4px;
+      padding-right: 8px;
       padding-bottom: 10px;
+    }
+    #dom-session .cmc-panel-body {
+      overflow-y: hidden;
+    }
+    @media (max-height: 820px) {
+      #dom-session .cmc-panel-body {
+        overflow-y: auto;
+        scrollbar-gutter: stable;
+        padding-right: 8px;
+      }
     }
     .cmc-feed-list { display: grid; gap: 8px; padding-bottom: 10px; }
     .cmc-feed-row { display: grid; grid-template-columns: 12px 1fr auto; gap: 10px; align-items: center; font-size: 11px; min-height: 26px; }
@@ -665,12 +837,92 @@
       padding-bottom: 16px;
       overflow-y: auto;
       scrollbar-gutter: stable;
+      padding-right: 8px;
+    }
+    .inspector-list,
+    .inspector-detail,
+    #dom-session .cmc-panel-body,
+    #dom-feed .cmc-panel-body,
+    #dom-quarter .cmc-panel-body {
+      scrollbar-width: auto;
+      scrollbar-color: #9fb0ff #07102b;
+    }
+    .inspector-list::-webkit-scrollbar,
+    .inspector-detail::-webkit-scrollbar,
+    #dom-session .cmc-panel-body::-webkit-scrollbar,
+    #dom-feed .cmc-panel-body::-webkit-scrollbar,
+    #dom-quarter .cmc-panel-body::-webkit-scrollbar {
+      width: 16px;
+      height: 16px;
+    }
+    .inspector-list::-webkit-scrollbar-track,
+    .inspector-detail::-webkit-scrollbar-track,
+    #dom-session .cmc-panel-body::-webkit-scrollbar-track,
+    #dom-feed .cmc-panel-body::-webkit-scrollbar-track,
+    #dom-quarter .cmc-panel-body::-webkit-scrollbar-track {
+      background: #07102b;
+      border-left: 1px solid #31437a;
+      border-radius: 10px;
+    }
+    .inspector-list::-webkit-scrollbar-thumb,
+    .inspector-detail::-webkit-scrollbar-thumb,
+    #dom-session .cmc-panel-body::-webkit-scrollbar-thumb,
+    #dom-feed .cmc-panel-body::-webkit-scrollbar-thumb,
+    #dom-quarter .cmc-panel-body::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #c3ceff 0%, #7f97ef 100%);
+      border: 3px solid #07102b;
+      border-radius: 999px;
+      min-height: 44px;
+    }
+    .inspector-list::-webkit-scrollbar-thumb:hover,
+    .inspector-detail::-webkit-scrollbar-thumb:hover,
+    #dom-session .cmc-panel-body::-webkit-scrollbar-thumb:hover,
+    #dom-feed .cmc-panel-body::-webkit-scrollbar-thumb:hover,
+    #dom-quarter .cmc-panel-body::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, #e0e6ff 0%, #9fb0ff 100%);
+    }
+    body.theme-light .inspector-list,
+    body.theme-light .inspector-detail,
+    body.theme-light #dom-session .cmc-panel-body,
+    body.theme-light #dom-feed .cmc-panel-body,
+    body.theme-light #dom-quarter .cmc-panel-body {
+      scrollbar-color: #6f83cc #e0e6f3;
+    }
+    body.theme-light .inspector-list::-webkit-scrollbar-track,
+    body.theme-light .inspector-detail::-webkit-scrollbar-track,
+    body.theme-light #dom-session .cmc-panel-body::-webkit-scrollbar-track,
+    body.theme-light #dom-feed .cmc-panel-body::-webkit-scrollbar-track,
+    body.theme-light #dom-quarter .cmc-panel-body::-webkit-scrollbar-track {
+      background: #e0e6f3;
+      border-left-color: #d6dee9;
+    }
+    body.theme-light .inspector-list::-webkit-scrollbar-thumb,
+    body.theme-light .inspector-detail::-webkit-scrollbar-thumb,
+    body.theme-light #dom-session .cmc-panel-body::-webkit-scrollbar-thumb,
+    body.theme-light #dom-feed .cmc-panel-body::-webkit-scrollbar-thumb,
+    body.theme-light #dom-quarter .cmc-panel-body::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #8ca0e6 0%, #5f73bd 100%);
+      border-color: #e0e6f3;
     }
     .cmc-quarter-line { font-size: 12px; line-height: 1.55; margin: 0; }
     .cmc-quarter-tools { font-size: 11px; line-height: 1.45; margin-top: 2px; }
     .cmc-quarter-footer { margin-top: auto; font-size: 11px; line-height: 1.4; }
     .cmc-footer-alert { color: #ff8a8a; }
     .cmc-footer-info { color: #7f97ef; }
+    #dom-quarter {
+      border-color: color-mix(in srgb, var(--quarter-color, #ffd54a) 60%, rgba(28, 39, 80, 0.9));
+      box-shadow:
+        0 -1px 0 color-mix(in srgb, var(--quarter-color, #ffd54a) 55%, transparent) inset,
+        6px 7px 0 rgba(2, 7, 19, 0.52);
+    }
+    #dom-quarter .cmc-panel-title {
+      color: var(--quarter-color, #ffd54a);
+      border-bottom: 1px solid color-mix(in srgb, var(--quarter-color, #ffd54a) 45%, transparent);
+    }
+    body.theme-light #dom-quarter {
+      border-color: color-mix(in srgb, var(--quarter-color, #1d4ed8) 44%, #d6dee9);
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+    }
     #dom-replay { padding: 0; }
     .cmc-replay-inner {
       height: 100%;
@@ -695,15 +947,22 @@
 <body>
   <div id="topbar">
     <span class="brand">Copilot Mission Control</span>
+    <span id="topbar-metrics" aria-label="Live session metrics"></span>
     <span id="model-chip" class="empty" title="Active model for the selected session"></span>
     <button id="panels-btn" type="button" title="Hide side panels for focus mode"></button>
     <button id="theme-btn" type="button" title="Toggle light/dark theme">🌙</button>
   </div>
 
   <div id="game"></div>
+  <div id="dashboard-loading" class="dashboard-loading" role="status" aria-live="polite">
+    <div class="dashboard-loading-card">
+      <img src="../docs/img/copilot-mission-control.webp" alt="Copilot Mission Control dashboard preview">
+      <div class="dashboard-loading-caption">Initializing mission control…</div>
+    </div>
+  </div>
   <div id="dashboard-overlay" aria-label="Mission Control dashboard">
-    <section id="dom-summary" class="cmc-panel"><div class="cmc-panel-title">Summary</div><div class="cmc-panel-body"></div></section>
     <section id="dom-session" class="cmc-panel"><div class="cmc-panel-title">Selected Session</div><div class="cmc-panel-body"></div></section>
+    <section id="dom-workmix" class="cmc-panel"><div class="cmc-panel-title">Recent Work Mix</div><div class="cmc-panel-body"></div></section>
     <section id="dom-feed" class="cmc-panel"><div class="cmc-panel-title">Activity Feed</div><div class="cmc-panel-body"></div></section>
     <section id="dom-quarter" class="cmc-panel"><div class="cmc-panel-title">Sector</div><div class="cmc-panel-body"></div></section>
     <section id="dom-replay" class="cmc-panel"></section>

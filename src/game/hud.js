@@ -231,6 +231,53 @@
     return category || 'Tool';
   }
 
+  function truncateText(value, max) {
+    var text = String(value == null ? '' : value);
+    if (text.length <= max) return text;
+    if (max <= 3) return '.'.repeat(Math.max(0, max));
+    return text.slice(0, max - 3) + '...';
+  }
+
+  function toolDisplayName(call) {
+    var tool = (call && call.tool) || 'tool';
+    var target = call && call.target;
+    return target && target !== tool ? tool + ' -> ' + target : tool;
+  }
+
+  function callStatusMeta(call) {
+    if (!call) return 'unknown';
+    if (!call.success) return 'failed';
+    return typeof call.duration_ms === 'number' ? formatDuration(call.duration_ms) : 'in flight';
+  }
+
+  function callDetailLine(call) {
+    var parts = [callKindLabel(call), call && call.success ? 'success' : 'failed'];
+    if (call && typeof call.duration_ms === 'number') parts.push(formatDuration(call.duration_ms));
+    var clock = call && formatClock(call.timestamp);
+    if (clock) parts.push(clock);
+    if (call && call.model) parts.push(call.model);
+    (call && call.details || []).forEach(function (detail) {
+      if (!detail || !detail.label || !detail.value) return;
+      if (/^(type|provider|privacy)$/i.test(detail.label)) return;
+      if (parts.length < 7) parts.push(detail.label + ': ' + detail.value);
+    });
+    return parts.join(' · ');
+  }
+
+  function callsForTurn(turn) {
+    return ((inspectorSession && inspectorSession.recent_tool_calls) || [])
+      .filter(function (call) { return call.turn_id === turn.id; });
+  }
+
+  function turnToolDetailList(turn) {
+    var related = callsForTurn(turn);
+    if (!related.length) return '';
+    var visible = related.slice(0, 8).map(function (call) {
+      return truncateText(toolDisplayName(call), 34) + ' (' + callKindLabel(call) + ' · ' + callStatusMeta(call) + ')';
+    }).join(', ');
+    return visible + (related.length > 8 ? ' +' + (related.length - 8) + ' more' : '');
+  }
+
   function turnDurationLabel(turn) {
     if (typeof turn.duration_ms === 'number') return formatDuration(turn.duration_ms);
     if (turn.status === 'running') return 'running';
@@ -263,10 +310,10 @@
     if (!names.length) {
       names = ((inspectorSession && inspectorSession.recent_tool_calls) || [])
         .filter(function (call) { return call.turn_id === turn.id; })
-        .map(function (call) { return call.tool; });
+        .map(toolDisplayName);
     }
     if (!names.length) return 'none retained';
-    var visible = names.slice(0, 8).join(', ');
+    var visible = names.slice(0, 8).map(function (name) { return truncateText(name, 48); }).join(', ');
     return visible + (names.length > 8 ? ' +' + (names.length - 8) + ' more' : '');
   }
 
@@ -299,9 +346,10 @@
       var key = toolKey(call);
       var active = selected && toolKey(selected) === key;
       var duration = typeof call.duration_ms === 'number' ? formatDuration(call.duration_ms) : 'in flight';
+      var fullName = toolDisplayName(call);
       return '<button class="inspector-row ' + (active ? 'active ' : '') + (!call.success ? 'failed' : '') + '" type="button" data-tool-key="' + escapeHtml(key) + '">'
         + '<span class="inspector-dot"></span>'
-        + '<span class="inspector-row-main"><span class="inspector-row-title">' + escapeHtml(call.tool || 'tool') + '</span>'
+        + '<span class="inspector-row-main"><span class="inspector-row-title" title="' + escapeHtml(fullName) + '">' + escapeHtml(truncateText(fullName, 48)) + '</span>'
         + '<span class="inspector-row-sub">' + escapeHtml(callKindLabel(call)) + ' · ' + escapeHtml(call.turn_id || 'no turn') + '</span></span>'
         + '<span class="inspector-row-meta">' + escapeHtml(duration) + '<br>' + escapeHtml(formatClock(call.timestamp)) + '</span>'
         + '</button>';
@@ -357,16 +405,15 @@
       inspectorDetail.innerHTML = '<h3>Turn story</h3><div class="inspector-empty">Select a turn to inspect.</div>';
       return;
     }
-    var related = ((inspectorSession && inspectorSession.recent_tool_calls) || [])
-      .filter(function (call) { return call.turn_id === turn.id; })
-      .slice()
-      .reverse();
+    var related = callsForTurn(turn).slice().reverse();
+    var toolDetails = turnToolDetailList(turn);
     var rows = [
       ['Status', (turn.status || 'unknown') + (turn.partial ? ' · partial tail window' : '')],
       ['Started', (formatClock(turn.started_at) || 'unknown') + ' · ' + (turn.started_at || 'unknown')],
       ['Duration', turnDurationLabel(turn)],
       ['Tools', String(turn.tool_count || 0)],
       ['Ran', turnToolList(turn)],
+      ['Tool details', toolDetails || 'none retained'],
       ['Failures', String(turn.failure_count || 0)],
       ['Categories', (turn.categories || []).join(', ') || 'none'],
       ['Model', turn.model || 'unknown'],
@@ -374,7 +421,14 @@
     ];
     var relatedHtml = related.length
       ? '<div class="inspector-related">' + related.slice(0, 12).map(function (call) {
-          return '<div class="inspector-related-item ' + (!call.success ? 'failed' : '') + '"><span>' + escapeHtml(call.tool || 'tool') + '</span><span>' + escapeHtml(!call.success ? 'failed' : formatDuration(call.duration_ms || 0)) + '</span></div>';
+          var fullName = toolDisplayName(call);
+          return '<div class="inspector-related-item ' + (!call.success ? 'failed' : '') + '">'
+            + '<span class="inspector-related-main">'
+            + '<span class="inspector-related-name" title="' + escapeHtml(fullName) + '">' + escapeHtml(truncateText(fullName, 48)) + '</span>'
+            + '<span class="inspector-related-sub">' + escapeHtml(callDetailLine(call)) + '</span>'
+            + '</span>'
+            + '<span class="inspector-related-meta">' + escapeHtml(callStatusMeta(call)) + '</span>'
+            + '</div>';
         }).join('') + '</div>'
       : '<div class="inspector-empty">No tool rows in the retained call window.</div>';
     inspectorDetail.innerHTML = '<h3>Turn story</h3>' + kvRows(rows)
@@ -477,22 +531,25 @@
   // map/castle/pulses; all data-heavy chrome is regular DOM.
   // -------------------------------------------------------------------
 
-  var domSummary = $('dom-summary');
+  var topbarMetrics = $('topbar-metrics');
   var domSession = $('dom-session');
+  var domWorkMix = $('dom-workmix');
   var domFeed = $('dom-feed');
   var domQuarter = $('dom-quarter');
   var domReplay = $('dom-replay');
+  var domLoading = $('dashboard-loading');
   var lastDashboard = null;
+  var workMixScope = 'selected';
 
   var CATEGORY_COLORS = {
-    forge: '#ff8a3d',
-    library: '#61d6ff',
-    terminal: '#a5ff6b',
-    signal: '#b88cff',
-    delegates: '#ff6bd6',
-    skills: '#c56bff',
-    court: '#ffd54a',
-    mcp: '#4ad6a8',
+    forge: '#f0911d',
+    library: '#e1ae45',
+    terminal: '#86d4b7',
+    signal: '#c37ee8',
+    delegates: '#fc60c7',
+    skills: '#da58e0',
+    court: '#2fc5e8',
+    mcp: '#45cea5',
     alert: '#ff5252',
   };
 
@@ -550,37 +607,132 @@
     return Math.floor(n / 3600) + 'h';
   }
 
-  function renderSummary(view) {
-    var body = panelBody(domSummary);
-    if (!body) return;
+  function topbarMetricLabel(label) {
+    if (label === 'Tokens · 24h') return 'Tokens';
+    return label;
+  }
+
+  function renderTopbarMetrics(view) {
+    if (!topbarMetrics) return;
     var cards = (view.summary && view.summary.cards) || [];
-    var mix = (view.summary && view.summary.workMix) || [];
+    topbarMetrics.innerHTML = cards.slice(0, 4).map(function (card) {
+      var label = topbarMetricLabel(card.label || '');
+      var value = label === 'Tokens' ? (card.subCompact || card.value || '0') : (card.value || '0');
+      var sub = card.subCompact || card.sub || '';
+      return '<span class="topbar-metric" title="' + escapeHtml(label + (sub ? ': ' + sub : '')) + '">'
+        + '<span class="topbar-metric-label">' + escapeHtml(label) + '</span>'
+        + '<span class="topbar-metric-value" style="--metric-color:' + escapeHtml(card.color || '#ffd54a') + '">' + escapeHtml(value) + '</span>'
+        + '</span>';
+    }).join('');
+  }
+
+  function renderWorkMixRows(mix, className) {
     var max = Math.max(1, ...mix.map(function (row) { return row.value || 0; }));
-    body.innerHTML = '<div class="cmc-card-grid">' + cards.map(function (card) {
-      return '<div class="cmc-card"><div class="cmc-label">' + escapeHtml(card.label) + '</div>'
-        + '<div class="cmc-value" style="color:' + escapeHtml(card.color || '') + '">' + escapeHtml(card.value) + '</div>'
-        + '<div class="cmc-sub">' + escapeHtml(card.subCompact || card.sub || '') + '</div></div>';
-    }).join('') + '</div>'
-      + '<div class="cmc-workmix"><div class="cmc-workmix-title">Recent work mix · last 24h</div>'
+    return '<div class="cmc-workmix ' + escapeHtml(className || '') + '"><div class="cmc-workmix-title">Recent work mix · last 24h</div>'
       + mix.map(function (row) {
         var color = CATEGORY_COLORS[row.category] || '#9aa6c8';
         return '<div class="cmc-work-row"><span>' + escapeHtml(row.label) + '</span><div class="cmc-bar"><span style="--bar-color:' + color + ';width:' + Math.max(8, (row.value / max) * 100) + '%"></span></div><span class="cmc-muted">' + escapeHtml(row.value) + '</span></div>';
       }).join('') + '</div>';
   }
 
+  function mixRowsFromCounts(counts) {
+    var c = counts || {};
+    return [
+      { label: 'Read', value: Number(c.read || 0), category: 'library' },
+      { label: 'Edit', value: Number(c.write || 0), category: 'forge' },
+      { label: 'Cmd', value: Number(c.command || 0), category: 'terminal' },
+      { label: 'Web', value: Number(c.web || 0), category: 'signal' },
+      { label: 'Agent', value: Number(c.task || 0), category: 'delegates' },
+      { label: 'MCP', value: Number(c.mcp || 0), category: 'mcp' },
+    ];
+  }
+
+  function aggregateSessionMix(options, activeOnly) {
+    var base = { read: 0, write: 0, command: 0, web: 0, task: 0, mcp: 0 };
+    var list = (options || []).filter(function (opt) {
+      return !activeOnly || !!opt.isActive;
+    });
+    if (!list.length && activeOnly) list = options || [];
+    list.forEach(function (opt) {
+      var mix = opt.mix || {};
+      base.read += Number(mix.read || 0);
+      base.write += Number(mix.write || 0);
+      base.command += Number(mix.command || 0);
+      base.web += Number(mix.web || 0);
+      base.task += Number(mix.task || 0);
+      base.mcp += Number(mix.mcp || 0);
+    });
+    return mixRowsFromCounts(base);
+  }
+
+  function renderWorkMixPanel(view) {
+    var body = panelBody(domWorkMix);
+    if (!body) return;
+    var options = (view.sessions && view.sessions.options) || [];
+    var selected = view.sessions && view.sessions.selected;
+    var selectedOption = selected
+      ? options.find(function (opt) { return opt.id === selected.id; })
+      : null;
+
+    if (workMixScope === 'selected' && !selectedOption) workMixScope = 'running';
+    if (workMixScope.indexOf('session:') === 0) {
+      var id = workMixScope.slice('session:'.length);
+      if (!options.some(function (opt) { return opt.id === id; })) workMixScope = 'running';
+    }
+
+    var mixRows = (view.summary && view.summary.workMix) || [];
+    if (workMixScope === 'selected' && selectedOption) {
+      mixRows = mixRowsFromCounts(selectedOption.mix);
+    } else if (workMixScope === 'running') {
+      mixRows = aggregateSessionMix(options, true);
+    } else if (workMixScope.indexOf('session:') === 0) {
+      var scopedId = workMixScope.slice('session:'.length);
+      var scoped = options.find(function (opt) { return opt.id === scopedId; });
+      mixRows = mixRowsFromCounts(scoped && scoped.mix);
+    }
+
+    var choices = [
+      '<option value="running"' + (workMixScope === 'running' ? ' selected' : '') + '>Running sessions (combined)</option>',
+    ];
+    if (selectedOption) {
+      choices.unshift('<option value="selected"' + (workMixScope === 'selected' ? ' selected' : '') + '>Selected session</option>');
+    }
+    options.forEach(function (opt) {
+      choices.push('<option value="session:' + escapeHtml(opt.id) + '"' + (workMixScope === 'session:' + opt.id ? ' selected' : '') + '>'
+        + escapeHtml((opt.title || opt.id) + ' · ' + (opt.shortId || opt.id.slice(0, 8)))
+        + '</option>');
+    });
+
+    body.innerHTML = '<div class="cmc-workmix-controls"><label class="cmc-muted" for="workmix-scope-select">Scope</label>'
+      + '<select id="workmix-scope-select" class="cmc-select" data-cmc-action="workmix-scope">' + choices.join('') + '</select></div>'
+      + renderWorkMixRows(mixRows, '');
+  }
+
   function renderSession(view) {
     var body = panelBody(domSession);
     if (!body) return;
     var selected = view.sessions && view.sessions.selected;
-    var rows = (view.sessions && view.sessions.rows) || [];
-    if (!rows.length) {
+    var options = (view.sessions && view.sessions.options) || [];
+    if (!options.length) {
       body.innerHTML = '<div class="cmc-label">No running Copilot sessions found. Start Copilot CLI and this panel will show the active task.</div>';
       return;
     }
+    var selectedId = selected && selected.id;
+    var picker = '<div class="cmc-label" style="margin-bottom:8px">' + escapeHtml(view.sessions.header || '') + '</div>'
+      + '<div class="cmc-session-picker"><select class="cmc-select" data-cmc-action="session-select">'
+      + options.map(function (opt) {
+        var marker = opt.isActive ? '● ' : '○ ';
+        return '<option value="' + escapeHtml(opt.id) + '"' + (opt.id === selectedId ? ' selected' : '') + '>'
+          + escapeHtml(marker + (opt.title || opt.id) + ' · ' + (opt.shortId || opt.id.slice(0, 8)))
+          + '</option>';
+      }).join('')
+      + '</select></div>';
     var selectedHtml = '';
     if (selected) {
       var inTok = selected.input_tokens || 0;
       var outTok = selected.output_tokens || 0;
+      var tcalls = (selected.recent_tool_calls || []).length;
+      var hasGitRoot = !!selected.git_root;
       selectedHtml = '<div class="cmc-detail-rows">'
         + '<div style="color:' + statusColor(selected.status) + '">Status: ' + escapeHtml(selected.status) + '</div>'
         + '<div>Last: ' + escapeHtml(eventLabel(selected.last_event_kind, selected.last_event_category)) + '</div>'
@@ -589,17 +741,11 @@
         + '<div class="cmc-muted">Tokens: ' + compactNumberShort(inTok) + '/' + compactNumberShort(outTok) + '</div>'
         + '</div>'
         + '<div class="cmc-actions">'
-        + (selected.git_root ? '<button class="cmc-button accent" data-cmc-action="editor">↗ Open in Editor</button>' : '')
-        + ((selected.recent_tool_calls || []).length > 0 ? '<button class="cmc-button" data-cmc-action="inspector">Inspector (' + selected.recent_tool_calls.length + ')</button>' : '')
+        + '<button class="cmc-button accent ' + (hasGitRoot ? '' : 'disabled') + '" ' + (hasGitRoot ? 'data-cmc-action="editor"' : 'disabled aria-disabled="true"') + '>↗ Open in Editor</button>'
+        + '<button class="cmc-button ' + (tcalls > 0 ? '' : 'disabled') + '" ' + (tcalls > 0 ? 'data-cmc-action="inspector"' : 'disabled aria-disabled="true"') + '>Inspector (' + tcalls + ')</button>'
         + '</div>';
     }
-    body.innerHTML = '<div class="cmc-label" style="margin-bottom:12px">' + escapeHtml(view.sessions.header || '') + '</div>'
-      + '<div class="cmc-session-list">' + rows.map(function (row) {
-        return '<button class="cmc-session-row ' + (row.selected ? 'selected' : '') + '" data-session-id="' + escapeHtml(row.id) + '">'
-          + '<span class="cmc-dot" style="--dot:' + statusColor(row.status) + '"></span>'
-          + '<span class="cmc-session-title">' + escapeHtml(row.title) + '</span>'
-          + '<span class="cmc-session-id">' + escapeHtml(row.shortId) + '</span></button>';
-      }).join('') + '</div>' + selectedHtml;
+    body.innerHTML = picker + selectedHtml;
   }
 
   function renderFeed(view) {
@@ -624,6 +770,7 @@
     var q = view.quarter;
     if (title) title.textContent = q ? q.title : 'Sector';
     if (!body || !q) return;
+    domQuarter.style.setProperty('--quarter-color', q.color || CATEGORY_COLORS[q.category] || '#ffd54a');
     body.innerHTML = '<div class="cmc-quarter-line">' + escapeHtml(q.countLine) + '</div>'
       + '<div class="cmc-quarter-line">' + escapeHtml(q.line) + '</div>'
       + (q.toolList ? '<div class="cmc-quarter-tools cmc-muted">' + escapeHtml(q.toolList) + '</div>' : '')
@@ -643,19 +790,36 @@
 
   window.__cmcRenderDashboard = function (view) {
     lastDashboard = view;
+    document.body.classList.add('dashboard-ready');
+    if (domLoading) domLoading.setAttribute('aria-hidden', 'true');
     var l = view.layout || {};
     var hideSides = !!view.panelsHidden;
-    setPanelRect(domSummary, { x: l.leftX, y: l.topY, w: l.panelW, h: l.insightH });
-    setPanelRect(domSession, { x: l.rightX, y: l.topY, w: l.rightW, h: l.sessionH });
-    setPanelRect(domFeed, { x: l.rightX, y: l.feedY, w: l.rightW, h: l.feedH });
+    var columnGap = l.compact ? 10 : 12;
+    var replayTop = Number.isFinite(l.replayY) && l.replayH > 0 ? l.replayY : l.bottomY;
+    var columnBottom = Math.max(l.topY || 0, replayTop - columnGap);
+    var columnH = Math.max(0, columnBottom - (l.topY || 0));
+    var feedMinH = l.compact ? 130 : 160;
+    var workmixH = l.compact ? 232 : 244;
+    var sessionMainH = l.compact ? 244 : 270;
+    var maxSessionH = columnH - workmixH - feedMinH - columnGap * 2;
+    if (maxSessionH < sessionMainH) {
+      sessionMainH = Math.max(l.compact ? 218 : 238, maxSessionH);
+    }
+    var workmixY = (l.topY || 0) + sessionMainH + columnGap;
+    var feedY = workmixY + workmixH + columnGap;
+    var feedH = Math.max(80, columnBottom - feedY);
+    setPanelRect(domSession, { x: l.leftX, y: l.topY, w: l.panelW, h: sessionMainH });
+    setPanelRect(domWorkMix, { x: l.leftX, y: workmixY, w: l.panelW, h: workmixH });
+    setPanelRect(domFeed, { x: l.leftX, y: feedY, w: l.panelW, h: feedH });
     setPanelRect(domQuarter, { x: l.bottomX, y: l.bottomY, w: l.bottomW, h: l.bottomH });
     setPanelRect(domReplay, { x: l.replayX, y: l.replayY, w: l.replayW, h: l.replayH });
-    [domSummary, domSession, domFeed, domReplay].forEach(function (el) {
+    [domSession, domWorkMix, domFeed, domReplay].forEach(function (el) {
       if (el) el.classList.toggle('hidden', hideSides);
     });
     if (domQuarter) domQuarter.classList.toggle('hidden', false);
-    renderSummary(view);
+    renderTopbarMetrics(view);
     renderSession(view);
+    renderWorkMixPanel(view);
     renderFeed(view);
     renderQuarter(view);
     renderReplay(view);
@@ -671,6 +835,7 @@
     }
     var action = target.closest('[data-cmc-action]');
     if (!action) return;
+    if (action.disabled || action.classList.contains('disabled')) return;
     var name = action.getAttribute('data-cmc-action');
     if (name === 'editor' && typeof window.__cmcOpenSelectedSessionInEditor === 'function') window.__cmcOpenSelectedSessionInEditor();
     if (name === 'inspector' && lastDashboard && lastDashboard.sessions && lastDashboard.sessions.selected) openInspector(lastDashboard.sessions.selected);
@@ -679,6 +844,19 @@
     if (name === 'replay-seek' && typeof window.__cmcSeekReplayRatio === 'function') {
       var rect = action.getBoundingClientRect();
       window.__cmcSeekReplayRatio((event.clientX - rect.left) / rect.width);
+    }
+  });
+
+  document.addEventListener('change', function (event) {
+    var target = event.target;
+    if (!target || !target.matches) return;
+    if (target.matches('[data-cmc-action="workmix-scope"]')) {
+      workMixScope = target.value || 'running';
+      if (lastDashboard) renderWorkMixPanel(lastDashboard);
+      return;
+    }
+    if (target.matches('[data-cmc-action="session-select"]') && typeof window.__cmcSelectSession === 'function') {
+      window.__cmcSelectSession(target.value);
     }
   });
 

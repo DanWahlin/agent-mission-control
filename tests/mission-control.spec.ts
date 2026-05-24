@@ -33,6 +33,8 @@ const MISSION_FIXTURE = {
   generated_at_ms: Date.now(),
 };
 
+const LONG_TOOL_NAME = 'bash-command-with-a-very-long-safe-label-for-turn-story-truncation';
+
 async function installFixture(page: Page, fixture = MISSION_FIXTURE) {
   await page.addInitScript((fixtureArg) => {
     (window as any).__missionControlFixture = fixtureArg;
@@ -71,9 +73,6 @@ async function getMissionState(page: Page) {
       activeEventPulseCount: scene.activeEventPulseCount ?? 0,
       quarterEventBadges: scene.quarterEventBadges ?? {},
       replayState: scene.replayState ?? { paused: false, cursor: 0, total: 0, atLive: true },
-      replayPlayButton: scene.replayPlayButtonRect ?? null,
-      replayLiveButton: scene.replayLiveButtonRect ?? null,
-      replayTrack: scene.replayTrackRect ?? null,
       opsMode: scene.opsSummary?.mode,
       opsAttention: scene.opsSummary?.attention,
       opsRecommendation: scene.opsSummary?.recommendation,
@@ -84,14 +83,14 @@ async function getMissionState(page: Page) {
       layout: scene.layout ? {
         leftX: scene.layout.leftX,
         panelW: scene.layout.panelW,
-        rightX: scene.layout.rightX,
-        rightW: scene.layout.rightW,
         opsY: scene.layout.opsY,
         opsH: scene.layout.opsH,
         bottomY: scene.layout.bottomY,
         bottomH: scene.layout.bottomH,
         inspectorX: scene.layout.inspectorX,
         inspectorW: scene.layout.inspectorW,
+        radiusX: scene.layout.radiusX,
+        radiusY: scene.layout.radiusY,
         quarterR: scene.layout.quarterR,
         compact: scene.layout.compact,
       } : null,
@@ -100,16 +99,6 @@ async function getMissionState(page: Page) {
       })),
       inspectedQuarterKey: scene.inspectedQuarterKey ?? null,
       hoveredQuarterIndex: scene.hoveredQuarterIndex ?? -1,
-      transcriptOpen: scene.transcriptOpen ?? false,
-      transcriptToggle: scene.transcriptToggleRect ?? null,
-      transcriptClose: scene.transcriptCloseRect ?? null,
-      inspectorState: scene.inspectorState ?? null,
-      inspectorModeRects: scene.inspectorModeRects ?? [],
-      inspectorTabRects: scene.inspectorTabRects ?? [],
-      inspectorRowRects: scene.inspectorRowRects ?? [],
-      transcriptScrollThumb: scene.transcriptScrollThumbRect ?? null,
-      transcriptScrollTrack: scene.transcriptScrollTrackRect ?? null,
-      inspectorTexts: (scene.transcriptTextObjects ?? []).map((obj: any) => obj.text),
     };
   });
 }
@@ -155,6 +144,22 @@ function inspectorFixture() {
       prompt: 'SECRET_SKILL',
     },
     {
+      tool: LONG_TOOL_NAME,
+      category: 'terminal',
+      timestamp: '2026-05-21T07:13:00Z',
+      completed_at: '',
+      success: true,
+      model: 'gpt-5.5',
+      call_id: 'call-bash-long',
+      turn_id: 'turn-tail',
+      target: LONG_TOOL_NAME,
+      details: [
+        { label: 'Type', value: 'Command tool' },
+        { label: 'Provider', value: 'copilot' },
+        { label: 'Privacy', value: 'arguments/output hidden' },
+      ],
+    },
+    {
       tool: 'code-reviewer',
       category: 'delegates',
       timestamp: '2026-05-21T07:12:00Z',
@@ -195,7 +200,7 @@ function inspectorFixture() {
       ended_at: '',
       status: 'running',
       tool_count: 1,
-      tools: ['bash'],
+      tools: [LONG_TOOL_NAME],
       failure_count: 0,
       categories: ['terminal'],
       model: 'gpt-5.5',
@@ -255,6 +260,9 @@ test.describe('Copilot Mission Control — Startup', () => {
 
   test('top bar HUD elements are present', async ({ page }) => {
     await expect(page.locator('#topbar .brand')).toBeVisible();
+    await expect(page.locator('#topbar-metrics .topbar-metric')).toHaveCount(4);
+    await expect(page.locator('#topbar-metrics')).toContainText('Active');
+    await expect(page.locator('#topbar-metrics')).toContainText(/Tokens\s*\d+\/\d+k?/);
     await expect(page.locator('#theme-btn')).toBeVisible();
   });
 });
@@ -270,6 +278,31 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     const state = await getMissionState(page);
     expect(state!.toolCalls).toBe(47);
     expect(state!.sessionCount).toBe(3);
+    await expect(page.locator('#dom-workmix')).toBeVisible();
+    await expect(page.locator('#dom-workmix')).toContainText('Recent work mix');
+    await expect(page.locator('#dom-workmix [data-cmc-action="workmix-scope"]')).toBeVisible();
+    await expect(page.locator('#dom-workmix .cmc-work-row')).toHaveCount(6);
+    const layout = await page.evaluate(() => {
+      const rect = (selector: string) => {
+        const el = document.querySelector(selector) as HTMLElement | null;
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom };
+      };
+      return {
+        workMix: rect('#dom-workmix'),
+        lastWorkRow: rect('#dom-workmix .cmc-work-row:last-child'),
+        feed: rect('#dom-feed'),
+        replay: rect('#dom-replay'),
+      };
+    });
+    expect(layout.workMix).toBeTruthy();
+    expect(layout.lastWorkRow).toBeTruthy();
+    expect(layout.feed).toBeTruthy();
+    expect(layout.replay).toBeTruthy();
+    expect(layout.lastWorkRow!.bottom).toBeLessThanOrEqual(layout.workMix!.bottom - 8);
+    expect(layout.feed!.top).toBeGreaterThanOrEqual(layout.workMix!.bottom + 8);
+    expect(layout.feed!.bottom).toBeLessThanOrEqual(layout.replay!.top - 8);
   });
 
   test('bootstrap suppresses live pulses so historical events do not animate', async ({ page }) => {
@@ -356,7 +389,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
   test('clicking a running session selects it for inspection', async ({ page }) => {
     const before = await getMissionState(page);
     expect(before!.selectedSessionId).toBe('beta4567');
-    await page.locator('#dom-session [data-session-id="alpha123"]').click();
+    await page.locator('#dom-session [data-cmc-action="session-select"]').selectOption('alpha123');
     await page.waitForTimeout(150);
 
     const after = await getMissionState(page);
@@ -413,6 +446,9 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     expect(text).toContain('Turn story');
     expect(text).toContain('failed');
     expect(text).toContain('browser_navigate, blog-writer, code-reviewer');
+    expect(text).toContain('Tool details');
+    expect(text).toContain('MCP tool · 1.0s');
+    expect(text).toContain('Sub-agent · failed');
     expect(text).toContain('Tools in this turn (3)');
     expect(text).toContain('code-reviewer');
 
@@ -420,6 +456,8 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     text = await page.locator('#inspector-dialog').innerText();
     expect(text).toContain('partial tail window');
     expect(text).toContain('running');
+    expect(text).toContain('bash-command-with-a-very-long-safe-label-for-...');
+    expect(text).not.toContain(LONG_TOOL_NAME);
   });
 
   test('HTML inspector uses native scroll containers for long lists', async ({ page }) => {
@@ -466,8 +504,8 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await expect(page.locator('#model-chip')).toHaveText('claude-sonnet-4.6');
     await expect(page.locator('#model-chip')).not.toHaveClass(/empty/);
 
-    // Click into alpha123 → chip should switch to its model.
-    await page.locator('#dom-session [data-session-id="alpha123"]').click();
+    // Select alpha123 → chip should switch to its model.
+    await page.locator('#dom-session [data-cmc-action="session-select"]').selectOption('alpha123');
     await page.waitForTimeout(150);
 
     await expect(page.locator('#model-chip')).toHaveText('gpt-5.5');
@@ -585,18 +623,16 @@ test.describe('Copilot Mission Control — Focus Mode', () => {
 
     const before = await getMissionState(page);
     expect(before!.layout!.panelW).toBeGreaterThan(0);
-    expect(before!.layout!.rightW).toBeGreaterThan(0);
 
     await page.locator('#panels-btn').click();
     // Wait for the re-render to settle.
     await page.waitForFunction(() => {
       const scene = (window as any).__phaserGame?.scene?.getScene?.('mission-control');
-      return scene?.layout?.panelW === 0 && scene?.layout?.rightW === 0;
+      return scene?.layout?.panelW === 0;
     }, { timeout: 2000 });
 
     const after = await getMissionState(page);
     expect(after!.layout!.panelW).toBe(0);
-    expect(after!.layout!.rightW).toBe(0);
     // Inspector still draws — its rect should grow to span between leftX
     // and the right edge minus margins.
     expect(after!.layout!.inspectorW).toBeGreaterThan(before!.layout!.inspectorW);
@@ -609,7 +645,6 @@ test.describe('Copilot Mission Control — Focus Mode', () => {
     }, { timeout: 2000 });
     const restored = await getMissionState(page);
     expect(restored!.layout!.panelW).toBe(before!.layout!.panelW);
-    expect(restored!.layout!.rightW).toBe(before!.layout!.rightW);
   });
 
   test('focus-mode preference persists across reloads via localStorage', async ({ page }) => {
@@ -633,7 +668,6 @@ test.describe('Copilot Mission Control — Focus Mode', () => {
     await waitForGame(page);
     const state = await getMissionState(page);
     expect(state!.layout!.panelW).toBe(0);
-    expect(state!.layout!.rightW).toBe(0);
   });
 });
 
@@ -705,15 +739,16 @@ for (const vp of VIEWPORTS) {
     const layout = state!.layout!;
     expect(layout).not.toBeNull();
     const leftPanelRight = layout.leftX + layout.panelW;
-    const rightPanelLeft = layout.rightX;
+    const wellRight = state!.screenW - layout.leftX;
     const wellTop = layout.opsY + layout.opsH;
     const wellBottom = layout.bottomY;
     for (const d of state!.quarterRects) {
       const r = layout.quarterR;
       expect(d.x - r, `quarter ${d.key} left edge crosses left panel`).toBeGreaterThanOrEqual(leftPanelRight);
-      expect(d.x + r, `quarter ${d.key} right edge crosses right panel`).toBeLessThanOrEqual(rightPanelLeft);
+      expect(d.x + r, `quarter ${d.key} right edge crosses viewport gutter`).toBeLessThanOrEqual(wellRight);
       expect(d.y - r, `quarter ${d.key} top edge crosses ops strip`).toBeGreaterThanOrEqual(wellTop);
       expect(d.y + r, `quarter ${d.key} bottom edge crosses bottom inspector`).toBeLessThanOrEqual(wellBottom);
     }
+    expect(layout.radiusX / layout.radiusY, 'sector ring should not stretch into a flat oval').toBeLessThan(1.5);
   });
 }
