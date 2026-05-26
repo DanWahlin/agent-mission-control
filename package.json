@@ -3,7 +3,7 @@
   "version": "0.1.1",
   "description": "Copilot Mission Control — a live dashboard for the GitHub Copilot CLI",
   "scripts": {
-    "build:frontend": "rm -rf dist/game dist/assets dist/docs && tsc -p tsconfig.renderer.json && cp src/game/index.html dist/game/ && cp src/game/hud.js dist/game/ && cp node_modules/phaser/dist/phaser.min.js dist/game/ && cp -R assets dist/assets && mkdir -p dist/docs/img && cp docs/img/copilot-mission-control.webp dist/docs/img/",
+    "build:frontend": "node scripts/build-frontend.js",
     "build": "npm run build:frontend && cd src-tauri && cargo build",
     "tauri": "tauri",
     "start": "npm run build:frontend && cd src-tauri && cargo tauri dev",
