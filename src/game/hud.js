@@ -5,9 +5,9 @@
 //     the choice in `cmc_theme` localStorage. The Phaser scene listens
 //     via `window.__cmcSetTheme(mode)` and re-renders with light/dark
 //     color tokens.
-//   - DOM dashboard chrome, replay controls, and inspector dialog.
+//   - DOM dashboard chrome, replay controls, settings, and inspector dialog.
 //
-// No score/lives/level/pause/game-switcher/settings — this is an
+// No score/lives/level/pause/game-switcher — this is an
 // observability tool, not an arcade. All operational status (active
 // sessions, attention alerts, replay state) lives in the canvas.
 
@@ -66,6 +66,78 @@
       applyTheme();
     }
   }, 100);
+
+  // -------------------------------------------------------------------
+  // Settings dialog. App themes are separate from the light/dark chrome mode.
+  // -------------------------------------------------------------------
+
+  var settingsBtn = $('settings-btn');
+  var settingsOverlay = $('settings-overlay');
+  var settingsDialog = $('settings-dialog');
+  var settingsClose = $('settings-close');
+  var settingsDone = $('settings-done');
+  var appThemeSelect = $('app-theme-select');
+  var settingsReturnFocus = null;
+  var APP_THEME_KEY = 'cmc_app_theme';
+  var DEFAULT_APP_THEME = 'space';
+  var APP_THEMES = ['space', 'medieval'];
+
+  function normalizeAppTheme(value) {
+    return APP_THEMES.indexOf(value) >= 0 ? value : DEFAULT_APP_THEME;
+  }
+
+  function applyAppTheme(value) {
+    var nextTheme = normalizeAppTheme(value);
+    document.body.dataset.appTheme = nextTheme;
+    if (appThemeSelect && appThemeSelect.value !== nextTheme) appThemeSelect.value = nextTheme;
+    safeSet(APP_THEME_KEY, nextTheme);
+    if (typeof window.__cmcSetAppTheme === 'function') {
+      window.__cmcSetAppTheme(nextTheme);
+    }
+  }
+
+  function openSettings(returnFocus) {
+    if (!settingsOverlay) return;
+    settingsReturnFocus = returnFocus || document.activeElement;
+    applyAppTheme(safeGet(APP_THEME_KEY));
+    settingsOverlay.classList.add('visible');
+    settingsOverlay.setAttribute('aria-hidden', 'false');
+    var focusTarget = appThemeSelect || settingsDialog;
+    if (focusTarget && focusTarget.focus) focusTarget.focus();
+  }
+
+  function closeSettings() {
+    if (!settingsOverlay) return;
+    settingsOverlay.classList.remove('visible');
+    settingsOverlay.setAttribute('aria-hidden', 'true');
+    if (settingsReturnFocus && settingsReturnFocus.focus) settingsReturnFocus.focus();
+    settingsReturnFocus = null;
+  }
+
+  applyAppTheme(safeGet(APP_THEME_KEY));
+
+  if (settingsBtn) settingsBtn.addEventListener('click', function () { openSettings(settingsBtn); });
+  if (settingsClose) settingsClose.addEventListener('click', closeSettings);
+  if (settingsDone) settingsDone.addEventListener('click', closeSettings);
+  if (appThemeSelect) appThemeSelect.addEventListener('change', function () { applyAppTheme(appThemeSelect.value); });
+  var appThemeAttempts = 0;
+  var appThemePoll = setInterval(function () {
+    appThemeAttempts++;
+    if (typeof window.__cmcSetAppTheme === 'function' || appThemeAttempts > 40) {
+      clearInterval(appThemePoll);
+      applyAppTheme(safeGet(APP_THEME_KEY));
+    }
+  }, 100);
+  if (settingsOverlay) {
+    settingsOverlay.addEventListener('click', function (event) {
+      if (event.target === settingsOverlay) closeSettings();
+    });
+  }
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && settingsOverlay && settingsOverlay.classList.contains('visible')) {
+      closeSettings();
+    }
+  });
 
   // -------------------------------------------------------------------
   // Active model chip in the topbar. The scene calls this whenever the
@@ -714,6 +786,7 @@
   var domQuarter = $('dom-quarter');
   var domReplay = $('dom-replay');
   var domLoading = $('dashboard-loading');
+  var domLoadingImage = domLoading ? domLoading.querySelector('img') : null;
   var schemaDriftOverlay = $('schema-drift-overlay');
   var schemaDriftSubtitle = $('schema-drift-subtitle');
   var schemaDriftBody = $('schema-drift-body');
@@ -723,12 +796,58 @@
   var lastDashboard = null;
   var activeSchemaDriftReport = null;
   var lastSchemaDriftFingerprint = '';
+  var DASHBOARD_SPLASH_MIN_MS = Number.isFinite(Number(window.__cmcSplashMinMs))
+    ? Math.max(0, Number(window.__cmcSplashMinMs))
+    : 2000;
+  var dashboardSplashVisibleAt = nowMs();
+  var dashboardSplashImageSettled = !domLoadingImage || domLoadingImage.complete;
+  var dashboardSplashHideRequested = false;
+  var dashboardSplashTimer = 0;
   var liveFingerprints = {
     session: '',
     feed: '',
     quarter: '',
     replay: '',
   };
+
+  function nowMs() {
+    return window.performance && typeof window.performance.now === 'function'
+      ? window.performance.now()
+      : Date.now();
+  }
+
+  function hideDashboardSplash() {
+    dashboardSplashTimer = 0;
+    document.body.classList.add('dashboard-splash-hidden');
+    if (domLoading) domLoading.setAttribute('aria-hidden', 'true');
+  }
+
+  function scheduleDashboardSplashHide() {
+    if (!dashboardSplashHideRequested || !dashboardSplashImageSettled) return;
+    if (document.body.classList.contains('dashboard-splash-hidden')) return;
+    var delay = Math.max(0, DASHBOARD_SPLASH_MIN_MS - (nowMs() - dashboardSplashVisibleAt));
+    if (dashboardSplashTimer) window.clearTimeout(dashboardSplashTimer);
+    if (delay > 0) {
+      dashboardSplashTimer = window.setTimeout(hideDashboardSplash, delay);
+    } else {
+      hideDashboardSplash();
+    }
+  }
+
+  function requestDashboardSplashHide() {
+    dashboardSplashHideRequested = true;
+    scheduleDashboardSplashHide();
+  }
+
+  if (domLoadingImage && !domLoadingImage.complete) {
+    var settleDashboardSplashImage = function () {
+      dashboardSplashImageSettled = true;
+      dashboardSplashVisibleAt = nowMs();
+      scheduleDashboardSplashHide();
+    };
+    domLoadingImage.addEventListener('load', settleDashboardSplashImage, { once: true });
+    domLoadingImage.addEventListener('error', settleDashboardSplashImage, { once: true });
+  }
 
   var CATEGORY_COLORS = {
     forge: '#f0911d',
@@ -850,9 +969,73 @@
     };
   }
 
+  function sessionOptionLines(opt) {
+    var marker = opt && opt.isActive ? '● ' : '○ ';
+    var shortId = (opt && (opt.shortId || (opt.id || '').slice(0, 8))) || '';
+    var sessionName = opt && opt.sessionName;
+    if (sessionName) {
+      return {
+        main: marker + (opt.repository || opt.title || opt.id || 'session'),
+        sub: sessionName + (shortId ? ' · ' + shortId : ''),
+      };
+    }
+    return {
+      main: marker + ((opt && (opt.title || opt.id)) || 'session') + (shortId ? ' · ' + shortId : ''),
+      sub: '',
+    };
+  }
+
+  function renderSessionOption(opt) {
+    var lines = sessionOptionLines(opt || {});
+    return '<span class="cmc-session-option-text">'
+      + '<span class="cmc-session-option-main">' + escapeHtml(lines.main) + '</span>'
+      + (lines.sub ? '<span class="cmc-session-option-sub">' + escapeHtml(lines.sub) + '</span>' : '')
+      + '</span>';
+  }
+
+  function selectedSessionHeading(session) {
+    if (!session) return { title: '', subtitle: '' };
+    if (session.session_name) {
+      return {
+        title: session.repository || session.title || session.id,
+        subtitle: session.session_name,
+      };
+    }
+    return { title: session.title || session.id, subtitle: '' };
+  }
+
+  function closeSessionMenu() {
+    document.querySelectorAll('.cmc-session-picker.open').forEach(function (picker) {
+      picker.classList.remove('open');
+      var trigger = picker.querySelector('[data-cmc-action="session-menu"]');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function toggleSessionMenu(trigger) {
+    var picker = trigger && trigger.closest('.cmc-session-picker');
+    if (!picker) return;
+    var isOpen = picker.classList.contains('open');
+    closeSessionMenu();
+    if (!isOpen) {
+      picker.classList.add('open');
+      trigger.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  function restoreSessionMenuIfNeeded(body, shouldOpen) {
+    if (!shouldOpen) return;
+    var picker = body.querySelector('.cmc-session-picker');
+    var trigger = picker && picker.querySelector('[data-cmc-action="session-menu"]');
+    if (!picker || !trigger) return;
+    picker.classList.add('open');
+    trigger.setAttribute('aria-expanded', 'true');
+  }
+
   function renderSession(view) {
     var body = panelBody(domSession);
     if (!body) return;
+    var keepMenuOpen = !!body.querySelector('.cmc-session-picker.open');
     var selected = view.sessions && view.sessions.selected;
     var options = (view.sessions && view.sessions.options) || [];
     var alerts = (view.providerAlerts || []).slice(0, 3);
@@ -866,15 +1049,20 @@
       return;
     }
     var selectedId = selected && selected.id;
+    var selectedOption = options.find(function (opt) { return opt.id === selectedId; }) || options[0];
     var picker = '<div class="cmc-label" style="margin-bottom:8px">' + escapeHtml(view.sessions.header || '') + '</div>'
-      + '<div class="cmc-session-picker"><select class="cmc-select" data-cmc-action="session-select">'
+      + '<div class="cmc-session-picker">'
+      + '<button class="cmc-session-trigger" type="button" data-cmc-action="session-menu" aria-haspopup="listbox" aria-expanded="false">'
+      + renderSessionOption(selectedOption)
+      + '<span class="cmc-session-caret" aria-hidden="true">▾</span>'
+      + '</button>'
+      + '<div class="cmc-session-menu" role="listbox" aria-label="Select Copilot session">'
       + options.map(function (opt) {
-        var marker = opt.isActive ? '● ' : '○ ';
-        return '<option value="' + escapeHtml(opt.id) + '"' + (opt.id === selectedId ? ' selected' : '') + '>'
-          + escapeHtml(marker + (opt.title || opt.id) + ' · ' + (opt.shortId || opt.id.slice(0, 8)))
-          + '</option>';
+        return '<button class="cmc-session-option ' + (opt.id === selectedId ? 'selected' : '') + '" type="button" role="option" aria-selected="' + (opt.id === selectedId ? 'true' : 'false') + '" data-session-id="' + escapeHtml(opt.id) + '">'
+          + renderSessionOption(opt)
+          + '</button>';
       }).join('')
-      + '</select></div>';
+      + '</div></div>';
     var selectedHtml = '';
     if (selected) {
       var inTok = selected.input_tokens || 0;
@@ -882,9 +1070,13 @@
       var tcalls = (selected.recent_tool_calls || []).length;
       var hasGitRoot = !!selected.git_root;
       var activity = selected.replay_activity || selectedActivity(selected);
+      var heading = selectedSessionHeading(selected);
       selectedHtml = '<div class="cmc-session-summary">'
         + '<div class="cmc-session-heading">'
-        + '<div class="cmc-session-title" title="' + escapeHtml(selected.title || selected.id) + '">' + escapeHtml(selected.title || selected.id) + '</div>'
+        + '<div>'
+        + '<div class="cmc-session-title" title="' + escapeHtml(heading.title) + '">' + escapeHtml(heading.title) + '</div>'
+        + (heading.subtitle ? '<div class="cmc-session-subtitle" title="' + escapeHtml(heading.subtitle) + '">' + escapeHtml(heading.subtitle) + '</div>' : '')
+        + '</div>'
         + '</div>'
         + '<div class="cmc-session-meta">'
         + '<span class="cmc-meta-pill">Last: ' + escapeHtml(activity.last) + '</span>'
@@ -899,6 +1091,7 @@
         + '</div>';
     }
     body.innerHTML = alertsHtml + picker + selectedHtml;
+    restoreSessionMenuIfNeeded(body, keepMenuOpen);
   }
 
   function renderFeed(view) {
@@ -992,12 +1185,16 @@
         return [
           opt.id || '',
           opt.title || '',
+          opt.sessionName || '',
+          opt.repository || '',
           opt.shortId || '',
           opt.isActive ? '1' : '0',
         ].join(':');
       }).join('|'),
       selected.id || '',
       selected.title || '',
+      selected.session_name || '',
+      selected.repository || '',
       selected.git_root || '',
       selected.input_tokens || 0,
       selected.output_tokens || 0,
@@ -1174,7 +1371,7 @@
   window.__cmcRenderDashboard = function (view) {
     lastDashboard = view;
     document.body.classList.add('dashboard-ready');
-    if (domLoading) domLoading.setAttribute('aria-hidden', 'true');
+    requestDashboardSplashHide();
     var l = view.layout || {};
     var hideSides = !!view.panelsHidden;
     var columnGap = l.compact ? 10 : 12;
@@ -1211,7 +1408,7 @@
   window.__cmcRenderLiveDashboard = function (view) {
     lastDashboard = view;
     document.body.classList.add('dashboard-ready');
-    if (domLoading) domLoading.setAttribute('aria-hidden', 'true');
+    requestDashboardSplashHide();
     var nextSession = sessionFingerprint(view);
     var nextFeed = feedFingerprint(view);
     var nextQuarter = quarterFingerprint(view);
@@ -1243,11 +1440,18 @@
   document.addEventListener('click', function (event) {
     var target = event.target;
     if (!target || !target.closest) return;
+    var menuTrigger = target.closest('[data-cmc-action="session-menu"]');
+    if (menuTrigger) {
+      toggleSessionMenu(menuTrigger);
+      return;
+    }
     var sessionBtn = target.closest('[data-session-id]');
     if (sessionBtn && typeof window.__cmcSelectSession === 'function') {
+      closeSessionMenu();
       window.__cmcSelectSession(sessionBtn.getAttribute('data-session-id'));
       return;
     }
+    if (!target.closest('.cmc-session-picker')) closeSessionMenu();
     var action = target.closest('[data-cmc-action]');
     if (!action) return;
     if (action.disabled || action.classList.contains('disabled')) return;
@@ -1296,6 +1500,16 @@
   }
 
   document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+      var openMenu = document.querySelector('.cmc-session-picker.open');
+      if (openMenu) {
+        event.preventDefault();
+        closeSessionMenu();
+        var trigger = openMenu.querySelector('[data-cmc-action="session-menu"]');
+        if (trigger && typeof trigger.focus === 'function') trigger.focus();
+        return;
+      }
+    }
     if (event.key === 'Escape' && schemaDriftOverlay && schemaDriftOverlay.classList.contains('visible')) {
       closeSchemaDriftDialog();
       return;
@@ -1339,17 +1553,16 @@
   // shows what's currently visible. Open eye when panels are shown,
   // eye-with-slash when panels are hidden. The tooltip describes the
   // click action so the meaning stays unambiguous either way.
-  // Deep almond curve (peaks at y=3 / y=21 in a 24x24 box) + filled
-  // pupil so the icon reads at the topbar size without looking like a
-  // squashed slit.
+  // Deep almond curve + filled pupil so the icon reads at the topbar size
+  // without looking like a squashed slit.
   var ICON_EYE_OPEN = '<svg viewBox="0 0 24 24" aria-hidden="true">'
-    + '<path d="M2 12 Q 12 3 22 12 Q 12 21 2 12 Z"/>'
-    + '<circle class="pupil" cx="12" cy="12" r="3.5"/>'
+    + '<path d="M1.4 12 Q 12 2.3 22.6 12 Q 12 21.7 1.4 12 Z"/>'
+    + '<circle class="pupil" cx="12" cy="12" r="4.1"/>'
     + '</svg>';
   var ICON_EYE_SLASH = '<svg viewBox="0 0 24 24" aria-hidden="true">'
-    + '<path d="M2 12 Q 12 3 22 12 Q 12 21 2 12 Z"/>'
-    + '<circle class="pupil" cx="12" cy="12" r="3.5"/>'
-    + '<path d="M4 20 L 20 4"/>'
+    + '<path d="M1.4 12 Q 12 2.3 22.6 12 Q 12 21.7 1.4 12 Z"/>'
+    + '<circle class="pupil" cx="12" cy="12" r="4.1"/>'
+    + '<path d="M3.4 20.6 L 20.6 3.4"/>'
     + '</svg>';
 
   function applyPanelsState() {

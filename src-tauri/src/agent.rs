@@ -80,6 +80,8 @@ pub struct AgentSessionSummary {
     pub provider: String,
     pub id: String,
     pub title: String,
+    #[serde(default)]
+    pub session_name: String,
     pub repository: String,
     pub branch: String,
     pub updated_at: String,
@@ -1472,6 +1474,7 @@ fn scan_copilot() -> ProviderScan {
         let workspace_path = first_existing_child(&session_path, &schema.session.workspace_files);
         let events_path = first_existing_child(&session_path, &schema.session.events_files);
         let workspace = parse_workspace(&workspace_path, &schema);
+        let session_name = sanitize_session_title(workspace.get("name"));
         let age_seconds = now
             .duration_since(modified)
             .map(|age| age.as_secs())
@@ -1479,6 +1482,7 @@ fn scan_copilot() -> ProviderScan {
         let mut summary = AgentSessionSummary {
             provider: provider.to_string(),
             id: session_id.chars().take(8).collect(),
+            session_name: session_name.clone().unwrap_or_default(),
             repository: workspace
                 .get("repository")
                 .cloned()
@@ -1498,8 +1502,8 @@ fn scan_copilot() -> ProviderScan {
             git_root: workspace.get("git_root").cloned().unwrap_or_default(),
             ..Default::default()
         };
-        summary.title = sanitize_session_title(workspace.get("summary"))
-            .unwrap_or_else(|| format!("{} {}", summary.repository, summary.branch));
+        summary.title =
+            session_title_from_workspace(&workspace, &summary.repository, &summary.branch);
 
         let session_schema_stats = summarize_events(
             provider,
@@ -1878,6 +1882,16 @@ fn sanitize_session_title(summary: Option<&String>) -> Option<String> {
     } else {
         Some(collapsed)
     }
+}
+
+fn session_title_from_workspace(
+    workspace: &BTreeMap<String, String>,
+    repository: &str,
+    branch: &str,
+) -> String {
+    sanitize_session_title(workspace.get("name"))
+        .or_else(|| sanitize_session_title(workspace.get("summary")))
+        .unwrap_or_else(|| format!("{} {}", repository, branch))
 }
 
 struct PendingToolStart {
@@ -3249,6 +3263,7 @@ mod tests {
             .session
             .relevant_files
             .contains(&"events.jsonl".to_string()));
+        assert!(schema.workspace.allowed_keys.contains(&"name".to_string()));
     }
 
     #[test]
@@ -3257,8 +3272,38 @@ mod tests {
         assert_eq!(published, BUNDLED_COPILOT_SCHEMA);
         assert_eq!(
             sha256_hex(published),
-            "2ac66ae1be46569be08978d1e7bc4605830bfd66edb2dd9694b2d495f4a872f2"
+            "b4fd6f3484bd4ee7b51ab9cdd34d73b3da34fc56f1157e50ee0f85deafddaa8b"
         );
+    }
+
+    #[test]
+    fn workspace_name_is_preferred_over_generated_summary() {
+        let schema = test_schema();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cmc_workspace_name_test_{}.yaml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            concat!(
+                "repository: DanWahlin/copilot-mission-control\n",
+                "branch: main\n",
+                "name: Custom Session Name\n",
+                "summary: Repo main fallback\n",
+            ),
+        )
+        .expect("write workspace");
+
+        let workspace = parse_workspace(&path, &schema);
+        let title = session_title_from_workspace(
+            &workspace,
+            "DanWahlin/copilot-mission-control",
+            "main",
+        );
+
+        assert_eq!(title, "Custom Session Name");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

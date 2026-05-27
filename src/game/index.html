@@ -98,7 +98,9 @@
        mission-only view. Sits left of the theme button. Uses inline SVG
        so the icon stays crisp in both themes and morphs between the
        "hide" (inward arrows) and "show" (outward arrows) states. */
-    #panels-btn {
+    #panels-btn,
+    #settings-btn,
+    #theme-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -107,11 +109,11 @@
       padding: 0;
     }
     #panels-btn svg {
-      width: 28px;
-      height: 28px;
+      width: 30px;
+      height: 30px;
       stroke: currentColor;
       fill: none;
-      stroke-width: 1.8;
+      stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
     }
@@ -119,20 +121,29 @@
       fill: currentColor;
       stroke: none;
     }
+    #settings-btn svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+      stroke: none;
+    }
+    #settings-btn:hover {
+      border-color: rgba(97, 214, 255, 0.55);
+      color: #bdefff;
+    }
+    body.theme-light #settings-btn:hover {
+      border-color: #7ea1d6;
+      color: #1d4ed8;
+    }
     /* Theme toggle button — the icon shows the *target* theme (moon in
        light mode → click to go dark; sun in dark mode → click to go
        light). The button bg mirrors that target so the button reads as
        a preview of where you'll end up. */
     #theme-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 36px;
-      height: 28px;
-      padding: 0;
       background: linear-gradient(180deg, #f6f8fd 0%, #e1e7f3 100%);
       border-color: rgba(15, 30, 70, 0.18);
       color: #1a2240;
+      font-size: 19px;
     }
     #theme-btn:hover {
       background: linear-gradient(180deg, #ffffff 0%, #eaeff8 100%);
@@ -203,7 +214,8 @@
        dialog uses native DOM controls for the high-density drill-down so
        scrolling, wrapping, selection, and keyboard close behave like a
        normal desktop UI. */
-    #inspector-overlay {
+    #inspector-overlay,
+    #settings-overlay {
       position: fixed;
       inset: 40px 0 0 0;
       z-index: 30;
@@ -215,6 +227,8 @@
       box-sizing: border-box;
     }
     #inspector-overlay.visible { display: flex; }
+    #settings-overlay { z-index: 34; }
+    #settings-overlay.visible { display: flex; }
     #schema-drift-overlay {
       position: fixed;
       inset: 40px 0 0 0;
@@ -266,6 +280,62 @@
       color: #1f2937;
       border-color: #cbd5e1;
       box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18);
+    }
+    #settings-dialog {
+      width: min(520px, calc(100vw - 56px));
+      display: grid;
+      gap: 18px;
+      background: #0c1430;
+      color: #e8ecff;
+      border: 2px solid #61d6ff;
+      border-radius: 16px;
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62);
+      padding: 20px;
+      box-sizing: border-box;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body.theme-light #settings-dialog {
+      background: #ffffff;
+      color: #1f2937;
+      border-color: #b9c6d8;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18);
+    }
+    .settings-form {
+      display: grid;
+      gap: 14px;
+    }
+    .settings-field {
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+      border: 1px solid rgba(97, 214, 255, 0.24);
+      border-radius: 12px;
+      background: rgba(97, 214, 255, 0.08);
+    }
+    body.theme-light .settings-field {
+      background: #f8fafc;
+      border-color: #d6dee9;
+    }
+    .settings-label {
+      color: #ffd54a;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    body.theme-light .settings-label { color: #1e3a5f; }
+    .settings-select {
+      width: 100%;
+      border: 1px solid #4566c7;
+      border-radius: 10px;
+      background: #121b3b;
+      color: #f5f7ff;
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 13px;
+    }
+    body.theme-light .settings-select {
+      background: #ffffff;
+      color: #1f2937;
+      border-color: #cbd5e1;
     }
     .inspector-header {
       display: grid;
@@ -558,11 +628,12 @@
     .dashboard-loading {
       position: fixed;
       inset: 40px 0 0 0;
-      z-index: 5;
+      z-index: 9;
       display: grid;
       place-items: center;
       padding: 24px;
       box-sizing: border-box;
+      pointer-events: none;
       background:
         radial-gradient(circle at 50% 45%, rgba(13, 97, 245, 0.24), transparent 36%),
         #05081a;
@@ -606,7 +677,7 @@
       color: #1e3a5f;
       background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(238, 242, 247, 0.96));
     }
-    body.dashboard-ready .dashboard-loading {
+    body.dashboard-splash-hidden .dashboard-loading {
       opacity: 0;
       visibility: hidden;
       pointer-events: none;
@@ -702,8 +773,101 @@
       box-shadow: 0 1px 2px rgba(30, 47, 75, 0.05);
     }
     .cmc-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dot, #60ff9a); }
-    .cmc-session-picker { margin-bottom: 8px; }
+    .cmc-session-picker {
+      position: relative;
+      margin-bottom: 8px;
+      z-index: 20;
+    }
     .cmc-session-picker .cmc-select { width: 100%; }
+    .cmc-session-trigger,
+    .cmc-session-option {
+      width: 100%;
+      border: 1px solid rgba(127, 151, 239, 0.48);
+      background: rgba(16, 24, 51, 0.92);
+      color: #e8ecff;
+      border-radius: 9px;
+      box-sizing: border-box;
+      font: inherit;
+      text-align: left;
+    }
+    .cmc-session-trigger {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 6px 8px;
+    }
+    .cmc-session-caret {
+      color: #93a4d8;
+      font-size: 10px;
+    }
+    .cmc-session-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      max-height: 210px;
+      overflow-y: auto;
+      padding: 5px;
+      border: 1px solid rgba(127, 151, 239, 0.5);
+      border-radius: 10px;
+      background: rgba(8, 14, 31, 0.98);
+      box-shadow: 0 16px 32px rgba(0, 0, 0, 0.36);
+    }
+    .cmc-session-picker.open .cmc-session-menu { display: grid; gap: 4px; }
+    .cmc-session-option {
+      display: block;
+      padding: 7px 8px;
+      cursor: pointer;
+    }
+    .cmc-session-option:hover,
+    .cmc-session-option:focus,
+    .cmc-session-option.selected {
+      border-color: rgba(96, 255, 154, 0.68);
+      background: rgba(31, 55, 82, 0.96);
+    }
+    .cmc-session-option-text {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+    .cmc-session-option-main,
+    .cmc-session-option-sub {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .cmc-session-option-main {
+      font-size: 11px;
+      color: #f5f7ff;
+    }
+    .cmc-session-option-sub {
+      font-size: 9px;
+      color: #93a4d8;
+    }
+    body.theme-light .cmc-session-trigger,
+    body.theme-light .cmc-session-option {
+      background: #ffffff;
+      color: #172033;
+      border-color: #b8c5d7;
+    }
+    body.theme-light .cmc-session-menu {
+      background: #ffffff;
+      border-color: #b8c5d7;
+      box-shadow: 0 16px 30px rgba(30, 47, 75, 0.18);
+    }
+    body.theme-light .cmc-session-option:hover,
+    body.theme-light .cmc-session-option:focus,
+    body.theme-light .cmc-session-option.selected {
+      border-color: #69c98e;
+      background: #f1fbf6;
+    }
+    body.theme-light .cmc-session-option-main { color: #172033; }
+    body.theme-light .cmc-session-option-sub,
+    body.theme-light .cmc-session-caret { color: #52627a; }
     .cmc-session-summary {
       display: grid;
       gap: 8px;
@@ -740,6 +904,16 @@
       color: #f5f7ff;
     }
     body.theme-light .cmc-session-title { color: #172033; }
+    .cmc-session-subtitle {
+      min-width: 0;
+      margin-top: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 10px;
+      color: #93a4d8;
+    }
+    body.theme-light .cmc-session-subtitle { color: #52627a; }
     .cmc-meta-pill {
       border: 1px solid rgba(127, 151, 239, 0.36);
       border-radius: 999px;
@@ -1038,6 +1212,11 @@
       <span id="model-chip" class="empty" title="Active model for the selected session"></span>
       <button id="reset-btn" type="button" title="Reset visible activity counters without deleting Copilot session files" aria-label="Reset visible activity counters">Reset</button>
       <button id="panels-btn" type="button" title="Hide side panels for focus mode" aria-label="Hide side panels for focus mode"></button>
+      <button id="settings-btn" type="button" title="Open settings" aria-label="Open settings">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M9.41 1.05c-.41-1.4-2.4-1.4-2.81 0l-.1.34a1.46 1.46 0 0 1-2.11.87l-.31-.17c-1.28-.7-2.69.71-1.99 1.99l.17.31a1.46 1.46 0 0 1-.87 2.11l-.34.1c-1.4.41-1.4 2.4 0 2.81l.34.1a1.46 1.46 0 0 1 .87 2.11l-.17.31c-.7 1.28.71 2.69 1.99 1.99l.31-.17a1.46 1.46 0 0 1 2.11.87l.1.34c.41 1.4 2.4 1.4 2.81 0l.1-.34a1.46 1.46 0 0 1 2.11-.87l.31.17c1.28.7 2.69-.71 1.99-1.99l-.17-.31a1.46 1.46 0 0 1 .87-2.11l.34-.1c1.4-.41 1.4-2.4 0-2.81l-.34-.1a1.46 1.46 0 0 1-.87-2.11l.17-.31c.7-1.28-.71-2.69-1.99-1.99l-.31.17a1.46 1.46 0 0 1-2.11-.87l-.1-.34ZM8 10.93a2.93 2.93 0 1 1 0-5.86 2.93 2.93 0 0 1 0 5.86Z"></path>
+        </svg>
+      </button>
       <button id="theme-btn" type="button" title="Toggle light/dark theme" aria-label="Switch to light theme">🌙</button>
     </span>
   </div>
@@ -1062,6 +1241,29 @@
     <section id="dom-quarter" class="cmc-panel" aria-live="polite"><div class="cmc-panel-title">Sector</div><div class="cmc-panel-body"></div></section>
     <section id="dom-replay" class="cmc-panel"></section>
   </div>
+
+  <section id="settings-overlay" aria-hidden="true">
+    <div id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
+      <div class="inspector-header">
+        <div>
+          <h2 id="settings-title" class="inspector-title">Settings</h2>
+        </div>
+        <button id="settings-close" class="inspector-close" type="button" aria-label="Close settings">×</button>
+      </div>
+      <div class="settings-form">
+        <label class="settings-field" for="app-theme-select">
+          <span class="settings-label">App theme</span>
+          <select id="app-theme-select" class="settings-select">
+            <option value="space">Space</option>
+            <option value="medieval">Medieval Kingdom</option>
+          </select>
+        </label>
+      </div>
+      <div class="cmc-actions">
+        <button id="settings-done" class="cmc-button accent" type="button">Done</button>
+      </div>
+    </div>
+  </section>
 
   <section id="inspector-overlay" aria-hidden="true">
     <div id="inspector-dialog" role="dialog" aria-modal="true" aria-labelledby="inspector-title" tabindex="-1">

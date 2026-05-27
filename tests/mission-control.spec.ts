@@ -47,6 +47,12 @@ async function installFixture(page: Page, fixture = MISSION_FIXTURE) {
   }, fixture);
 }
 
+async function selectSession(page: Page, id: string) {
+  await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
+  await page.locator(`#dom-session [data-session-id="${id}"]`).click();
+  await page.waitForTimeout(150);
+}
+
 /** Returns the canvas bounding box so tests can map scene-space rects
  * to viewport coordinates. The 32 px top bar offsets the canvas down,
  * so plain `page.mouse.click(rect.x, rect.y)` would miss the target. */
@@ -385,6 +391,40 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     expect(sectorText).not.toContain('Selected:');
   });
 
+  test('session dropdown shows custom session names as a secondary line', async ({ page }) => {
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      const beta = fixture.sessions.find((session: any) => session.id === 'beta4567');
+      beta.title = 'Fix Missing Input Tokens Display';
+      beta.session_name = 'Fix Missing Input Tokens Display';
+      window.__cmcOnAgentActivityChanged?.();
+    });
+
+    await expect(page.locator('#dom-session .cmc-session-title')).toHaveText('copilot-mission-control');
+    await expect(page.locator('#dom-session .cmc-session-subtitle')).toHaveText('Fix Missing Input Tokens Display');
+
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
+    const selectedOption = page.locator('#dom-session .cmc-session-option.selected');
+    await expect(selectedOption.locator('.cmc-session-option-main')).toContainText('copilot-mission-control');
+    await expect(selectedOption.locator('.cmc-session-option-sub')).toContainText('Fix Missing Input Tokens Display');
+    await expect(page.locator('#dom-session .cmc-session-option').filter({ hasText: 'Build Mission Control · alpha123' })).toHaveCount(1);
+  });
+
+  test('session dropdown stays open when live activity refreshes', async ({ page }) => {
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
+    await expect(page.locator('#dom-session .cmc-session-picker')).toHaveClass(/open/);
+
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      const beta = fixture.sessions.find((session: any) => session.id === 'beta4567');
+      beta.stale_seconds = Number(beta.stale_seconds || 0) + 1;
+      window.__cmcOnAgentActivityChanged?.();
+    });
+
+    await expect(page.locator('#dom-session .cmc-session-picker')).toHaveClass(/open/);
+    await expect(page.locator('#dom-session .cmc-session-menu')).toBeVisible();
+  });
+
   test('reset button clears visible counters and keeps old file data hidden after refresh', async ({ page }) => {
     await expect(page.locator('#reset-btn')).toBeVisible();
     await page.locator('#reset-btn').click();
@@ -716,7 +756,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
   });
 
   test('selected session stats reflect replay cursor activity', async ({ page }) => {
-    await page.locator('#dom-session [data-cmc-action="session-select"]').selectOption('alpha123');
+    await selectSession(page, 'alpha123');
     const track = page.locator('#dom-replay [data-cmc-action="replay-seek"]');
     const box = await track.boundingBox();
     expect(box).toBeTruthy();
@@ -752,8 +792,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
   test('clicking a running session selects it for inspection', async ({ page }) => {
     const before = await getMissionState(page);
     expect(before!.selectedSessionId).toBe('beta4567');
-    await page.locator('#dom-session [data-cmc-action="session-select"]').selectOption('alpha123');
-    await page.waitForTimeout(150);
+    await selectSession(page, 'alpha123');
 
     const after = await getMissionState(page);
     expect(after!.selectedSessionId).toBe('alpha123');
@@ -1056,8 +1095,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await expect(page.locator('#model-chip')).not.toHaveClass(/empty/);
 
     // Select alpha123 → chip should switch to its model.
-    await page.locator('#dom-session [data-cmc-action="session-select"]').selectOption('alpha123');
-    await page.waitForTimeout(150);
+    await selectSession(page, 'alpha123');
 
     await expect(page.locator('#model-chip')).toHaveText('gpt-5.5');
   });

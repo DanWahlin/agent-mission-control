@@ -8,7 +8,7 @@
     "relevant_files": ["events.jsonl", "workspace.yaml"]
   },
   "workspace": {
-    "allowed_keys": ["id", "repository", "branch", "summary", "git_root", "updated_at"]
+    "allowed_keys": ["id", "repository", "branch", "name", "summary", "git_root", "updated_at"]
   },
   "events": {
     "event_type_paths": ["type"],

@@ -24,6 +24,7 @@ interface CopilotEventSummary {
 interface CopilotSessionSummary {
   id: string;
   title: string;
+  session_name?: string;
   repository: string;
   branch: string;
   updated_at: string;
@@ -224,6 +225,7 @@ declare global {
     __missionControlAutoFixture?: boolean;
     __cmcOnAgentActivityChanged?: () => void;
     __cmcSetTheme?: (mode: 'dark' | 'light') => void;
+    __cmcSetAppTheme?: (theme: AppTheme) => void;
     __cmcUpdateModel?: (model: string) => void;
     __cmcSetPanelsHidden?: (hidden: boolean) => void;
     __cmcRenderDashboard?: (view: unknown) => void;
@@ -240,8 +242,13 @@ declare global {
 
 const SPACE_ATLAS_KEY = 'mc';
 const SPACE_ATLAS_ROOT = '../assets/space';
+const MEDIEVAL_ATLAS_KEY = 'medieval';
+const MEDIEVAL_ATLAS_ROOT = '../assets/medieval';
 
 type ThemeMode = 'dark' | 'light';
+type AppTheme = 'space' | 'medieval';
+type SectorTextureMap = Record<'forge' | 'library' | 'terminal' | 'signal' | 'hooks' | 'delegates' | 'skills' | 'court' | 'mcp', string>;
+
 interface MissionTheme {
   mode: ThemeMode;
   backdropFill: number;
@@ -280,32 +287,97 @@ function loadInitialThemeMode(): ThemeMode {
   return 'dark';
 }
 
+function normalizeAppTheme(value: string | null | undefined): AppTheme {
+  return value === 'medieval' ? 'medieval' : 'space';
+}
+
+function loadInitialAppTheme(): AppTheme {
+  try {
+    return normalizeAppTheme(window.localStorage?.getItem('cmc_app_theme'));
+  } catch {
+    return 'space';
+  }
+}
+
 setActiveTheme(loadInitialThemeMode());
-const QUARTER_TEXTURES: Record<string, string> = {
-  forge: 'dome_glass_blue',
-  library: 'outpost_disc',
-  terminal: 'console_wide_teal',
-  signal: 'telescope_blue',
-  hooks: 'screen_radar_blue',
-  delegates: 'ship_fighter_blue',
-  skills: 'satellite_dish_stand',
-  court: 'console_sphere',
-  mcp: 'satellite_8panel',
+
+interface MissionArtSet {
+  atlasKey: string;
+  centerTexture: string;
+  centerYOffset: number;
+  centerMaxW: number;
+  centerMaxH: number;
+  quarterTextures: SectorTextureMap;
+  quarterSpriteYOffsets: Partial<Record<MissionCategory, number>>;
+  quarterSpriteScale: Partial<Record<MissionCategory, number>>;
+}
+
+const SPACE_ART_SET: MissionArtSet = {
+  atlasKey: SPACE_ATLAS_KEY,
+  centerTexture: 'outpost_domed_island',
+  centerYOffset: -16,
+  centerMaxW: 220,
+  centerMaxH: 190,
+  quarterTextures: {
+    forge: 'dome_glass_blue',
+    library: 'outpost_disc',
+    terminal: 'console_wide_teal',
+    signal: 'telescope_blue',
+    hooks: 'screen_radar_blue',
+    delegates: 'ship_fighter_blue',
+    skills: 'satellite_dish_stand',
+    court: 'console_sphere',
+    mcp: 'satellite_8panel',
+  },
+  quarterSpriteYOffsets: {
+    forge: -8,
+    library: -8,
+  },
+  quarterSpriteScale: {
+    hooks: 0.82,
+  },
 };
 
-const QUARTER_SPRITE_Y_OFFSETS: Partial<Record<MissionCategory, number>> = {
-  forge: -8,
-  library: -8,
+const MEDIEVAL_ART_SET: MissionArtSet = {
+  atlasKey: MEDIEVAL_ATLAS_KEY,
+  centerTexture: 'large_castle_3',
+  centerYOffset: -5,
+  centerMaxW: 220,
+  centerMaxH: 212,
+  quarterTextures: {
+    forge: 'timber_house_large',
+    library: 'spellbook',
+    terminal: 'blue_mage',
+    signal: 'mountain_portal',
+    hooks: 'dagger_blue',
+    delegates: 'dark_knight',
+    skills: 'potion_purple_round',
+    court: 'magic_shield',
+    mcp: 'forest_portal',
+  },
+  quarterSpriteYOffsets: {
+    signal: -6,
+    delegates: -4,
+    skills: -6,
+  },
+  quarterSpriteScale: {
+    terminal: 1.05,
+    signal: 0.9,
+    hooks: 0.88,
+    delegates: 1.05,
+    skills: 0.84,
+    mcp: 0.9,
+  },
 };
 
-const QUARTER_SPRITE_SCALE: Partial<Record<MissionCategory, number>> = {
-  hooks: 0.82,
+const ART_SETS: Record<AppTheme, MissionArtSet> = {
+  space: SPACE_ART_SET,
+  medieval: MEDIEVAL_ART_SET,
 };
 
 const MISSION_SECTOR_COUNT = 9;
 const CENTER_RING_DOWN_NUDGE_PX = 12;
 const FOCUS_RING_UP_LIFT_PX = 16;
-const CENTER_TEXTURE = 'outpost_domed_island';
 
 /// Single source of truth for quarter hues. Both `buildQuarters` and
 /// `categoryColor` read from this map — previously they each had their
@@ -401,6 +473,7 @@ export class MissionControlScene extends Phaser.Scene {
   private moatGeometry: { x: number; y: number; radius: number; active: boolean } | null = null;
   private textObjects: any[] = [];
   private quarterCountTextObjects = new Map<string, any>();
+  private appTheme: AppTheme = loadInitialAppTheme();
   /// Focus mode: when true, the Summary + Selected Session + Activity
   /// Feed side panels are skipped and computeLayout() collapses their
   /// widths to 0 so the mission ring (castle + quarters) expands to
@@ -508,13 +581,16 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   preload() {
-    // Single atlas load. assets/space/atlas.png is a transparent-bg
-    // 1536x1024 sheet with 79 frames; atlas.json maps frame names →
-    // pixel rects. Phaser auto-detects the JSONArray format.
+    // Phaser auto-detects the JSONArray atlas format used by both theme sheets.
     this.load.atlas(
       SPACE_ATLAS_KEY,
       `${SPACE_ATLAS_ROOT}/atlas.png`,
       `${SPACE_ATLAS_ROOT}/atlas.json`,
+    );
+    this.load.atlas(
+      MEDIEVAL_ATLAS_KEY,
+      `${MEDIEVAL_ATLAS_ROOT}/spritesheet.png`,
+      `${MEDIEVAL_ATLAS_ROOT}/spritesheet.json`,
     );
   }
 
@@ -532,6 +608,7 @@ export class MissionControlScene extends Phaser.Scene {
 
     this.map = this.add.graphics().setDepth(1);
     this.textures.get(SPACE_ATLAS_KEY)?.setFilter?.(Phaser.Textures.FilterMode.LINEAR);
+    this.textures.get(MEDIEVAL_ATLAS_KEY)?.setFilter?.(Phaser.Textures.FilterMode.LINEAR);
     this.ensurePulseTextures();
     this.createPulseVisualPools();
     this.moatPulseRings = [
@@ -586,6 +663,13 @@ export class MissionControlScene extends Phaser.Scene {
       if (!this.scene?.isActive?.()) return;
       setActiveTheme(mode);
       this.redrawBackdrop();
+      this.renderActivity();
+    };
+    window.__cmcSetAppTheme = (nextTheme: AppTheme) => {
+      if (!this.scene?.isActive?.()) return;
+      const normalized = normalizeAppTheme(nextTheme);
+      if (normalized === this.appTheme) return;
+      this.appTheme = normalized;
       this.renderActivity();
     };
     // Focus-mode toggle. Hides side panels and re-lays-out the ring so
@@ -791,6 +875,9 @@ export class MissionControlScene extends Phaser.Scene {
     }
     if (window.__cmcSetTheme) {
       window.__cmcSetTheme = undefined;
+    }
+    if (window.__cmcSetAppTheme) {
+      window.__cmcSetAppTheme = undefined;
     }
     if (window.__cmcSetPanelsHidden) {
       window.__cmcSetPanelsHidden = undefined;
@@ -1485,16 +1572,17 @@ export class MissionControlScene extends Phaser.Scene {
       this.drawPixelPanel(quarter.x - size / 2, panelTop, size, frameH, quarter.color, focused, s);
       this.map.fillStyle(pedestalColor, haloAlpha);
       this.map.fillCircle(quarter.x, quarter.y - 8 * pedestalUnit, 50 * pedestalUnit);
-      const texture = QUARTER_TEXTURES[quarter.key] ?? CENTER_TEXTURE;
+      const artSet = this.activeArtSet();
+      const texture = artSet.quarterTextures[quarter.key as keyof SectorTextureMap] ?? artSet.centerTexture;
       // Constrain the sprite inside a square box (max W = max H = size * 0.72)
       // centered on the halo pedestal. v2 atlas frames are mostly wide/square
       // (aspect 0.9-1.5), so a 0.72 box fills the halo nicely without
       // overflowing the bracket frame — the halo now nearly fills the
       // selector width while leaving the sprite as the focal point.
-      const spriteBox = size * 0.72 * (QUARTER_SPRITE_SCALE[quarter.key] ?? 1);
-      const fit = this.fitSpriteToBox(texture, spriteBox, spriteBox);
-      const spriteY = haloCenterY + (QUARTER_SPRITE_Y_OFFSETS[quarter.key] ?? 0) * pedestalUnit;
-      const sprite = this.add.image(quarter.x, spriteY, SPACE_ATLAS_KEY, texture)
+      const spriteBox = size * 0.72 * (artSet.quarterSpriteScale[quarter.key] ?? 1);
+      const fit = this.fitSpriteToBox(artSet.atlasKey, texture, spriteBox, spriteBox);
+      const spriteY = haloCenterY + (artSet.quarterSpriteYOffsets[quarter.key] ?? 0) * pedestalUnit;
+      const sprite = this.add.image(quarter.x, spriteY, artSet.atlasKey, texture)
         .setOrigin(0.5, 0.5)
         .setDepth(7)
         .setAlpha(focused ? 1 : 0.9);
@@ -1612,10 +1700,14 @@ export class MissionControlScene extends Phaser.Scene {
       active: active > 0,
     };
 
-    // outpost_domed_island is centered in the moat now that the Active
-    // badge no longer occupies the lower center area.
-    const castleFit = this.fitSpriteToBox(CENTER_TEXTURE, 220 * castleScale, 190 * castleScale);
-    const castle = this.add.image(x, y - 16 * castleScale, SPACE_ATLAS_KEY, CENTER_TEXTURE)
+    const artSet = this.activeArtSet();
+    const castleFit = this.fitSpriteToBox(
+      artSet.atlasKey,
+      artSet.centerTexture,
+      artSet.centerMaxW * castleScale,
+      artSet.centerMaxH * castleScale,
+    );
+    const castle = this.add.image(x, y + artSet.centerYOffset * castleScale, artSet.atlasKey, artSet.centerTexture)
       .setOrigin(0.5, 0.5)
       .setDepth(6);
     castle.setDisplaySize(castleFit.w, castleFit.h);
@@ -1726,6 +1818,9 @@ export class MissionControlScene extends Phaser.Scene {
       id: session.id,
       index,
       title: session.title || session.id,
+      sessionName: session.session_name || '',
+      repository: session.repository || '',
+      branch: session.branch || '',
       status: session.status,
       isActive: session.is_active,
       selected: index === this.selectedSessionIndex,
@@ -1803,6 +1898,9 @@ export class MissionControlScene extends Phaser.Scene {
             id: session.id,
             index,
             title: session.title || session.id,
+            sessionName: session.session_name || '',
+            repository: session.repository || '',
+            branch: session.branch || '',
             shortId: session.id.length > 8 ? session.id.slice(0, 8) : session.id,
             status: session.status,
             isActive: session.is_active,
@@ -1883,15 +1981,19 @@ export class MissionControlScene extends Phaser.Scene {
     return obj;
   }
 
+  private activeArtSet() {
+    return ART_SETS[this.appTheme] ?? SPACE_ART_SET;
+  }
+
   /// Scale a frame uniformly so it fits inside (maxW, maxH) without
-  /// distortion. The space atlas mixes wide consoles (133x119), tall
-  /// chairs (85x136), and near-square dishes (127x128) — calling
+  /// distortion. The theme atlases mix wide props, tall characters, and
+  /// near-square devices/objects — calling
   /// setDisplaySize(w, h) with fixed numbers would squash them. Reads
   /// the native frame size from the texture cache; falls back to the
   /// box itself if the frame isn't loaded yet (shouldn't happen post-
   /// preload but keeps us safe).
-  private fitSpriteToBox(frameName: string, maxW: number, maxH: number) {
-    const tex = this.textures.get(SPACE_ATLAS_KEY);
+  private fitSpriteToBox(atlasKey: string, frameName: string, maxW: number, maxH: number) {
+    const tex = this.textures.get(atlasKey);
     const frame = tex ? tex.get(frameName) : null;
     const nativeW = frame?.width || maxW;
     const nativeH = frame?.height || maxH;
