@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to Copilot Mission Control.
+## [0.1.2] - 2026-05-27
+
+### 🚀 Features & Improvements
+
+- Update README for clarity and improved descriptions of features
+
+### ⚙️ CI/CD & Build
+
+- Make frontend build cross-platform
 ## [0.1.1] - 2026-05-26
 
 ### 🚀 Features & Improvements
@@ -52,6 +61,7 @@ All notable changes to Copilot Mission Control.
 - Tighten hero spacing — content now starts under the navbar
 - Swap medieval building sprites to space theme (atlas-based)
 - Tighten hero top spacing above the banner
+- Release v0.1.1
 
 ### 🎨 Styling
 
