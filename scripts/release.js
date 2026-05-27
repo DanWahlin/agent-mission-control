@@ -25,6 +25,7 @@ const update = (file, regex, replacement) => {
 update('package.json', /"version": ".*?"/, `"version": "${version}"`);
 update('src-tauri/tauri.conf.json', /"version": ".*?"/, `"version": "${version}"`);
 update('src-tauri/Cargo.toml', /^version = ".*?"/m, `version = "${version}"`);
+run('cd src-tauri && cargo check --quiet');
 
 // 2. Update changelog
 console.log('\n📋 Updating CHANGELOG.md...');

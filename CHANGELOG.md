@@ -6,6 +6,10 @@ All notable changes to Copilot Mission Control.
 ### 🔧 Refactoring
 
 - Clean up release asset uploads
+
+### ⚙️ CI/CD & Build
+
+- Release v0.1.4
 ## [0.1.3] - 2026-05-27
 
 ### ⚙️ CI/CD & Build

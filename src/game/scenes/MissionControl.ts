@@ -183,6 +183,7 @@ interface EventPulse {
   id: string;
   quarterKey: MissionCategory;
   color: number;
+  edgeColor: number;
   startX: number;
   startY: number;
   midX: number;
@@ -259,10 +260,10 @@ const DARK_THEME: MissionTheme = {
 
 const LIGHT_THEME: MissionTheme = {
   mode: 'light',
-  backdropFill: 0xf4f7fb,
+  backdropFill: 0xdfe7f2,
   panelBg: 0xffffff,
-  text: '#1f2937',
-  muted: '#64748b',
+  text: '#172033',
+  muted: '#52627a',
 };
 
 let theme: MissionTheme = DARK_THEME;
@@ -371,6 +372,7 @@ const PUSH_REFRESH_MIN_INTERVAL_MS = 500;
 const ACTIVE_ANIMATION_REFRESH_DELAY_MS = 250;
 const LIVE_RENDER_QUIET_MS = 1200;
 const PULSE_TEXTURE_KEY = 'cmc-pulse-quad';
+const PULSE_EDGE_TEXTURE_KEY = 'cmc-pulse-edge-quad';
 const ARRIVAL_FILL_TEXTURE_KEY = 'cmc-arrival-fill';
 const ARRIVAL_RING_TEXTURE_KEY = 'cmc-arrival-ring';
 const PULSE_TEXTURE_SIZE = 16;
@@ -387,9 +389,11 @@ export class MissionControlScene extends Phaser.Scene {
   private map!: any;
   private moatPulseRings: any[] = [];
   private pulseVisualPool: any[] = [];
+  private pulseEdgeVisualPool: any[] = [];
   private arrivalFillVisualPool: any[] = [];
   private arrivalRingVisualPool: any[] = [];
   private activePulseVisualCount = 0;
+  private activePulseEdgeVisualCount = 0;
   private activeArrivalVisualCount = 0;
   /// Cached castle geometry so update() can move the animated moat
   /// pulse Images every frame without recomputing layout. Populated by
@@ -847,6 +851,17 @@ export class MissionControlScene extends Phaser.Scene {
       g.generateTexture(PULSE_TEXTURE_KEY, PULSE_TEXTURE_SIZE, PULSE_TEXTURE_SIZE);
       g.destroy();
     }
+    if (!this.textures.exists(PULSE_EDGE_TEXTURE_KEY)) {
+      const g = this.add.graphics();
+      g.lineStyle(4, 0xffffff, 0.28);
+      g.strokeRect(2, 2, PULSE_TEXTURE_SIZE - 4, PULSE_TEXTURE_SIZE - 4);
+      g.lineStyle(2, 0xffffff, 1);
+      g.strokeRect(3, 3, PULSE_TEXTURE_SIZE - 6, PULSE_TEXTURE_SIZE - 6);
+      g.lineStyle(1, 0xffffff, 0.8);
+      g.strokeRect(5, 5, PULSE_TEXTURE_SIZE - 10, PULSE_TEXTURE_SIZE - 10);
+      g.generateTexture(PULSE_EDGE_TEXTURE_KEY, PULSE_TEXTURE_SIZE, PULSE_TEXTURE_SIZE);
+      g.destroy();
+    }
     if (!this.textures.exists(ARRIVAL_FILL_TEXTURE_KEY)) {
       const g = this.add.graphics();
       const c = ARRIVAL_TEXTURE_SIZE / 2;
@@ -867,37 +882,45 @@ export class MissionControlScene extends Phaser.Scene {
 
   private createPulseVisualPools() {
     this.pulseVisualPool = this.createImagePool(PULSE_TEXTURE_KEY, INITIAL_PULSE_VISUAL_POOL_SIZE);
+    this.pulseEdgeVisualPool = this.createImagePool(PULSE_EDGE_TEXTURE_KEY, INITIAL_PULSE_VISUAL_POOL_SIZE, Phaser.BlendModes.NORMAL);
     this.arrivalFillVisualPool = this.createImagePool(ARRIVAL_FILL_TEXTURE_KEY, INITIAL_ARRIVAL_VISUAL_POOL_SIZE);
     this.arrivalRingVisualPool = this.createImagePool(ARRIVAL_RING_TEXTURE_KEY, INITIAL_ARRIVAL_VISUAL_POOL_SIZE);
   }
 
-  private createImagePool(textureKey: string, size: number) {
-    return Array.from({ length: size }, () => this.createPooledImage(textureKey));
+  private createImagePool(textureKey: string, size: number, blendMode = Phaser.BlendModes.ADD) {
+    return Array.from({ length: size }, () => this.createPooledImage(textureKey, blendMode));
   }
 
-  private createPooledImage(textureKey: string) {
+  private createPooledImage(textureKey: string, blendMode = Phaser.BlendModes.ADD) {
     return this.add.image(0, 0, textureKey)
       .setOrigin(0.5)
       .setDepth(8)
-      .setBlendMode(Phaser.BlendModes.ADD)
+      .setBlendMode(blendMode)
       .setActive(false)
       .setVisible(false);
   }
 
   private destroyPulseVisualPools() {
     for (const img of this.pulseVisualPool) img.destroy();
+    for (const img of this.pulseEdgeVisualPool) img.destroy();
     for (const img of this.arrivalFillVisualPool) img.destroy();
     for (const img of this.arrivalRingVisualPool) img.destroy();
     this.pulseVisualPool = [];
+    this.pulseEdgeVisualPool = [];
     this.arrivalFillVisualPool = [];
     this.arrivalRingVisualPool = [];
     this.activePulseVisualCount = 0;
+    this.activePulseEdgeVisualCount = 0;
     this.activeArrivalVisualCount = 0;
   }
 
   private hidePulseVisuals() {
     for (let i = 0; i < this.activePulseVisualCount; i++) {
       const img = this.pulseVisualPool[i];
+      img.setActive(false).setVisible(false);
+    }
+    for (let i = 0; i < this.activePulseEdgeVisualCount; i++) {
+      const img = this.pulseEdgeVisualPool[i];
       img.setActive(false).setVisible(false);
     }
     for (let i = 0; i < this.activeArrivalVisualCount; i++) {
@@ -907,6 +930,7 @@ export class MissionControlScene extends Phaser.Scene {
       ring.setActive(false).setVisible(false);
     }
     this.activePulseVisualCount = 0;
+    this.activePulseEdgeVisualCount = 0;
     this.activeArrivalVisualCount = 0;
   }
 
@@ -915,6 +939,13 @@ export class MissionControlScene extends Phaser.Scene {
       this.pulseVisualPool.push(this.createPooledImage(PULSE_TEXTURE_KEY));
     }
     return this.pulseVisualPool[this.activePulseVisualCount++];
+  }
+
+  private nextPulseEdgeVisual() {
+    if (this.activePulseEdgeVisualCount >= this.pulseEdgeVisualPool.length) {
+      this.pulseEdgeVisualPool.push(this.createPooledImage(PULSE_EDGE_TEXTURE_KEY, Phaser.BlendModes.NORMAL));
+    }
+    return this.pulseEdgeVisualPool[this.activePulseEdgeVisualCount++];
   }
 
   private nextArrivalVisualPair() {
@@ -1382,14 +1413,13 @@ export class MissionControlScene extends Phaser.Scene {
 
   private drawBackground() {
     if (theme.mode === 'light') {
-      // Subtle light parallax: a near-white wash with very faint bands so
-      // the dashboard panels still feel layered without darkening the
-      // backdrop.
-      this.map.fillStyle(0xf3f6fc, 0.6);
+      // Light mode uses a cool slate surface instead of a near-white wash
+      // so the mission map reads as a designed cockpit, not an empty page.
+      this.map.fillGradientStyle(0xf1f5fb, 0xf1f5fb, 0xd7e1ee, 0xdbe4ef, 1, 1, 1, 1);
       this.map.fillRect(0, 0, W, H);
       for (let i = 0; i < 22; i++) {
-        const alpha = 0.025 + i * 0.003;
-        this.map.fillStyle(i % 2 === 0 ? 0xc7d2ec : 0xd6deef, alpha);
+        const alpha = 0.04 + i * 0.0025;
+        this.map.fillStyle(i % 2 === 0 ? 0xb9c6d9 : 0xcbd6e5, alpha);
         this.map.fillRect(0, (H / 22) * i, W, H / 18);
       }
       return;
@@ -1501,18 +1531,23 @@ export class MissionControlScene extends Phaser.Scene {
     const ph = snap(h);
     const border = Math.max(2, Math.round((focused ? 4 : 2) * s));
     const notch = Math.max(10, Math.round(13 * s));
-    // In light mode we drop the panel fill + drop-shadow entirely so the
-    // building sprite reads on the mission backdrop and the quarter's
-    // colored corner-frame is the only chrome around it. Dark mode keeps
-    // the deep card so the sprites pop against the navy backdrop.
-    if (theme.mode !== 'light') {
+    // Dark mode keeps the deep card so the sprites pop against the navy
+    // backdrop. Light mode uses a frosted card with a subtle shadow so the
+    // sectors feel anchored without competing with the colored halos.
+    if (theme.mode === 'light') {
+      this.map.fillStyle(0x9aa8bd, 0.14);
+      this.map.fillRect(px + 6 * s, py + 7 * s, pw, ph);
+      this.map.fillStyle(0xffffff, 0.68);
+      this.map.fillRect(px + notch, py, pw - notch * 2, ph);
+      this.map.fillRect(px, py + notch, pw, ph - notch * 2);
+    } else {
       this.map.fillStyle(0x020713, 0.5);
       this.map.fillRect(px + 7 * s, py + 8 * s, pw, ph);
       this.map.fillStyle(theme.panelBg, 0.94);
       this.map.fillRect(px + notch, py, pw - notch * 2, ph);
       this.map.fillRect(px, py + notch, pw, ph - notch * 2);
     }
-    const bracketColor = color;
+    const bracketColor = theme.mode === 'light' ? darkenColor(color, 0.72) : color;
     const bracketAlpha = 1;
     this.map.fillStyle(bracketColor, bracketAlpha);
     this.map.fillRect(px + notch, py, pw - notch * 2, border);
@@ -2072,6 +2107,7 @@ export class MissionControlScene extends Phaser.Scene {
       id: `${source}:${eventKey(event)}:${performance.now()}`,
       quarterKey,
       color: pulseColor,
+      edgeColor: event.success ? quarter.color : 0xff8a8a,
       // Spawn from the castle center so every pulse — including those
       // bound for diagonal quarters (Guild Hall, Tome Hall, Signal
       // Tower, MCP) — visibly leaves the castle. Previously startY was
@@ -2100,8 +2136,8 @@ export class MissionControlScene extends Phaser.Scene {
       this.activeEventPulseCount = 0;
       return;
     }
-
     const s = sceneScale();
+    const light = theme.mode === 'light';
     const headSize = 8 * s;
     let activePulseWrite = 0;
 
@@ -2134,6 +2170,9 @@ export class MissionControlScene extends Phaser.Scene {
         }
         const trailT = (i + 1) / PULSE_TRAIL_SAMPLES;
         const sz = headSize * (1 - trailT * 0.65);
+        if (light) {
+          this.showPooledImage(this.nextPulseEdgeVisual(), tx, ty, sz * 1.45, pulse.edgeColor, 0.46 * (1 - trailT));
+        }
         this.showPooledImage(this.nextPulseVisual(), tx, ty, sz, pulse.color, 0.32 * (1 - trailT));
       }
 
@@ -2151,6 +2190,10 @@ export class MissionControlScene extends Phaser.Scene {
         const local = (pulse.progress - 0.55) / 0.45;
         headX = pulse.endX;
         headY = pulse.startY + (pulse.endY - pulse.startY) * local;
+      }
+      if (light) {
+        this.showPooledImage(this.nextPulseEdgeVisual(), headX, headY, headSize * 2.15, pulse.edgeColor, 0.24);
+        this.showPooledImage(this.nextPulseEdgeVisual(), headX, headY, headSize * 1.42, pulse.edgeColor, 0.86);
       }
       this.showPooledImage(this.nextPulseVisual(), headX, headY, headSize * 2, pulse.color, 0.22);
       this.showPooledImage(this.nextPulseVisual(), headX, headY, headSize, pulse.color, 0.95);
