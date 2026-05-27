@@ -6,9 +6,9 @@ Built with [Tauri 2](https://v2.tauri.app/), [Phaser 4](https://phaser.io/), and
 
 🔗 Website: [https://danwahlin.github.io/copilot-mission-control](https://danwahlin.github.io/copilot-mission-control)
 
-![Copilot Mission Control dashboard](https://raw.githubusercontent.com/DanWahlin/copilot-mission-control/main/docs/img/dashboard.gif)
+![Copilot Mission Control dashboard](docs/img/dashboard.gif)
 
-![Copilot Mission Control focus mode](https://raw.githubusercontent.com/DanWahlin/copilot-mission-control/main/docs/img/focus-mode.gif)
+![Copilot Mission Control focus mode](docs/img/focus-mode.gif)
 
 ## What it does
 
