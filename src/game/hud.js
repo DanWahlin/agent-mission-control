@@ -786,6 +786,15 @@
   var domQuarter = $('dom-quarter');
   var domReplay = $('dom-replay');
   var domLoading = $('dashboard-loading');
+  var gameRoot = $('game');
+  var dashboardOverlay = $('dashboard-overlay');
+  var historyScreen = $('history-screen');
+  var historyContent = $('history-content');
+  var historyLiveStamp = $('history-live-stamp');
+  var historyTokenSummary = $('history-token-summary');
+  var historySessionFilterSelect = $('history-session-filter');
+  var missionRouteBtn = $('mission-route-btn');
+  var historyRouteBtn = $('history-route-btn');
   var domLoadingImage = domLoading ? domLoading.querySelector('img') : null;
   var attentionOverlay = $('attention-overlay');
   var attentionDialog = $('attention-dialog');
@@ -802,6 +811,8 @@
   var attentionReturnFocus = null;
   var activeSchemaDriftReport = null;
   var lastSchemaDriftFingerprint = '';
+  var historySessionFilter = 'all';
+  var openHistoryFailureKeys = new Set();
   var DASHBOARD_SPLASH_MIN_MS = Number.isFinite(Number(window.__cmcSplashMinMs))
     ? Math.max(0, Number(window.__cmcSplashMinMs))
     : 2000;
@@ -815,12 +826,60 @@
     feed: '',
     quarter: '',
     replay: '',
+    history: '',
   };
+  var appRoute = routeFromHash();
 
   function nowMs() {
     return window.performance && typeof window.performance.now === 'function'
       ? window.performance.now()
       : Date.now();
+  }
+
+  function routeFromHash() {
+    return String(window.location.hash || '').toLowerCase() === '#history' ? 'history' : 'mission';
+  }
+
+  function syncRouteHash(route) {
+    var target = route === 'history' ? '#history' : '#mission';
+    if (window.location.hash === target) return;
+    if (window.history && typeof window.history.replaceState === 'function') {
+      window.history.replaceState(null, '', target);
+    } else {
+      window.location.hash = target;
+    }
+  }
+
+  function setRouteButtonState(button, active) {
+    if (!button) return;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+
+  function applyAppRoute(route, options) {
+    var next = route === 'history' ? 'history' : 'mission';
+    var previous = appRoute;
+    appRoute = next;
+    document.body.classList.toggle('history-route', appRoute === 'history');
+    setRouteButtonState(missionRouteBtn, appRoute === 'mission');
+    setRouteButtonState(historyRouteBtn, appRoute === 'history');
+    if (historyScreen) historyScreen.setAttribute('aria-hidden', appRoute === 'history' ? 'false' : 'true');
+    [gameRoot, dashboardOverlay, domLoading].forEach(function (el) {
+      if (el) el.setAttribute('aria-hidden', appRoute === 'history' ? 'true' : 'false');
+    });
+    if (!options || options.syncHash !== false) syncRouteHash(appRoute);
+    if (appRoute === 'history') {
+      renderHistory(lastDashboard, previous !== 'history');
+      if (options && options.focus && historyScreen && typeof historyScreen.focus === 'function') {
+        historyScreen.focus({ preventScroll: true });
+      }
+    }
+  }
+
+  function navigateAppRoute(route, focus) {
+    applyAppRoute(route, { syncHash: true, focus: focus !== false });
   }
 
   function hideDashboardSplash() {
@@ -1518,6 +1577,444 @@
     renderSchemaDriftDialog(report);
   }
 
+  function historyFingerprint(view) {
+    var history = view && view.history;
+    if (!history) return view ? 'unavailable' : 'loading';
+    return [
+      historySessionFilter,
+      history.generated_at_ms || 0,
+      history.event_count || 0,
+      history.tool_count || 0,
+      history.failure_count || 0,
+      (history.activity_24h || []).map(function (bucket) { return bucket.event_count + ':' + bucket.failure_count; }).join(','),
+      (history.activity_7d || []).map(function (bucket) { return bucket.event_count + ':' + bucket.failure_count; }).join(','),
+      (history.model_mix || []).map(function (metric) { return metric.name + ':' + metric.count; }).join(','),
+      (history.category_mix || []).map(function (metric) { return metric.name + ':' + metric.count; }).join(','),
+      (history.top_tools || []).map(function (metric) { return metric.name + ':' + metric.count; }).join(','),
+      (history.recent_sessions || []).map(function (session) { return session.id + ':' + session.event_count + ':' + session.error_count; }).join(','),
+      (history.recent_failures || []).map(function (failure) { return failure.session_id + ':' + failure.timestamp + ':' + failure.tool; }).join(','),
+      (history.session_scopes || []).map(function (scope) { return scope.session_id + ':' + (scope.event_count || 0) + ':' + (scope.tool_count || 0) + ':' + scope.failure_count + ':' + (scope.recent_failures || []).length; }).join(','),
+    ].join('|');
+  }
+
+  function historySessionScopes(history) {
+    return Array.isArray(history && history.session_scopes) ? history.session_scopes : [];
+  }
+
+  function selectedHistorySummary(history) {
+    if (!history || historySessionFilter === 'all') return history;
+    var scope = historySessionScopes(history).find(function (item) {
+      return item && item.session_id === historySessionFilter;
+    });
+    return scope || history;
+  }
+
+  function historySessionLabel(scope) {
+    var label = String(scope && scope.label || '').trim();
+    var id = shortSessionId(scope && scope.session_id);
+    return label ? label + ' · ' + id : id;
+  }
+
+  function historyFailureKey(failure) {
+    return [
+      failure && failure.session_id,
+      failure && failure.timestamp,
+      failure && failure.kind,
+      failure && failure.tool,
+      failure && failure.category,
+    ].map(function (value) { return String(value || ''); }).join('|');
+  }
+
+  function updateHistorySessionFilter(history) {
+    if (!historySessionFilterSelect) return;
+    var scopes = historySessionScopes(history);
+    var valid = historySessionFilter === 'all' || scopes.some(function (scope) { return scope.session_id === historySessionFilter; });
+    if (!valid) historySessionFilter = 'all';
+    var options = '<option value="all">All sessions</option>' + scopes.map(function (scope) {
+      var id = String(scope.session_id || '');
+      return '<option value="' + escapeHtml(id) + '"' + (id === historySessionFilter ? ' selected' : '') + '>' + escapeHtml(historySessionLabel(scope)) + '</option>';
+    }).join('');
+    if (historySessionFilterSelect.innerHTML !== options) {
+      historySessionFilterSelect.innerHTML = options;
+    }
+    historySessionFilterSelect.value = historySessionFilter;
+    historySessionFilterSelect.disabled = scopes.length === 0;
+  }
+
+  function historyHasData(history) {
+    if (!history) return false;
+    var bucketEvents = (history.activity_24h || []).concat(history.activity_7d || []).some(function (bucket) {
+      return Number(bucket.event_count || 0) > 0 || Number(bucket.failure_count || 0) > 0;
+    });
+    return bucketEvents
+      || Number(history.event_count || 0) > 0
+      || Number(history.tool_count || 0) > 0
+      || (history.model_mix || []).length > 0
+      || (history.category_mix || []).length > 0
+      || (history.top_tools || []).length > 0
+      || (history.recent_sessions || []).length > 0
+      || (history.recent_failures || []).length > 0;
+  }
+
+  function generatedAtLabel(history) {
+    var ms = Number(history && history.generated_at_ms || 0);
+    if (!Number.isFinite(ms) || ms <= 0) return 'Waiting for activity scan...';
+    var date = new Date(ms);
+    if (Number.isNaN(date.getTime())) return 'Waiting for activity scan...';
+    return 'Updated ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function historyAgeLabel(iso) {
+    var age = ageFromIso(iso);
+    return age ? age + ' ago' : 'unknown';
+  }
+
+  function shortSessionId(id) {
+    var text = String(id || '');
+    return text.length > 8 ? text.slice(0, 8) : text || 'unknown';
+  }
+
+  function cssToken(value) {
+    return String(value || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  }
+
+  function historyCategoryColor(category) {
+    return CATEGORY_COLORS[category] || CATEGORY_COLORS.activity || '#61d6ff';
+  }
+
+  function historyPaletteColor(index) {
+    return 'var(--history-palette-' + (Math.max(0, index) % 8) + ')';
+  }
+
+  function historyMetricTotal(history, field, fallback) {
+    var direct = Number(history && history[field]);
+    if (Number.isFinite(direct)) return direct;
+    if (field === 'event_count') {
+      var sessionTotal = (history.recent_sessions || []).reduce(function (sum, session) {
+        return sum + Number(session.event_count || 0);
+      }, 0);
+      if (sessionTotal > 0) return sessionTotal;
+    }
+    var fallbackTotal = Number(fallback);
+    if (Number.isFinite(fallbackTotal)) return fallbackTotal;
+    if (field === 'tool_count') {
+      return (history.top_tools || []).reduce(function (sum, tool) { return sum + Number(tool.count || 0); }, 0);
+    }
+    return 0;
+  }
+
+  function historyKpis(view, history, scoped) {
+    var activity = view && view.activity || {};
+    var sessions = history.recent_sessions || [];
+    var lastActivity = history.last_activity_at ? historyAgeLabel(history.last_activity_at) : 'none observed';
+    var bucketEvents = (history.activity_24h || []).reduce(function (sum, bucket) { return sum + Number(bucket.event_count || 0); }, 0);
+    var eventTotal = historyMetricTotal(history, 'event_count', scoped ? bucketEvents : activity.totalEvents);
+    var toolTotal = historyMetricTotal(history, 'tool_count', scoped ? undefined : activity.totalToolCalls);
+    var cards = [
+      ['Sessions scanned', scoped ? sessions.length : activity.scannedSessions, scoped ? 'selected session' : (activity.activeSessions || 0) + ' active'],
+      ['Sanitized events', eventTotal, 'observed scan data'],
+      ['Tool calls', toolTotal, 'privacy-safe names'],
+      ['Failures', history.failure_count, 'sanitized failure events'],
+      ['Last activity', lastActivity, sessions.length ? sessions.length + ' recent sessions' : 'no sessions yet'],
+    ];
+    return '<section class="history-kpis" aria-label="History summary metrics">'
+      + cards.map(function (card) {
+        return '<article class="history-kpi">'
+          + '<div class="history-kpi-label">' + escapeHtml(card[0]) + '</div>'
+          + '<div class="history-kpi-value">' + escapeHtml(typeof card[1] === 'number' ? exactNumber(card[1]) : card[1]) + '</div>'
+          + '<div class="history-kpi-note">' + escapeHtml(card[2]) + '</div>'
+          + '</article>';
+      }).join('')
+      + '</section>';
+  }
+
+  function tokenTotalsForHistory(view, history, scoped) {
+    if (scoped) {
+      var session = history && history.recent_sessions && history.recent_sessions[0];
+      return {
+        input: Number(session && session.input_tokens || 0),
+        output: Number(session && session.output_tokens || 0),
+      };
+    }
+    var activity = view && view.activity || {};
+    return {
+      input: Number(activity.totalInputTokens || 0),
+      output: Number(activity.totalOutputTokens || 0),
+    };
+  }
+
+  function renderHistoryTokenSummary(view, history, scoped) {
+    if (!historyTokenSummary) return;
+    var totals = tokenTotalsForHistory(view, history, scoped);
+    historyTokenSummary.innerHTML = '<div><div class="history-token-label">Input tokens</div><div class="history-token-value">' + escapeHtml(exactNumber(totals.input)) + '</div></div>'
+      + '<div><div class="history-token-label">Output tokens</div><div class="history-token-value">' + escapeHtml(exactNumber(totals.output)) + '</div></div>';
+  }
+
+  function updateHistoryChartReadout(target, event) {
+    if (!target || typeof target.closest !== 'function') return;
+    var point = target.closest('[data-history-readout]');
+    if (!point) return;
+    var card = point.closest('.history-card');
+    var readout = card && card.querySelector('.history-chart-readout');
+    var text = point.getAttribute('data-history-readout') || '';
+    if (!readout || !text) return;
+    readout.textContent = text;
+    readout.classList.add('visible');
+    var clientX = event && Number.isFinite(event.clientX) ? event.clientX : 0;
+    var clientY = event && Number.isFinite(event.clientY) ? event.clientY : 0;
+    if (!clientX || !clientY) {
+      var pointRect = point.getBoundingClientRect();
+      clientX = pointRect.left + pointRect.width / 2;
+      clientY = pointRect.top + pointRect.height / 2;
+    }
+    var cardRect = card.getBoundingClientRect();
+    var readoutRect = readout.getBoundingClientRect();
+    var x = Math.max(8, Math.min(cardRect.width - readoutRect.width - 24, clientX - cardRect.left));
+    var y = Math.max(44, Math.min(cardRect.height - readoutRect.height - 24, clientY - cardRect.top));
+    readout.style.setProperty('--readout-x', x + 'px');
+    readout.style.setProperty('--readout-y', y + 'px');
+  }
+
+  function hideHistoryChartReadout(target) {
+    if (!target || typeof target.closest !== 'function') return;
+    var card = target.closest('.history-card');
+    var readout = card && card.querySelector('.history-chart-readout');
+    if (readout) readout.classList.remove('visible');
+  }
+
+  function historyHourAxisLabels(count) {
+    var labels = new Map();
+    if (count <= 0) return labels;
+    [0, 4, 8, 12, 16, 20, 24].forEach(function (hour) {
+      var index = count === 24
+        ? (hour === 24 ? count - 1 : Math.min(hour, count - 1))
+        : Math.round((hour / 24) * (count - 1));
+      labels.set(index, String(hour).padStart(2, '0'));
+    });
+    return labels;
+  }
+
+  function historyHourReadoutLabel(index, count) {
+    if (count <= 1 || index === count - 1) return 'Hour 24';
+    var hour = count === 24 ? index : Math.round((index / Math.max(1, count - 1)) * 24);
+    return 'Hour ' + String(Math.max(0, Math.min(24, hour))).padStart(2, '0');
+  }
+
+  function renderHistoryChart(title, copy, buckets, idPrefix) {
+    var data = Array.isArray(buckets) ? buckets : [];
+    if (!data.length || !data.some(function (bucket) { return Number(bucket.event_count || 0) > 0 || Number(bucket.failure_count || 0) > 0; })) {
+      return '<article class="history-card" data-history-card="' + escapeHtml(idPrefix) + '">'
+        + '<div class="history-card-title"><span>' + escapeHtml(title) + '</span><span>events</span></div>'
+        + '<p class="history-card-copy">' + escapeHtml(copy) + '</p>'
+        + '<div class="history-empty">No observed events in this time window.</div>'
+        + '</article>';
+    }
+
+    var max = data.reduce(function (acc, bucket) {
+      return Math.max(acc, Number(bucket.event_count || 0), Number(bucket.failure_count || 0));
+    }, 1);
+    var width = 720;
+    var height = 180;
+    var left = 28;
+    var top = 14;
+    var bottom = 28;
+    var plotW = width - left - 8;
+    var plotH = height - top - bottom;
+    var gap = data.length > 12 ? 3 : 7;
+    var barW = Math.max(3, (plotW - gap * (data.length - 1)) / data.length);
+    var useRelativeHours = idPrefix === 'history-24h';
+    var hourAxisLabels = useRelativeHours ? historyHourAxisLabels(data.length) : null;
+    var bars = data.map(function (bucket, index) {
+      var total = Number(bucket.event_count || 0);
+      var failures = Number(bucket.failure_count || 0);
+      var x = left + index * (barW + gap);
+      var totalH = Math.max(total > 0 ? 2 : 0, (total / max) * plotH);
+      var failureH = Math.max(failures > 0 ? 2 : 0, (failures / max) * plotH);
+      var y = top + plotH - totalH;
+      var fy = top + plotH - failureH;
+      var bucketLabel = useRelativeHours ? historyHourReadoutLabel(index, data.length) : bucket.label;
+      var axisLabel = useRelativeHours ? hourAxisLabels.get(index) : bucket.label;
+      var readout = bucketLabel + ': ' + exactNumber(total) + ' events, ' + exactNumber(failures) + ' failures, ' + exactNumber(Number(bucket.active_sessions || 0)) + ' sessions';
+      var readoutAttr = ' data-history-readout="' + escapeHtml(readout) + '" tabindex="0" aria-label="' + escapeHtml(readout) + '"';
+      var label = axisLabel
+        ? '<text x="' + (x + barW / 2).toFixed(1) + '" y="' + (height - 8) + '" text-anchor="middle">' + escapeHtml(axisLabel) + '</text>'
+        : '';
+      var markerX = x + barW / 2;
+      return '<g>'
+        + '<rect class="activity-soft" x="' + x.toFixed(1) + '" y="' + top + '" width="' + barW.toFixed(1) + '" height="' + plotH + '" rx="3"' + readoutAttr + '></rect>'
+        + '<rect class="activity" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + totalH.toFixed(1) + '" rx="3"' + readoutAttr + '></rect>'
+        + (failures > 0 ? '<rect class="failure" x="' + x.toFixed(1) + '" y="' + fy.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + failureH.toFixed(1) + '" rx="3"' + readoutAttr + '></rect>' : '')
+        + '<line class="activity-marker" x1="' + markerX.toFixed(1) + '" y1="' + y.toFixed(1) + '" x2="' + markerX.toFixed(1) + '" y2="' + (top + plotH).toFixed(1) + '"' + readoutAttr + '></line>'
+        + (failures > 0 ? '<line class="failure-marker" x1="' + (x + 1).toFixed(1) + '" y1="' + fy.toFixed(1) + '" x2="' + (x + barW - 1).toFixed(1) + '" y2="' + fy.toFixed(1) + '"' + readoutAttr + '></line>' : '')
+        + label
+        + '</g>';
+    }).join('');
+    var summary = data.reduce(function (acc, bucket) {
+      acc.events += Number(bucket.event_count || 0);
+      acc.failures += Number(bucket.failure_count || 0);
+      return acc;
+    }, { events: 0, failures: 0 });
+
+    return '<article class="history-card" data-history-card="' + escapeHtml(idPrefix) + '">'
+      + '<div class="history-card-title"><span>' + escapeHtml(title) + '</span><span>events</span></div>'
+      + '<p class="history-card-copy">' + escapeHtml(copy) + '</p>'
+      + '<svg class="history-chart" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-labelledby="' + escapeHtml(idPrefix) + '-title ' + escapeHtml(idPrefix) + '-desc" preserveAspectRatio="none">'
+      + '<title id="' + escapeHtml(idPrefix) + '-title">' + escapeHtml(title) + '</title>'
+      + '<desc id="' + escapeHtml(idPrefix) + '-desc">' + escapeHtml(summary.events + ' events and ' + summary.failures + ' failures across observed buckets.') + '</desc>'
+      + '<line class="axis" x1="' + left + '" y1="' + (top + plotH) + '" x2="' + (width - 8) + '" y2="' + (top + plotH) + '"></line>'
+      + bars
+      + '</svg>'
+      + '<div class="history-legend"><span>Events</span><span class="failure">Failures</span></div>'
+      + '<div class="history-chart-readout" aria-live="polite">Hover a bar for exact values.</div>'
+      + '</article>';
+  }
+
+  function renderRankCard(title, copy, metrics, empty, options) {
+    var rows = Array.isArray(metrics) ? metrics : [];
+    var max = rows.reduce(function (acc, row) { return Math.max(acc, Number(row.count || 0)); }, 0);
+    var listClass = options && options.listClass ? ' ' + options.listClass : '';
+    var cardId = options && options.cardId ? options.cardId : cssToken(title);
+    var titleMeta = options && options.titleMeta ? options.titleMeta : 'count';
+    var body = rows.length && max > 0
+      ? '<div class="history-rank-list' + escapeHtml(listClass) + '">' + rows.map(function (metric, index) {
+          var name = metric.name || 'Unknown';
+          var color = options && options.categoryColors ? historyCategoryColor(name) : (options && options.paletteColors ? historyPaletteColor(index) : 'var(--history-activity)');
+          var label = options && options.categoryLabels ? categoryLabel(name) : name;
+          var pct = Number(metric.percent || 0);
+          var countLabel = exactNumber(metric.count || 0) + (pct > 0 ? ' · ' + pct.toFixed(1).replace(/\.0$/, '') + '%' : '');
+          return '<div class="history-rank-row" style="--bar-color:' + escapeHtml(color) + '">'
+            + '<div class="history-rank-meta"><span class="history-rank-name" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</span><span>' + escapeHtml(countLabel) + '</span></div>'
+            + '<div class="history-bar" aria-hidden="true"><div class="history-bar-fill" style="--bar:' + Math.max(2, Math.round((Number(metric.count || 0) / max) * 100)) + '%;--bar-color:' + escapeHtml(color) + '"></div></div>'
+            + '</div>';
+        }).join('') + '</div>'
+      : '<div class="history-empty">' + escapeHtml(empty) + '</div>';
+    return '<article class="history-card" data-history-card="' + escapeHtml(cardId) + '">'
+      + '<div class="history-card-title"><span>' + escapeHtml(title) + '</span><span>' + escapeHtml(titleMeta) + '</span></div>'
+      + '<p class="history-card-copy">' + escapeHtml(copy) + '</p>'
+      + body
+      + '</article>';
+  }
+
+  function renderHistorySessions(sessions) {
+    var rows = Array.isArray(sessions) ? sessions : [];
+    var body = rows.length
+      ? '<div class="history-session-list">' + rows.map(function (session) {
+          var title = session.title || session.session_name || session.repository || shortSessionId(session.id);
+          var subtitleParts = [
+            session.branch ? 'branch ' + session.branch : '',
+            session.last_model ? 'model ' + session.last_model : 'model unknown',
+            session.last_tool ? 'tool ' + session.last_tool : '',
+          ].filter(Boolean);
+          var statusClass = cssToken(session.status || (session.is_active ? 'working' : 'idle'));
+          return '<div class="history-session-row">'
+            + '<span class="history-dossier-id">' + escapeHtml(shortSessionId(session.id)) + '</span>'
+            + '<div><div class="history-row-title" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</div>'
+            + '<div class="history-row-sub">' + escapeHtml(shortSessionId(session.id) + ' · ' + subtitleParts.join(' · ')) + '</div></div>'
+            + '<span class="history-status ' + escapeHtml(statusClass) + '">' + escapeHtml(session.status || (session.is_active ? 'active' : 'idle')) + '</span>'
+            + '<div class="history-row-meta">' + escapeHtml(exactNumber(session.event_count || 0) + ' events · ' + exactNumber(session.error_count || 0) + ' failures') + '</div>'
+            + '<div class="history-row-meta">' + escapeHtml(historyAgeLabel(session.updated_at)) + '</div>'
+            + '</div>';
+        }).join('') + '</div>'
+      : '<div class="history-empty">No scanned sessions are available yet.</div>';
+    return '<article class="history-card" data-history-card="recent-sessions">'
+      + '<div class="history-card-title"><span>Recent sessions</span><span>status</span></div>'
+      + '<p class="history-card-copy">Latest privacy-safe session summaries across the scanned activity window.</p>'
+      + body
+      + '</article>';
+  }
+
+  function renderHistoryFailures(failures) {
+    var rows = Array.isArray(failures) ? failures : [];
+    var visibleKeys = new Set();
+    var body = rows.length
+      ? '<div class="history-failure-list">' + rows.map(function (failure, index) {
+          var category = failure.category || 'alert';
+          var tool = failure.tool || 'tool';
+          var kind = failure.kind || 'failure';
+          var sessionId = shortSessionId(failure.session_id);
+          var when = historyAgeLabel(failure.timestamp);
+          var key = historyFailureKey(failure);
+          visibleKeys.add(key);
+          return '<details class="history-failure-item" data-history-failure-key="' + escapeHtml(key) + '"' + (openHistoryFailureKeys.has(key) ? ' open' : '') + '>'
+            + '<summary class="history-failure-row">'
+            + '<span class="history-anomaly-code">A-' + escapeHtml(String(index + 1).padStart(2, '0')) + '</span>'
+            + '<div><div class="history-row-title">' + escapeHtml(categoryLabel(category) + ' · ' + tool) + '</div>'
+            + '<div class="history-row-sub">' + escapeHtml(sessionId + ' · ' + when) + '</div></div>'
+            + '<span class="history-failure-dot history-failure-toggle">Details</span>'
+            + '</summary>'
+            + '<div class="history-failure-details">'
+            + '<div class="history-failure-detail-grid">'
+            + '<div><div class="history-failure-detail-label">Kind</div><div class="history-failure-detail-value">' + escapeHtml(kind) + '</div></div>'
+            + '<div><div class="history-failure-detail-label">Category</div><div class="history-failure-detail-value">' + escapeHtml(categoryLabel(category)) + '</div></div>'
+            + '<div><div class="history-failure-detail-label">Tool / hook</div><div class="history-failure-detail-value">' + escapeHtml(tool) + '</div></div>'
+            + '<div><div class="history-failure-detail-label">Session</div><div class="history-failure-detail-value">' + escapeHtml(sessionId) + '</div></div>'
+            + '<div><div class="history-failure-detail-label">Observed</div><div class="history-failure-detail-value">' + escapeHtml(when) + '</div></div>'
+            + '<div><div class="history-failure-detail-label">Timestamp</div><div class="history-failure-detail-value">' + escapeHtml(failure.timestamp || 'unknown') + '</div></div>'
+            + '</div>'
+            + '<div>Details are limited to sanitized metadata. Raw error text, command output, tool arguments, file paths, and diffs are intentionally excluded.</div>'
+            + '</div>'
+            + '</details>';
+        }).join('') + '</div>'
+      : '<div class="history-empty">No sanitized failures are visible in the observed history window.</div>';
+    openHistoryFailureKeys.forEach(function (key) {
+      if (!visibleKeys.has(key)) openHistoryFailureKeys.delete(key);
+    });
+    return '<article class="history-card" data-history-card="failure-history">'
+      + '<div class="history-card-title"><span>Failure history</span><span>failures</span></div>'
+      + '<p class="history-card-copy">Failure rows intentionally exclude raw error details, command output, tool arguments, file paths, and diffs.</p>'
+      + body
+      + '</article>';
+  }
+
+  function renderHistory(view, force) {
+    if (!historyContent) return;
+    var fingerprint = historyFingerprint(view);
+    if (!force && fingerprint === liveFingerprints.history) return;
+    liveFingerprints.history = fingerprint;
+
+    if (!view) {
+      if (historyLiveStamp) historyLiveStamp.textContent = 'Waiting for activity scan...';
+      if (historyTokenSummary) historyTokenSummary.innerHTML = '';
+      historyContent.innerHTML = '<div class="history-empty">Loading scanned Copilot history...</div>';
+      return;
+    }
+
+    var history = view.history;
+    if (!history) {
+      if (historyLiveStamp) historyLiveStamp.textContent = 'History unavailable in this scan';
+      if (historyTokenSummary) historyTokenSummary.innerHTML = '';
+      historyContent.innerHTML = '<div class="history-empty">History data is not available from the current activity scan yet. Mission Control will update this route when the backend provides aggregate history.</div>';
+      updateHistorySessionFilter(null);
+      return;
+    }
+
+    updateHistorySessionFilter(history);
+    var scoped = historySessionFilter !== 'all';
+    history = selectedHistorySummary(history);
+    if (historyLiveStamp) historyLiveStamp.textContent = generatedAtLabel(history);
+    renderHistoryTokenSummary(view, history, scoped);
+    if (!historyHasData(history)) {
+      historyContent.innerHTML = historyKpis(view, history, scoped)
+        + '<div class="history-empty">No observed Copilot events are available yet. Start or continue a Copilot CLI session and this history view will populate from privacy-safe scan summaries.</div>';
+      return;
+    }
+
+    historyContent.innerHTML = historyKpis(view, history, scoped)
+      + '<section class="history-grid" aria-label="History analytics">'
+      + '<div class="history-column history-column-left">'
+      + renderHistoryChart('Activity, rolling 24 hours', 'Hourly observed events across the rolling 24-hour window, with red overlays for sanitized failure events.', history.activity_24h, 'history-24h')
+      + renderHistoryChart('Activity, last 7 days', 'Daily observed events across the privacy-safe scanner window.', history.activity_7d, 'history-7d')
+      + renderRankCard('Top tools', 'Most-used allowlisted tool names, capped by the backend.', history.top_tools, 'No tool usage is visible yet.', { paletteColors: true })
+      + '</div>'
+      + '<div class="history-column history-column-right">'
+      + renderRankCard('Models used', 'Turn-level models are counted when available; sessions fall back to the last observed model, including Unknown.', history.model_mix, 'No model-bearing activity is visible yet.', { paletteColors: true })
+      + renderRankCard('Event mix', 'Distribution by Mission Control category across observed events.', history.category_mix, 'No categorized events are visible yet.', { categoryColors: true, categoryLabels: true })
+      + renderHistorySessions(history.recent_sessions)
+      + renderHistoryFailures(history.recent_failures)
+      + '</div>'
+      + '</section>';
+  }
+
   window.__cmcRenderDashboard = function (view) {
     lastDashboard = view;
     document.body.classList.add('dashboard-ready');
@@ -1552,6 +2049,7 @@
     renderQuarter(view);
     renderReplay(view);
     updateLiveFingerprints(view);
+    if (appRoute === 'history') renderHistory(view);
     if (attentionOverlay && attentionOverlay.classList.contains('visible')) renderAttentionDialog(view.attention);
     maybeShowSchemaDrift(view);
   };
@@ -1580,6 +2078,7 @@
       renderReplay(view);
       liveFingerprints.replay = nextReplay;
     }
+    if (appRoute === 'history') renderHistory(view);
     if (attentionOverlay && attentionOverlay.classList.contains('visible')) renderAttentionDialog(view.attention);
   };
 
@@ -1663,6 +2162,55 @@
       });
     });
   }
+
+  if (missionRouteBtn) {
+    missionRouteBtn.addEventListener('click', function () {
+      navigateAppRoute('mission', true);
+    });
+  }
+  if (historyRouteBtn) {
+    historyRouteBtn.addEventListener('click', function () {
+      navigateAppRoute('history', true);
+    });
+  }
+  if (historySessionFilterSelect) {
+    historySessionFilterSelect.addEventListener('change', function () {
+      historySessionFilter = historySessionFilterSelect.value || 'all';
+      renderHistory(lastDashboard, true);
+    });
+  }
+  if (historyContent) {
+    historyContent.addEventListener('pointerover', function (event) {
+      updateHistoryChartReadout(event.target, event);
+    });
+    historyContent.addEventListener('pointermove', function (event) {
+      updateHistoryChartReadout(event.target, event);
+    });
+    historyContent.addEventListener('mouseover', function (event) {
+      updateHistoryChartReadout(event.target, event);
+    });
+    historyContent.addEventListener('mousemove', function (event) {
+      updateHistoryChartReadout(event.target, event);
+    });
+    historyContent.addEventListener('focusin', function (event) {
+      updateHistoryChartReadout(event.target, event);
+    });
+    historyContent.addEventListener('focusout', function (event) {
+      hideHistoryChartReadout(event.target);
+    });
+    historyContent.addEventListener('toggle', function (event) {
+      var target = event.target;
+      if (!target || !target.matches || !target.matches('.history-failure-item')) return;
+      var key = target.getAttribute('data-history-failure-key');
+      if (!key) return;
+      if (target.open) openHistoryFailureKeys.add(key);
+      else openHistoryFailureKeys.delete(key);
+    }, true);
+  }
+  window.addEventListener('hashchange', function () {
+    applyAppRoute(routeFromHash(), { syncHash: false, focus: true });
+  });
+  applyAppRoute(appRoute, { syncHash: false, focus: false });
 
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') {

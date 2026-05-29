@@ -17,7 +17,7 @@ export { GAME_URL };
  * registry reports the `mission-control` scene running.
  */
 export async function waitForGame(page: Page) {
-  await page.waitForSelector('canvas', { timeout: 10_000 });
+  await page.waitForSelector('canvas', { state: 'attached', timeout: 10_000 });
   await page.waitForFunction(
     () => {
       const game = (window as any).__phaserGame;

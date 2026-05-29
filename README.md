@@ -25,10 +25,11 @@ Copilot Mission Control reads the local session state Copilot CLI already writes
 | `skill` and memory calls |
 | Ask/intent/plan/schedule calls and fallback alerts |
 | MCP server tool calls |
+| Global History analytics across all scanned sessions |
 
-The dashboard panels show the selected session, recent activity, selected sector, and replay controls along with an animated mission map. Open the session or sector inspector to filter recent calls by MCP, hooks, skills, sub-agents, or failures, then switch to the turn story to see what happened turn-by-turn.
+The dashboard panels show the selected session, recent activity, selected sector, and replay controls along with an animated mission map. Open the session or sector inspector to filter recent calls by MCP, hooks, skills, sub-agents, or failures, then switch to the turn story to see what happened turn-by-turn. The topbar History route summarizes observed activity across all scanned sessions with 24-hour and 7-day charts, model mix, event mix, top tools, recent sessions, and sanitized failure history.
 
-The normal activity bridge only sends sanitized summaries — prompts, raw tool arguments, command output, file paths, and diffs are excluded from the live payload. The inspector has an explicit local-only reveal action for retained raw tool details - everything runs 100% locally on your machine.
+The normal activity bridge only sends sanitized summaries — prompts, raw tool arguments, command output, file paths, and diffs are excluded from the live payload. History uses the same allowlisted scan summaries, and the inspector has an explicit local-only reveal action for retained raw tool details - everything runs 100% locally on your machine.
 
 ### Focus mode
 
@@ -63,7 +64,7 @@ The frontend mounts at `dist/game/index.html` and Playwright serves it via `pyth
 - **`src-tauri/src/lib.rs`** — Tauri commands (`get_agent_activity`, legacy `get_copilot_activity`, raw-detail reveal, editor/URL openers, app version, hide/quit) plus tray and single-instance wiring. Uses `tauri-plugin-window-state` to persist window position across launches.
 - **`src/game/scenes/MissionControl.ts`** — the single Phaser scene. Renders the mission map, nine sectors, pulse/arrival effects, ops status, responsive layout, and the space sprite atlas in `assets/space/`.
 - **`src/game/game.ts`** — minimal Phaser bootstrap. One scene, opaque background, resizes with the window.
-- **`src/game/index.html` + `hud.js`** — slim 32 px top bar, active-model chip, reset/panels/theme controls, dashboard panels, replay controls, inspector dialog, and schema-drift dialog.
+- **`src/game/index.html` + `hud.js`** — slim 32 px top bar, route controls, global History analytics, reset/panels/theme controls, dashboard panels, replay controls, inspector dialog, and schema-drift dialog.
 
 ## Assets
 

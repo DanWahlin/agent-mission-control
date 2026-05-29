@@ -129,6 +129,17 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
         replayH: layout.replayH,
       },
       schemaDrift: activity.schema_drift ?? [],
+      history: activity.history,
+      activity: {
+        available: activity.available,
+        scannedSessions: activity.scanned_sessions,
+        activeSessions: activity.active_sessions,
+        totalEvents: activity.total_events,
+        totalToolCalls: activity.total_tool_calls,
+        totalInputTokens: activity.total_input_tokens ?? 0,
+        totalOutputTokens: activity.total_output_tokens,
+        totalTurns: activity.total_turns ?? 0,
+      },
       providerAlerts: providerAlerts.slice(0, 3),
       attention: buildAttentionItems(activity),
       sessions: {

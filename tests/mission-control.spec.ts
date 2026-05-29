@@ -9,6 +9,7 @@ const MISSION_FIXTURE = {
   active_sessions: 2,
   total_events: 184,
   total_tool_calls: 47,
+  total_input_tokens: 3300,
   total_output_tokens: 8120,
   sessions: [
     { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 3, delegates_count: 1, skills_count: 2, court_count: 4, mcp_count: 1, hooks_count: 3, error_count: 0, input_tokens: 1600, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 12, token_checkpoints: [
@@ -36,6 +37,118 @@ const MISSION_FIXTURE = {
     { session_id: 'gamma890', timestamp: '2026-05-21T07:12:00Z', kind: 'tool.execution_start', tool: 'web_fetch', category: 'signal', success: true },
   ],
   alerts: ['1 recent tool failure needs review.'],
+  history: {
+    generated_at_ms: Date.parse('2026-05-21T07:20:00Z'),
+    last_activity_at: '2026-05-21T07:15:00Z',
+    event_count: 184,
+    tool_count: 47,
+    failure_count: 2,
+    activity_24h: [
+      { start: '2026-05-21T04:00:00Z', label: '4a', event_count: 12, failure_count: 0, active_sessions: 1 },
+      { start: '2026-05-21T05:00:00Z', label: '5a', event_count: 31, failure_count: 1, active_sessions: 2 },
+      { start: '2026-05-21T06:00:00Z', label: '6a', event_count: 54, failure_count: 0, active_sessions: 2 },
+      { start: '2026-05-21T07:00:00Z', label: '7a', event_count: 87, failure_count: 1, active_sessions: 3 },
+    ],
+    activity_7d: [
+      { start: '2026-05-18T00:00:00Z', label: 'Mon', event_count: 42, failure_count: 0, active_sessions: 1 },
+      { start: '2026-05-19T00:00:00Z', label: 'Tue', event_count: 61, failure_count: 1, active_sessions: 2 },
+      { start: '2026-05-20T00:00:00Z', label: 'Wed', event_count: 39, failure_count: 0, active_sessions: 2 },
+      { start: '2026-05-21T00:00:00Z', label: 'Thu', event_count: 184, failure_count: 2, active_sessions: 3 },
+    ],
+    model_mix: [
+      { name: 'gpt-5.5', count: 6, percent: 75 },
+      { name: 'unknown', count: 2, percent: 25 },
+    ],
+    category_mix: [
+      { name: 'library', count: 18, percent: 39.1 },
+      { name: 'forge', count: 10, percent: 21.7 },
+      { name: 'hooks', count: 5, percent: 10.9 },
+      { name: 'alert', count: 2, percent: 4.3 },
+    ],
+    top_tools: [
+      { name: 'view', count: 14, percent: 29.8 },
+      { name: 'apply_patch', count: 8, percent: 17 },
+      { name: 'bash', count: 7, percent: 14.9 },
+    ],
+    recent_sessions: [
+      { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:15:00Z', is_active: true, status: 'working', event_count: 82, error_count: 0, turn_count: 4, input_tokens: 1600, output_tokens: 4200, last_model: 'gpt-5.5', last_tool: 'apply_patch' },
+      { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:14:00Z', is_active: true, status: 'needs-attention', event_count: 64, error_count: 2, turn_count: 3, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', last_tool: 'bash' },
+      { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '2026-05-21T07:12:00Z', is_active: false, status: 'idle', event_count: 38, error_count: 0, turn_count: 1, input_tokens: 500, output_tokens: 1000, last_model: 'unknown', last_tool: 'web_fetch' },
+    ],
+    recent_failures: [
+      { session_id: 'beta4567', timestamp: '2026-05-21T07:14:00Z', kind: 'tool.execution_complete', tool: 'bash', category: 'alert' },
+      { session_id: 'beta4567', timestamp: '2026-05-21T07:13:30Z', kind: 'hook.end', tool: 'postToolUse', category: 'hooks' },
+    ],
+    session_scopes: [
+      {
+        session_id: 'alpha123',
+        label: 'Build Mission Control',
+        generated_at_ms: Date.parse('2026-05-21T07:20:00Z'),
+        last_activity_at: '2026-05-21T07:15:00Z',
+        event_count: 82,
+        tool_count: 23,
+        failure_count: 0,
+        activity_24h: [
+          { start: '2026-05-21T05:00:00Z', label: '5a', event_count: 12, failure_count: 0, active_sessions: 1 },
+          { start: '2026-05-21T06:00:00Z', label: '6a', event_count: 24, failure_count: 0, active_sessions: 1 },
+          { start: '2026-05-21T07:00:00Z', label: '7a', event_count: 46, failure_count: 0, active_sessions: 1 },
+        ],
+        activity_7d: [
+          { start: '2026-05-19T00:00:00Z', label: 'Tue', event_count: 16, failure_count: 0, active_sessions: 1 },
+          { start: '2026-05-20T00:00:00Z', label: 'Wed', event_count: 20, failure_count: 0, active_sessions: 1 },
+          { start: '2026-05-21T00:00:00Z', label: 'Thu', event_count: 46, failure_count: 0, active_sessions: 1 },
+        ],
+        model_mix: [{ name: 'gpt-5.5', count: 4, percent: 100 }],
+        category_mix: [
+          { name: 'library', count: 9, percent: 45 },
+          { name: 'forge', count: 7, percent: 35 },
+        ],
+        top_tools: [
+          { name: 'view', count: 9, percent: 56.3 },
+          { name: 'apply_patch', count: 7, percent: 43.8 },
+        ],
+        recent_sessions: [
+          { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:15:00Z', is_active: true, status: 'working', event_count: 82, error_count: 0, turn_count: 4, input_tokens: 1600, output_tokens: 4200, last_model: 'gpt-5.5', last_tool: 'apply_patch' },
+        ],
+        recent_failures: [],
+      },
+      {
+        session_id: 'beta4567',
+        label: 'Review Tests',
+        generated_at_ms: Date.parse('2026-05-21T07:20:00Z'),
+        last_activity_at: '2026-05-21T07:14:00Z',
+        event_count: 64,
+        tool_count: 17,
+        failure_count: 2,
+        activity_24h: [
+          { start: '2026-05-21T05:00:00Z', label: '5a', event_count: 19, failure_count: 1, active_sessions: 1 },
+          { start: '2026-05-21T06:00:00Z', label: '6a', event_count: 30, failure_count: 0, active_sessions: 1 },
+          { start: '2026-05-21T07:00:00Z', label: '7a', event_count: 41, failure_count: 1, active_sessions: 1 },
+        ],
+        activity_7d: [
+          { start: '2026-05-19T00:00:00Z', label: 'Tue', event_count: 45, failure_count: 1, active_sessions: 1 },
+          { start: '2026-05-21T00:00:00Z', label: 'Thu', event_count: 45, failure_count: 2, active_sessions: 1 },
+        ],
+        model_mix: [{ name: 'gpt-5.5', count: 2, percent: 100 }],
+        category_mix: [
+          { name: 'terminal', count: 8, percent: 57.1 },
+          { name: 'hooks', count: 4, percent: 28.6 },
+          { name: 'alert', count: 2, percent: 14.3 },
+        ],
+        top_tools: [
+          { name: 'bash', count: 7, percent: 63.6 },
+          { name: 'postToolUse', count: 4, percent: 36.4 },
+        ],
+        recent_sessions: [
+          { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:14:00Z', is_active: true, status: 'needs-attention', event_count: 64, error_count: 2, turn_count: 3, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', last_tool: 'bash' },
+        ],
+        recent_failures: [
+          { session_id: 'beta4567', timestamp: '2026-05-21T07:14:00Z', kind: 'tool.execution_complete', tool: 'bash', category: 'alert' },
+          { session_id: 'beta4567', timestamp: '2026-05-21T07:13:30Z', kind: 'hook.end', tool: 'postToolUse', category: 'hooks' },
+        ],
+      },
+    ],
+  },
   generated_at_ms: Date.now(),
 };
 
@@ -45,6 +158,50 @@ async function installFixture(page: Page, fixture = MISSION_FIXTURE) {
   await page.addInitScript((fixtureArg) => {
     (window as any).__missionControlFixture = fixtureArg;
   }, fixture);
+}
+
+async function getHistoryNumbers(page: Page) {
+  return page.evaluate(() => {
+    const text = (selector: string) => (document.querySelector(selector)?.textContent || '').replace(/\s+/g, ' ').trim();
+    const kpis = Object.fromEntries(Array.from(document.querySelectorAll('.history-kpi')).map((el) => {
+      const label = (el.querySelector('.history-kpi-label')?.textContent || '').trim();
+      return [label, {
+        value: (el.querySelector('.history-kpi-value')?.textContent || '').trim(),
+        note: (el.querySelector('.history-kpi-note')?.textContent || '').trim(),
+      }];
+    }));
+    const chartReadouts = (card: string) => Array.from(new Set(Array.from(
+      document.querySelectorAll(`[data-history-card="${card}"] rect.activity[data-history-readout]`),
+    ).map((el) => el.getAttribute('data-history-readout') || '')));
+    const rankRows = (card: string) => Array.from(document.querySelectorAll(`[data-history-card="${card}"] .history-rank-row`)).map((row) => {
+      const spans = Array.from(row.querySelectorAll('.history-rank-meta span')).map((el) => (el.textContent || '').trim());
+      return `${spans[0]}=${spans[1]}`;
+    });
+    const rowText = (selector: string) => Array.from(document.querySelectorAll(selector)).map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+    return {
+      kpis,
+      tokenValues: Array.from(document.querySelectorAll('#history-token-summary .history-token-value')).map((el) => (el.textContent || '').trim()),
+      hourChartDesc: text('[data-history-card="history-24h"] desc'),
+      weekChartDesc: text('[data-history-card="history-7d"] desc'),
+      hourReadouts: chartReadouts('history-24h'),
+      weekReadouts: chartReadouts('history-7d'),
+      topTools: rankRows('top-tools'),
+      models: rankRows('models-used'),
+      eventMix: rankRows('event-mix'),
+      sessionRows: rowText('.history-session-row'),
+      failureRows: rowText('.history-failure-item summary'),
+    };
+  });
+}
+
+async function expectedHistoryAge(page: Page, iso: string) {
+  return page.evaluate((timestamp) => {
+    const ts = Date.parse(timestamp);
+    const seconds = Math.max(0, (Date.now() - ts) / 1000);
+    if (seconds < 60) return `${Math.floor(seconds)}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    return `${Math.floor(seconds / 3600)}h ago`;
+  }, iso);
 }
 
 async function selectSession(page: Page, id: string) {
@@ -349,6 +506,354 @@ test.describe('Copilot Mission Control — Startup', () => {
     await expect(page.locator('#topbar-controls')).toBeVisible();
     await expect(page.locator('#theme-btn')).toBeVisible();
     await expect(page.locator('#theme-btn')).toHaveAttribute('aria-label', /Switch to light theme|Switch to dark theme/);
+  });
+});
+
+test.describe('Copilot Mission Control — History', () => {
+  test.beforeEach(async ({ page }) => {
+    await installFixture(page);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+  });
+
+  test('topbar route opens global History analytics and returns to Mission Control', async ({ page }) => {
+    await expect(page.locator('#history-screen')).not.toBeVisible();
+    await page.locator('#history-route-btn').click();
+
+    await expect(page.locator('body')).toHaveClass(/history-route/);
+    await expect(page).toHaveURL(/#history$/);
+    await expect(page.locator('#history-screen')).toBeVisible();
+    await expect(page.locator('#game')).not.toBeVisible();
+    await expect(page.locator('#dashboard-overlay')).not.toBeVisible();
+    await expect(page.locator('#history-route-btn')).toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('#history-title')).toHaveText('Mission Archive');
+    await expect(page.locator('#history-content')).toContainText('Sessions scanned');
+    await expect(page.locator('#history-content')).toContainText('184');
+    await expect(page.locator('.history-kpi').filter({ hasText: 'Sanitized events' })).toContainText('184');
+    await expect(page.locator('.history-kpi').filter({ hasText: 'Tool calls' })).toContainText('47');
+    await expect(page.locator('#history-token-summary')).toContainText('3,300');
+    await expect(page.locator('#history-token-summary')).toContainText('8,120');
+    await expect(page.locator('#history-session-filter')).toContainText('Build Mission Control · alpha123');
+    await expect(page.locator('#history-content')).toContainText('sanitized failure events');
+    await expect(page.locator('[data-history-card="history-24h"] svg.history-chart')).toBeVisible();
+    await expect(page.locator('[data-history-card="history-7d"] svg.history-chart')).toBeVisible();
+    await expect(page.locator('#history-content')).toContainText('Models used');
+    await expect(page.locator('#history-content')).toContainText('Event mix');
+    await expect(page.locator('#history-content')).toContainText('Top tools');
+    await expect(page.locator('#history-content')).toContainText('Failure history');
+    await expect(page.locator('#history-content')).toContainText('Hooks · postToolUse');
+    await expect(page.locator('#history-session-filter')).toHaveCSS('font-size', '14px');
+    const scrollbarStyles = await page.evaluate(() => {
+      const selectors = [
+        '#history-screen',
+        '.history-session-list',
+        '.history-failure-list',
+        '#inspector-list',
+        '#schema-drift-dialog',
+        '#attention-body',
+        '#dom-feed .cmc-panel-body',
+        '#dom-quarter .cmc-panel-body',
+      ];
+      return selectors.map((selector) => {
+        const el = document.querySelector(selector) as HTMLElement;
+        const style = window.getComputedStyle(el);
+        return {
+          selector,
+          gutter: style.scrollbarGutter,
+          color: style.scrollbarColor,
+        };
+      });
+    });
+    expect(scrollbarStyles.every(({ color }) => color !== 'auto')).toBe(true);
+    expect(new Set(scrollbarStyles.map(({ color }) => color)).size).toBe(1);
+    expect(scrollbarStyles.find(({ selector }) => selector === '#history-screen')?.gutter).toContain('stable');
+    const columnTops = await page.evaluate(() => {
+      const left = document.querySelector('.history-column-left .history-card');
+      const right = document.querySelector('.history-column-right .history-card');
+      return {
+        left: left?.getBoundingClientRect().top ?? 0,
+        right: right?.getBoundingClientRect().top ?? 0,
+      };
+    });
+    expect(Math.abs(columnTops.left - columnTops.right)).toBeLessThanOrEqual(1);
+
+    await page.locator('#mission-route-btn').click();
+    await expect(page.locator('body')).not.toHaveClass(/history-route/);
+    await expect(page).toHaveURL(/#mission$/);
+    await expect(page.locator('#mission-route-btn')).toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('#game')).toBeVisible();
+  });
+
+  test('History session filter scopes charts, lists, and token summary', async ({ page }) => {
+    await page.locator('#history-route-btn').click();
+    await page.locator('#history-session-filter').selectOption('beta4567');
+
+    await expect(page.locator('#history-token-summary')).toContainText('1,200');
+    await expect(page.locator('#history-token-summary')).toContainText('2,920');
+    await expect(page.locator('.history-kpi').filter({ hasText: 'Sanitized events' })).toContainText('64');
+    await expect(page.locator('.history-kpi').filter({ hasText: 'Tool calls' })).toContainText('17');
+    await expect(page.locator('#history-content')).toContainText('Review Tests');
+    await expect(page.locator('#history-content')).toContainText('64 events');
+    await expect(page.locator('#history-content')).toContainText('postToolUse');
+    await expect(page.locator('#history-content')).not.toContainText('Research UI');
+    await expect(page.locator('[data-history-card="history-24h"] svg.history-chart')).toBeVisible();
+  });
+
+  test('History all sessions uses aggregate history totals instead of capped recent activity totals', async ({ page }) => {
+    const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
+    fixture.total_events = 80;
+    fixture.total_tool_calls = 10;
+    await page.addInitScript((fixtureArg) => {
+      (window as any).__missionControlFixture = fixtureArg;
+    }, fixture);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await page.locator('#history-route-btn').click();
+
+    await expect(page.locator('.history-kpi').filter({ hasText: 'Sanitized events' })).toContainText('184');
+    await expect(page.locator('.history-kpi').filter({ hasText: 'Tool calls' })).toContainText('47');
+  });
+
+  test('History visible numbers match the underlying history payload', async ({ page }) => {
+    await page.locator('#history-route-btn').click();
+
+    const all = await getHistoryNumbers(page);
+    const allLastActivity = await expectedHistoryAge(page, MISSION_FIXTURE.history.last_activity_at);
+    expect(all.kpis).toMatchObject({
+      'Sessions scanned': { value: '3', note: '2 active' },
+      'Sanitized events': { value: '184', note: 'observed scan data' },
+      'Tool calls': { value: '47', note: 'privacy-safe names' },
+      'Failures': { value: '2', note: 'sanitized failure events' },
+      'Last activity': { value: allLastActivity, note: '3 recent sessions' },
+    });
+    expect(all.tokenValues).toEqual(['3,300', '8,120']);
+    expect(all.hourChartDesc).toBe('184 events and 2 failures across observed buckets.');
+    expect(all.weekChartDesc).toBe('326 events and 3 failures across observed buckets.');
+    expect(all.hourReadouts).toEqual([
+      'Hour 00: 12 events, 0 failures, 1 sessions',
+      'Hour 08: 31 events, 1 failures, 2 sessions',
+      'Hour 16: 54 events, 0 failures, 2 sessions',
+      'Hour 24: 87 events, 1 failures, 3 sessions',
+    ]);
+    expect(all.weekReadouts).toEqual([
+      'Mon: 42 events, 0 failures, 1 sessions',
+      'Tue: 61 events, 1 failures, 2 sessions',
+      'Wed: 39 events, 0 failures, 2 sessions',
+      'Thu: 184 events, 2 failures, 3 sessions',
+    ]);
+    expect(all.topTools).toEqual(['view=14 · 29.8%', 'apply_patch=8 · 17%', 'bash=7 · 14.9%']);
+    expect(all.models).toEqual(['gpt-5.5=6 · 75%', 'unknown=2 · 25%']);
+    expect(all.eventMix).toEqual(['Reads=18 · 39.1%', 'Edits=10 · 21.7%', 'Hooks=5 · 10.9%', 'Failures=2 · 4.3%']);
+    expect(all.sessionRows).toEqual([
+      expect.stringContaining('82 events · 0 failures'),
+      expect.stringContaining('64 events · 2 failures'),
+      expect.stringContaining('38 events · 0 failures'),
+    ]);
+    expect(all.failureRows).toEqual([
+      expect.stringContaining('Failures · bash'),
+      expect.stringContaining('Hooks · postToolUse'),
+    ]);
+
+    await page.locator('#history-session-filter').selectOption('beta4567');
+    const beta = await getHistoryNumbers(page);
+    const betaLastActivity = await expectedHistoryAge(page, MISSION_FIXTURE.history.session_scopes[1].last_activity_at);
+    expect(beta.kpis).toMatchObject({
+      'Sessions scanned': { value: '1', note: 'selected session' },
+      'Sanitized events': { value: '64', note: 'observed scan data' },
+      'Tool calls': { value: '17', note: 'privacy-safe names' },
+      'Failures': { value: '2', note: 'sanitized failure events' },
+      'Last activity': { value: betaLastActivity, note: '1 recent sessions' },
+    });
+    expect(beta.tokenValues).toEqual(['1,200', '2,920']);
+    expect(beta.hourChartDesc).toBe('90 events and 2 failures across observed buckets.');
+    expect(beta.weekChartDesc).toBe('90 events and 3 failures across observed buckets.');
+    expect(beta.hourReadouts).toEqual([
+      'Hour 00: 19 events, 1 failures, 1 sessions',
+      'Hour 12: 30 events, 0 failures, 1 sessions',
+      'Hour 24: 41 events, 1 failures, 1 sessions',
+    ]);
+    expect(beta.weekReadouts).toEqual([
+      'Tue: 45 events, 1 failures, 1 sessions',
+      'Thu: 45 events, 2 failures, 1 sessions',
+    ]);
+    expect(beta.topTools).toEqual(['bash=7 · 63.6%', 'postToolUse=4 · 36.4%']);
+    expect(beta.models).toEqual(['gpt-5.5=2 · 100%']);
+    expect(beta.eventMix).toEqual(['Commands=8 · 57.1%', 'Hooks=4 · 28.6%', 'Failures=2 · 14.3%']);
+    expect(beta.sessionRows).toEqual([expect.stringContaining('64 events · 2 failures')]);
+    expect(beta.failureRows).toEqual([
+      expect.stringContaining('Failures · bash'),
+      expect.stringContaining('Hooks · postToolUse'),
+    ]);
+  });
+
+  test('History list panels scroll and failure rows reveal sanitized details', async ({ page }) => {
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      const baseSession = fixture.history.recent_sessions[0];
+      fixture.history.recent_sessions = Array.from({ length: 14 }, (_, index) => ({
+        ...baseSession,
+        id: `session-${index}`,
+        title: `Session ${index + 1}`,
+        event_count: 40 + index,
+        updated_at: `2026-05-21T07:${String(index).padStart(2, '0')}:00Z`,
+      }));
+      fixture.history.recent_failures = Array.from({ length: 14 }, (_, index) => ({
+        session_id: `session-${index}`,
+        timestamp: `2026-05-21T07:${String(index).padStart(2, '0')}:30Z`,
+        kind: index % 2 === 0 ? 'hook.end' : 'tool.execution_complete',
+        tool: index % 2 === 0 ? 'postToolUse' : 'bash',
+        category: index % 2 === 0 ? 'hooks' : 'alert',
+      }));
+      window.__cmcOnAgentActivityChanged?.();
+    });
+
+    await page.locator('#history-route-btn').click();
+    const listSizing = await page.evaluate(() => {
+      const sessions = document.querySelector('.history-session-list') as HTMLElement;
+      const failures = document.querySelector('.history-failure-list') as HTMLElement;
+      return {
+        sessionsScrolls: sessions.scrollHeight > sessions.clientHeight,
+        failuresScrolls: failures.scrollHeight > failures.clientHeight,
+        sessionsMaxHeight: getComputedStyle(sessions).maxHeight,
+        failuresMaxHeight: getComputedStyle(failures).maxHeight,
+      };
+    });
+    expect(listSizing).toEqual({
+      sessionsScrolls: true,
+      failuresScrolls: true,
+      sessionsMaxHeight: '560px',
+      failuresMaxHeight: '560px',
+    });
+
+    const firstFailure = page.locator('.history-failure-item').first();
+    await expect(firstFailure).not.toHaveAttribute('open', '');
+    await firstFailure.locator('summary').click();
+    await expect(firstFailure).toHaveAttribute('open', '');
+    await expect(firstFailure).toContainText('Kind');
+    await expect(firstFailure).toContainText('hook.end');
+    await expect(firstFailure).toContainText('Raw error text');
+
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      fixture.history.generated_at_ms += 1000;
+      fixture.history.recent_failures = [
+        ...fixture.history.recent_failures,
+        {
+          session_id: 'session-extra',
+          timestamp: '2026-05-21T07:20:30Z',
+          kind: 'tool.execution_complete',
+          tool: 'rg',
+          category: 'alert',
+        },
+      ];
+      window.__cmcOnAgentActivityChanged?.();
+    });
+    await expect(page.locator('.history-failure-item')).toHaveCount(15);
+    await expect(firstFailure).toHaveAttribute('open', '');
+  });
+
+  test('hash route opens History directly on load', async ({ page }) => {
+    await page.goto(`${GAME_URL}#history`);
+    await waitForGame(page);
+
+    await expect(page.locator('body')).toHaveClass(/history-route/);
+    await expect(page.locator('#history-screen')).toBeVisible();
+    await expect(page.locator('#history-route-btn')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#history-content')).toContainText('Activity, rolling 24 hours');
+  });
+
+  test('History empty state stays useful when the backend has no observed events', async ({ page }) => {
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      fixture.history = {
+        generated_at_ms: Date.parse('2026-05-21T07:20:00Z'),
+        failure_count: 0,
+        activity_24h: [],
+        activity_7d: [],
+        model_mix: [],
+        category_mix: [],
+        top_tools: [],
+        recent_sessions: [],
+        recent_failures: [],
+      };
+      window.__cmcOnAgentActivityChanged?.();
+    });
+
+    await page.locator('#history-route-btn').click();
+    await expect(page.locator('#history-content')).toContainText('No observed Copilot events are available yet');
+    await expect(page.locator('#history-content')).toContainText('Sessions scanned');
+  });
+
+  test('History chart colors resolve in light theme', async ({ page }) => {
+    await page.locator('#history-route-btn').click();
+    await page.locator('#theme-btn').click();
+
+    await expect(page.locator('body')).toHaveClass(/theme-light/);
+    await page.locator('[data-history-card="history-24h"] rect.activity[data-history-readout]').nth(1).hover();
+    await expect(page.locator('[data-history-card="history-24h"] .history-chart-readout')).toContainText('Hour 08: 31 events, 1 failures, 2 sessions');
+    await expect(page.locator('[data-history-card="history-24h"] .history-chart-readout')).toHaveClass(/visible/);
+    const hourAxisLabels = await page.locator('[data-history-card="history-24h"] svg.history-chart text').allTextContents();
+    expect(hourAxisLabels).toEqual(['00', '08', '16', '24']);
+    expect(hourAxisLabels.join(' ')).not.toContain('Z');
+    const readout = await page.evaluate(() => {
+      const card = document.querySelector('[data-history-card="history-24h"]') as HTMLElement;
+      const label = card.querySelector('.history-chart-readout') as HTMLElement;
+      const cardRect = card.getBoundingClientRect();
+      const labelRect = label.getBoundingClientRect();
+      return {
+        visible: getComputedStyle(label).opacity,
+        withinCard: labelRect.left >= cardRect.left && labelRect.top >= cardRect.top && labelRect.right <= cardRect.right,
+      };
+    });
+    expect(readout).toEqual({ visible: '1', withinCard: true });
+    const colors = await page.evaluate(() => {
+      const screen = document.querySelector('#history-screen') as HTMLElement;
+      const activity = document.querySelector('[data-history-card="history-24h"] rect.activity') as SVGElement;
+      const failure = document.querySelector('[data-history-card="history-24h"] rect.failure') as SVGElement;
+      const activityFills = new Set(Array.from(document.querySelectorAll('[data-history-card="history-24h"] rect.activity')).map((el) => getComputedStyle(el).fill));
+      return {
+        activityVar: getComputedStyle(screen).getPropertyValue('--history-activity').trim(),
+        failureVar: getComputedStyle(screen).getPropertyValue('--history-failure').trim(),
+        activityFill: getComputedStyle(activity).fill,
+        failureFill: getComputedStyle(failure).fill,
+        activityFillCount: activityFills.size,
+      };
+    });
+    expect(colors).toEqual({
+      activityVar: '#0f63ce',
+      failureVar: '#dc2626',
+      activityFill: 'rgb(15, 99, 206)',
+      failureFill: 'rgb(220, 38, 38)',
+      activityFillCount: 1,
+    });
+  });
+
+  test('History remains usable on narrow viewports', async ({ page }) => {
+    await page.setViewportSize({ width: 700, height: 900 });
+    await page.locator('#history-route-btn').click();
+
+    await expect(page.locator('#history-screen')).toBeVisible();
+    await expect(page.locator('#history-session-filter')).toBeVisible();
+    const layout = await page.evaluate(() => {
+      const screen = document.querySelector('#history-screen') as HTMLElement;
+      const kpis = Array.from(document.querySelectorAll('.history-kpi')).map((el) => {
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        return { left: rect.left, right: rect.right };
+      });
+      return {
+        screenLeft: screen.getBoundingClientRect().left,
+        screenRight: screen.getBoundingClientRect().right,
+        scrollHeight: screen.scrollHeight,
+        clientHeight: screen.clientHeight,
+        kpis,
+      };
+    });
+    expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
+    for (const kpi of layout.kpis) {
+      expect(kpi.left).toBeGreaterThanOrEqual(layout.screenLeft);
+      expect(kpi.right).toBeLessThanOrEqual(layout.screenRight);
+    }
   });
 });
 

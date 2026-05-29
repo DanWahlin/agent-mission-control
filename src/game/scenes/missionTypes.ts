@@ -100,6 +100,70 @@ export interface SessionTurnSummary {
   duration_ms?: number;
 }
 
+export interface CopilotHistoryBucket {
+  start: string;
+  label: string;
+  event_count: number;
+  failure_count: number;
+  active_sessions: number;
+}
+
+export interface CopilotHistoryMetric {
+  name: string;
+  count: number;
+  percent?: number;
+  secondary_count?: number;
+  last_seen?: string;
+}
+
+export interface CopilotHistorySession {
+  id: string;
+  title: string;
+  session_name?: string;
+  repository: string;
+  branch: string;
+  updated_at: string;
+  is_active: boolean;
+  status: string;
+  event_count: number;
+  error_count: number;
+  turn_count?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  last_model?: string;
+  last_tool: string;
+}
+
+export interface CopilotHistoryFailure {
+  session_id: string;
+  timestamp: string;
+  kind: string;
+  tool: string;
+  category: MissionCategory | string;
+}
+
+export interface CopilotHistorySummary {
+  generated_at_ms: number;
+  last_activity_at?: string;
+  event_count?: number;
+  tool_count?: number;
+  failure_count: number;
+  activity_24h: CopilotHistoryBucket[];
+  activity_7d: CopilotHistoryBucket[];
+  model_mix: CopilotHistoryMetric[];
+  category_mix: CopilotHistoryMetric[];
+  top_tools: CopilotHistoryMetric[];
+  recent_sessions: CopilotHistorySession[];
+  recent_failures: CopilotHistoryFailure[];
+  session_scopes?: CopilotHistorySessionScope[];
+}
+
+export interface CopilotHistorySessionScope extends CopilotHistorySummary {
+  session_id: string;
+  label: string;
+  session_scopes?: never;
+}
+
 export interface CopilotActivity {
   available: boolean;
   source: string;
@@ -115,6 +179,7 @@ export interface CopilotActivity {
   recent_events: CopilotEventSummary[];
   alerts: string[];
   schema_drift?: SchemaDriftReport[];
+  history?: CopilotHistorySummary;
   generated_at_ms: number;
 }
 

@@ -12,6 +12,13 @@ test.describe('Copilot Mission Control app shell', () => {
     await expect(page.locator('#reset-btn')).toBeVisible();
     await expect(page.locator('#settings-btn')).toBeVisible();
     await expect(page.locator('#theme-btn')).toBeVisible();
+    await expect(page.locator('#mission-route-btn')).toHaveAttribute('aria-label', 'Show Home');
+    await expect(page.locator('#history-route-btn')).toHaveAttribute('aria-label', 'Show global History analytics');
+    await expect(page.locator('#reset-btn')).toHaveAttribute('aria-label', 'Reset visible activity counters');
+    await expect(page.locator('#mission-route-btn svg')).toBeVisible();
+    await expect(page.locator('#history-route-btn svg')).toBeVisible();
+    await expect(page.locator('#reset-btn svg')).toBeVisible();
+    await expect(page.locator('#topbar-controls')).not.toContainText(/Home|History|Reset/);
   });
 
   test('theme toggle persists to localStorage and flips body class', async ({ page }) => {

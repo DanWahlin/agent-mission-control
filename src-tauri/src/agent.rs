@@ -48,7 +48,107 @@ pub struct AgentActivity {
     pub alerts: Vec<String>,
     #[serde(default)]
     pub schema_drift: Vec<SchemaDriftReport>,
+    #[serde(default)]
+    pub history: AgentHistorySummary,
     pub generated_at_ms: u64,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct AgentHistorySummary {
+    pub generated_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
+    pub event_count: usize,
+    pub tool_count: usize,
+    pub failure_count: usize,
+    pub activity_24h: Vec<AgentHistoryBucket>,
+    pub activity_7d: Vec<AgentHistoryBucket>,
+    pub model_mix: Vec<AgentHistoryMetric>,
+    pub category_mix: Vec<AgentHistoryMetric>,
+    pub top_tools: Vec<AgentHistoryMetric>,
+    pub recent_sessions: Vec<AgentHistorySession>,
+    pub recent_failures: Vec<AgentHistoryFailure>,
+    #[serde(default)]
+    pub session_scopes: Vec<AgentHistorySessionScope>,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct AgentHistoryBucket {
+    pub start: String,
+    pub label: String,
+    pub event_count: usize,
+    pub failure_count: usize,
+    pub active_sessions: usize,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct AgentHistoryMetric {
+    pub name: String,
+    pub count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<String>,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct AgentHistorySession {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub session_name: String,
+    pub repository: String,
+    pub branch: String,
+    pub updated_at: String,
+    pub is_active: bool,
+    pub status: String,
+    pub event_count: usize,
+    pub error_count: usize,
+    #[serde(default)]
+    pub turn_count: usize,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub last_model: String,
+    pub last_tool: String,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct AgentHistoryFailure {
+    pub session_id: String,
+    pub timestamp: String,
+    pub kind: String,
+    pub tool: String,
+    pub category: String,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct AgentHistorySessionScope {
+    pub session_id: String,
+    pub label: String,
+    #[serde(flatten)]
+    pub summary: AgentHistoryScopeSummary,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct AgentHistoryScopeSummary {
+    pub generated_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
+    pub event_count: usize,
+    pub tool_count: usize,
+    pub failure_count: usize,
+    pub activity_24h: Vec<AgentHistoryBucket>,
+    pub activity_7d: Vec<AgentHistoryBucket>,
+    pub model_mix: Vec<AgentHistoryMetric>,
+    pub category_mix: Vec<AgentHistoryMetric>,
+    pub top_tools: Vec<AgentHistoryMetric>,
+    pub recent_sessions: Vec<AgentHistorySession>,
+    pub recent_failures: Vec<AgentHistoryFailure>,
 }
 
 #[derive(serde::Serialize, Default, Clone)]
@@ -315,6 +415,13 @@ const ACTIVITY_CACHE_MAX_AGE_MS: u64 = 2_000;
 /// the renderer's workMixHistory needs to accumulate per category.
 const MAX_RECENT_EVENTS: usize = 80;
 const MAX_SESSION_TOKEN_CHECKPOINTS: usize = 120;
+const HISTORY_HOUR_BUCKETS: usize = 24;
+const HISTORY_DAY_BUCKETS: usize = 7;
+const MAX_HISTORY_METRICS: usize = 10;
+const MAX_HISTORY_RECENT_SESSIONS: usize = 16;
+const MAX_HISTORY_RECENT_FAILURES: usize = 20;
+const HOUR_MS: u64 = 60 * 60 * 1000;
+const DAY_MS: u64 = 24 * HOUR_MS;
 /// Sessions whose `events.jsonl` has not been touched in this many
 /// seconds are considered stale "ghost" sessions and excluded from
 /// the scan. Without this filter the user's accumulated session-state
@@ -1240,9 +1347,6 @@ fn merge_scans(scans: Vec<ProviderScan>) -> AgentActivity {
             .cmp(&a.is_active)
             .then_with(|| a.stale_seconds.cmp(&b.stale_seconds))
     });
-    all_sessions.truncate(MAX_SESSIONS);
-    activity.sessions = all_sessions;
-
     let mut tools: Vec<AgentToolMetric> = tool_counts
         .into_iter()
         .map(|((name, category), count)| AgentToolMetric {
@@ -1298,6 +1402,13 @@ fn merge_scans(scans: Vec<ProviderScan>) -> AgentActivity {
     activity.tools = survivors;
 
     all_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    activity.history = build_history_summary(
+        &all_sessions,
+        &all_events,
+        &activity.tools,
+        activity.generated_at_ms,
+    );
+    activity.sessions = all_sessions.into_iter().take(MAX_SESSIONS).collect();
     all_events.truncate(MAX_RECENT_EVENTS);
     activity.recent_events = all_events;
 
@@ -1325,6 +1436,433 @@ fn merge_scans(scans: Vec<ProviderScan>) -> AgentActivity {
     }
 
     activity
+}
+
+struct HistoryBucketAccumulator {
+    bucket: AgentHistoryBucket,
+    session_ids: BTreeSet<String>,
+}
+
+fn build_history_summary(
+    sessions: &[AgentSessionSummary],
+    events: &[AgentEventSummary],
+    tools: &[AgentToolMetric],
+    generated_at_ms: u64,
+) -> AgentHistorySummary {
+    let global = build_history_scope_summary(sessions, events, tools, generated_at_ms);
+    let session_scopes = sessions
+        .iter()
+        .take(MAX_HISTORY_RECENT_SESSIONS)
+        .map(|session| {
+            let scoped_events: Vec<AgentEventSummary> = events
+                .iter()
+                .filter(|event| event.session_id == session.id)
+                .cloned()
+                .collect();
+            let scoped_tools = history_tools_for_session(session);
+            AgentHistorySessionScope {
+                session_id: session.id.clone(),
+                label: history_session_label(session),
+                summary: build_history_scope_summary(
+                    std::slice::from_ref(session),
+                    &scoped_events,
+                    &scoped_tools,
+                    generated_at_ms,
+                ),
+            }
+        })
+        .collect();
+
+    AgentHistorySummary {
+        generated_at_ms: global.generated_at_ms,
+        last_activity_at: global.last_activity_at,
+        event_count: global.event_count,
+        tool_count: global.tool_count,
+        failure_count: global.failure_count,
+        activity_24h: global.activity_24h,
+        activity_7d: global.activity_7d,
+        model_mix: global.model_mix,
+        category_mix: global.category_mix,
+        top_tools: global.top_tools,
+        recent_sessions: global.recent_sessions,
+        recent_failures: global.recent_failures,
+        session_scopes,
+    }
+}
+
+fn build_history_scope_summary(
+    sessions: &[AgentSessionSummary],
+    events: &[AgentEventSummary],
+    tools: &[AgentToolMetric],
+    generated_at_ms: u64,
+) -> AgentHistoryScopeSummary {
+    let mut sorted_events = events.to_vec();
+    sorted_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    let failure_events: Vec<&AgentEventSummary> = sorted_events
+        .iter()
+        .filter(|event| is_failure_event(event) && parse_iso_ms(&event.timestamp).is_some())
+        .collect();
+
+    AgentHistoryScopeSummary {
+        generated_at_ms,
+        last_activity_at: history_last_activity_at(sessions, &sorted_events),
+        event_count: sessions.iter().map(|session| session.event_count).sum(),
+        tool_count: sessions.iter().map(|session| session.tool_count).sum(),
+        failure_count: failure_events.len(),
+        activity_24h: build_history_buckets(
+            &sorted_events,
+            generated_at_ms,
+            HOUR_MS,
+            HISTORY_HOUR_BUCKETS,
+        ),
+        activity_7d: build_history_buckets(
+            &sorted_events,
+            generated_at_ms,
+            DAY_MS,
+            HISTORY_DAY_BUCKETS,
+        ),
+        model_mix: build_model_mix(sessions),
+        category_mix: build_category_mix(sessions, &sorted_events),
+        top_tools: tools
+            .iter()
+            .take(MAX_HISTORY_METRICS)
+            .map(|tool| AgentHistoryMetric {
+                name: tool.name.clone(),
+                count: tool.count,
+                ..Default::default()
+            })
+            .collect(),
+        recent_sessions: sessions
+            .iter()
+            .take(MAX_HISTORY_RECENT_SESSIONS)
+            .map(history_session_from_summary)
+            .collect(),
+        recent_failures: failure_events
+            .into_iter()
+            .take(MAX_HISTORY_RECENT_FAILURES)
+            .map(|event| AgentHistoryFailure {
+                session_id: event.session_id.clone(),
+                timestamp: event.timestamp.clone(),
+                kind: event.kind.clone(),
+                tool: event.tool.clone(),
+                category: event.category.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn history_tools_for_session(session: &AgentSessionSummary) -> Vec<AgentToolMetric> {
+    let mut counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for call in &session.recent_tool_calls {
+        let name = normalize_history_label(&call.tool, "tool");
+        let category = normalize_history_label(&call.category, "activity");
+        *counts.entry((name, category)).or_insert(0) += 1;
+    }
+
+    if counts.is_empty() && !session.last_tool.trim().is_empty() && session.tool_count > 0 {
+        counts.insert(
+            (
+                session.last_tool.trim().to_string(),
+                normalize_history_label(&session.last_event_category, "activity"),
+            ),
+            session.tool_count,
+        );
+    }
+
+    let mut tools: Vec<AgentToolMetric> = counts
+        .into_iter()
+        .map(|((name, category), count)| AgentToolMetric {
+            name,
+            category,
+            count,
+        })
+        .collect();
+    tools.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+    tools
+}
+
+fn build_history_buckets(
+    events: &[AgentEventSummary],
+    generated_at_ms: u64,
+    bucket_ms: u64,
+    bucket_count: usize,
+) -> Vec<AgentHistoryBucket> {
+    if bucket_count == 0 || bucket_ms == 0 {
+        return Vec::new();
+    }
+
+    let end_bucket_start = (generated_at_ms / bucket_ms) * bucket_ms;
+    let first_bucket_start = end_bucket_start.saturating_sub((bucket_count as u64 - 1) * bucket_ms);
+    let mut buckets: Vec<HistoryBucketAccumulator> = (0..bucket_count)
+        .map(|i| {
+            let start_ms = first_bucket_start + i as u64 * bucket_ms;
+            HistoryBucketAccumulator {
+                bucket: AgentHistoryBucket {
+                    start: format_bucket_start(start_ms, bucket_ms),
+                    label: format_bucket_label(start_ms, bucket_ms),
+                    ..Default::default()
+                },
+                session_ids: BTreeSet::new(),
+            }
+        })
+        .collect();
+
+    for event in events {
+        let Some(event_ms) = parse_iso_ms(&event.timestamp) else {
+            continue;
+        };
+        if event_ms < first_bucket_start {
+            continue;
+        }
+        let index = ((event_ms - first_bucket_start) / bucket_ms) as usize;
+        if index >= buckets.len() {
+            continue;
+        }
+        buckets[index].bucket.event_count += 1;
+        if is_failure_event(event) {
+            buckets[index].bucket.failure_count += 1;
+        }
+        if !event.session_id.is_empty() {
+            buckets[index].session_ids.insert(event.session_id.clone());
+        }
+    }
+
+    buckets
+        .into_iter()
+        .map(|mut acc| {
+            acc.bucket.active_sessions = acc.session_ids.len();
+            acc.bucket
+        })
+        .collect()
+}
+
+fn build_model_mix(sessions: &[AgentSessionSummary]) -> Vec<AgentHistoryMetric> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut last_seen: BTreeMap<String, String> = BTreeMap::new();
+
+    for session in sessions {
+        let mut counted_turn_model = false;
+        for turn in &session.recent_turns {
+            let model = normalize_history_label(&turn.model, "Unknown");
+            if model == "Unknown" {
+                continue;
+            }
+            counted_turn_model = true;
+            *counts.entry(model.clone()).or_insert(0) += 1;
+            let seen = if turn.ended_at.is_empty() {
+                turn.started_at.as_str()
+            } else {
+                turn.ended_at.as_str()
+            };
+            update_latest_label(&mut last_seen, &model, seen);
+        }
+
+        if counted_turn_model {
+            continue;
+        }
+
+        let model = normalize_history_label(&session.last_model, "Unknown");
+        *counts.entry(model.clone()).or_insert(0) += 1;
+        update_latest_label(&mut last_seen, &model, &session.last_event_timestamp);
+    }
+
+    metrics_from_counts(counts, Some(last_seen))
+}
+
+fn build_category_mix(
+    sessions: &[AgentSessionSummary],
+    events: &[AgentEventSummary],
+) -> Vec<AgentHistoryMetric> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut last_seen: BTreeMap<String, String> = BTreeMap::new();
+
+    if !events.is_empty() {
+        for event in events {
+            let category = normalize_history_label(&event.category, "activity");
+            *counts.entry(category.clone()).or_insert(0) += 1;
+            update_latest_label(&mut last_seen, &category, &event.timestamp);
+        }
+        return metrics_from_counts(counts, Some(last_seen));
+    }
+
+    for session in sessions {
+        add_category_count(&mut counts, "forge", session.write_count);
+        add_category_count(&mut counts, "library", session.read_count);
+        add_category_count(&mut counts, "terminal", session.command_count);
+        add_category_count(&mut counts, "signal", session.web_count);
+        add_category_count(&mut counts, "delegates", session.delegates_count);
+        add_category_count(&mut counts, "skills", session.skills_count);
+        add_category_count(&mut counts, "court", session.court_count);
+        add_category_count(&mut counts, "mcp", session.mcp_count);
+        add_category_count(&mut counts, "hooks", session.hooks_count);
+        add_category_count(&mut counts, "alert", session.error_count);
+    }
+
+    metrics_from_counts(counts, None)
+}
+
+fn add_category_count(counts: &mut BTreeMap<String, usize>, category: &str, count: usize) {
+    if count > 0 {
+        *counts.entry(category.to_string()).or_insert(0) += count;
+    }
+}
+
+fn metrics_from_counts(
+    counts: BTreeMap<String, usize>,
+    last_seen: Option<BTreeMap<String, String>>,
+) -> Vec<AgentHistoryMetric> {
+    let total: usize = counts.values().sum();
+    let last_seen = last_seen.unwrap_or_default();
+    let mut metrics: Vec<AgentHistoryMetric> = counts
+        .into_iter()
+        .map(|(name, count)| AgentHistoryMetric {
+            last_seen: last_seen.get(&name).cloned(),
+            name,
+            count,
+            percent: if total > 0 {
+                Some(((count as f64 / total as f64) * 1000.0).round() / 10.0)
+            } else {
+                None
+            },
+            ..Default::default()
+        })
+        .collect();
+    metrics.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+    metrics.truncate(MAX_HISTORY_METRICS);
+    metrics
+}
+
+fn history_last_activity_at(
+    sessions: &[AgentSessionSummary],
+    events: &[AgentEventSummary],
+) -> Option<String> {
+    let mut latest: Option<String> = None;
+    for timestamp in
+        events
+            .iter()
+            .map(|event| event.timestamp.as_str())
+            .chain(sessions.iter().flat_map(|session| {
+                [
+                    session.last_event_timestamp.as_str(),
+                    session.updated_at.as_str(),
+                ]
+            }))
+    {
+        update_latest_option(&mut latest, timestamp);
+    }
+    latest
+}
+
+fn history_session_from_summary(session: &AgentSessionSummary) -> AgentHistorySession {
+    AgentHistorySession {
+        id: session.id.clone(),
+        title: session.title.clone(),
+        session_name: session.session_name.clone(),
+        repository: session.repository.clone(),
+        branch: session.branch.clone(),
+        updated_at: session.updated_at.clone(),
+        is_active: session.is_active,
+        status: session.status.clone(),
+        event_count: session.event_count,
+        error_count: session.error_count,
+        turn_count: session.turn_count,
+        input_tokens: session.input_tokens,
+        output_tokens: session.output_tokens,
+        last_model: session.last_model.clone(),
+        last_tool: session.last_tool.clone(),
+    }
+}
+
+fn history_session_label(session: &AgentSessionSummary) -> String {
+    let title = session.title.trim();
+    let session_name = session.session_name.trim();
+    let repository = session.repository.trim();
+    if !title.is_empty() {
+        title.to_string()
+    } else if !session_name.is_empty() {
+        session_name.to_string()
+    } else if !repository.is_empty() {
+        repository.to_string()
+    } else {
+        short_history_session_id(&session.id)
+    }
+}
+
+fn short_history_session_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+fn is_failure_event(event: &AgentEventSummary) -> bool {
+    !event.success
+}
+
+fn normalize_history_label(value: &str, fallback: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn update_latest_label(latest: &mut BTreeMap<String, String>, key: &str, timestamp: &str) {
+    if timestamp.is_empty() {
+        return;
+    }
+    let entry = latest.entry(key.to_string()).or_default();
+    if entry.is_empty() || timestamp > entry.as_str() {
+        *entry = timestamp.to_string();
+    }
+}
+
+fn update_latest_option(latest: &mut Option<String>, timestamp: &str) {
+    if parse_iso_ms(timestamp).is_none() {
+        return;
+    }
+    if latest.as_deref().is_none_or(|current| timestamp > current) {
+        *latest = Some(timestamp.to_string());
+    }
+}
+
+fn format_bucket_start(start_ms: u64, bucket_ms: u64) -> String {
+    let (year, month, day, hour) = utc_parts_from_ms(start_ms);
+    if bucket_ms >= DAY_MS {
+        format!("{year:04}-{month:02}-{day:02}T00:00:00Z")
+    } else {
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:00:00Z")
+    }
+}
+
+fn format_bucket_label(start_ms: u64, bucket_ms: u64) -> String {
+    let (_year, month, day, hour) = utc_parts_from_ms(start_ms);
+    if bucket_ms >= DAY_MS {
+        format!("{month:02}-{day:02}")
+    } else {
+        format!("{hour:02}:00Z")
+    }
+}
+
+fn utc_parts_from_ms(ms: u64) -> (i64, i64, i64, i64) {
+    let total_seconds = (ms / 1000) as i64;
+    let days = total_seconds.div_euclid(86_400);
+    let seconds_of_day = total_seconds.rem_euclid(86_400);
+    let hour = seconds_of_day / 3600;
+    let (year, month, day) = civil_from_days(days);
+    (year, month, day, hour)
+}
+
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
 }
 
 // ── Copilot CLI provider ──────────────────────────────────────────────
@@ -3296,11 +3834,8 @@ mod tests {
         .expect("write workspace");
 
         let workspace = parse_workspace(&path, &schema);
-        let title = session_title_from_workspace(
-            &workspace,
-            "DanWahlin/copilot-mission-control",
-            "main",
-        );
+        let title =
+            session_title_from_workspace(&workspace, "DanWahlin/copilot-mission-control", "main");
 
         assert_eq!(title, "Custom Session Name");
         let _ = std::fs::remove_file(&path);
@@ -3578,6 +4113,235 @@ mod tests {
             .alerts
             .iter()
             .any(|alert| alert.contains("CLI executables")));
+        assert_eq!(activity.history.failure_count, 0);
+        assert!(activity
+            .history
+            .activity_24h
+            .iter()
+            .all(|b| b.event_count == 0));
+        assert!(activity.history.recent_failures.is_empty());
+    }
+
+    #[test]
+    fn history_hourly_buckets_count_sanitized_failures() {
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:34:00Z").expect("valid fixture time");
+        let events = vec![
+            history_event(
+                "alpha123",
+                "2026-05-28T11:15:00Z",
+                "tool.execution_start",
+                "bash",
+                "terminal",
+                true,
+            ),
+            history_event(
+                "alpha123",
+                "2026-05-28T12:05:00Z",
+                "tool.execution_complete",
+                "bash",
+                "terminal",
+                false,
+            ),
+            history_event(
+                "alpha123",
+                "2026-05-28T12:10:00Z",
+                "assistant.message",
+                "",
+                "complete",
+                true,
+            ),
+            history_event(
+                "beta4567",
+                "2026-05-28T12:20:00Z",
+                "hook.end",
+                "postToolUse",
+                "alert",
+                false,
+            ),
+            history_event(
+                "alpha123",
+                "not-a-date",
+                "tool.execution_complete",
+                "view",
+                "library",
+                false,
+            ),
+        ];
+
+        let history = build_history_summary(
+            &[history_session("alpha123")],
+            &events,
+            &[],
+            generated_at_ms,
+        );
+        let current_hour = history.activity_24h.last().expect("current hour bucket");
+
+        assert_eq!(history.activity_24h.len(), HISTORY_HOUR_BUCKETS);
+        assert_eq!(
+            history.activity_24h.first().expect("first hour bucket").start,
+            "2026-05-27T13:00:00Z"
+        );
+        assert_eq!(current_hour.start, "2026-05-28T12:00:00Z");
+        assert_eq!(current_hour.event_count, 3);
+        assert_eq!(current_hour.failure_count, 2);
+        assert_eq!(current_hour.active_sessions, 2);
+        assert_eq!(history.failure_count, 2);
+        assert_eq!(history.recent_failures.len(), 2);
+        assert_eq!(history.recent_failures[0].kind, "hook.end");
+        assert_eq!(history.recent_failures[0].tool, "postToolUse");
+        assert_eq!(history.recent_failures[1].kind, "tool.execution_complete");
+        assert_eq!(history.recent_failures[1].tool, "bash");
+    }
+
+    #[test]
+    fn history_daily_buckets_aggregate_observed_events() {
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:34:00Z").expect("valid fixture time");
+        let events = vec![
+            history_event(
+                "alpha123",
+                "2026-05-26T23:59:00Z",
+                "tool.execution_start",
+                "view",
+                "library",
+                true,
+            ),
+            history_event(
+                "beta4567",
+                "2026-05-28T00:01:00Z",
+                "tool.execution_complete",
+                "bash",
+                "terminal",
+                false,
+            ),
+        ];
+
+        let history = build_history_summary(&[], &events, &[], generated_at_ms);
+        let may_26 = history
+            .activity_7d
+            .iter()
+            .find(|bucket| bucket.start == "2026-05-26T00:00:00Z")
+            .expect("May 26 bucket");
+        let may_28 = history.activity_7d.last().expect("current day bucket");
+
+        assert_eq!(history.activity_7d.len(), HISTORY_DAY_BUCKETS);
+        assert_eq!(may_26.event_count, 1);
+        assert_eq!(may_26.failure_count, 0);
+        assert_eq!(may_28.start, "2026-05-28T00:00:00Z");
+        assert_eq!(may_28.event_count, 1);
+        assert_eq!(may_28.failure_count, 1);
+    }
+
+    #[test]
+    fn history_totals_use_session_summaries_not_capped_recent_events() {
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:34:00Z").expect("valid fixture time");
+        let mut alpha = history_session("alpha123");
+        alpha.event_count = 455;
+        alpha.tool_count = 114;
+        let mut beta = history_session("beta4567");
+        beta.event_count = 80;
+        beta.tool_count = 10;
+
+        let history = build_history_summary(&[alpha, beta], &[], &[], generated_at_ms);
+        let alpha_scope = history
+            .session_scopes
+            .iter()
+            .find(|scope| scope.session_id == "alpha123")
+            .expect("alpha scope");
+
+        assert_eq!(history.event_count, 535);
+        assert_eq!(history.tool_count, 124);
+        assert_eq!(alpha_scope.summary.event_count, 455);
+        assert_eq!(alpha_scope.summary.tool_count, 114);
+    }
+
+    #[test]
+    fn history_model_mix_uses_turn_models_before_session_fallback_and_unknown() {
+        let mut turn_session = history_session("alpha123");
+        turn_session.last_model = "fallback-model".to_string();
+        turn_session.recent_turns = vec![SessionTurnSummary {
+            id: "turn-1".to_string(),
+            started_at: "2026-05-28T12:00:00Z".to_string(),
+            ended_at: "2026-05-28T12:01:00Z".to_string(),
+            status: "complete".to_string(),
+            tool_count: 1,
+            tools: vec!["bash".to_string()],
+            failure_count: 0,
+            categories: vec!["terminal".to_string()],
+            model: "gpt-5.5".to_string(),
+            output_tokens: 100,
+            partial: false,
+            duration_ms: None,
+        }];
+        let mut fallback_session = history_session("beta4567");
+        fallback_session.last_model = "gpt-5.4".to_string();
+        let unknown_session = history_session("gamma890");
+
+        let metrics = build_model_mix(&[turn_session, fallback_session, unknown_session]);
+
+        assert_eq!(metric_count(&metrics, "gpt-5.5"), 1);
+        assert_eq!(metric_count(&metrics, "gpt-5.4"), 1);
+        assert_eq!(metric_count(&metrics, "Unknown"), 1);
+        assert_eq!(metric_count(&metrics, "fallback-model"), 0);
+    }
+
+    #[test]
+    fn history_category_mix_falls_back_to_session_counters_without_events() {
+        let mut session = history_session("alpha123");
+        session.write_count = 2;
+        session.read_count = 3;
+        session.command_count = 4;
+        session.error_count = 1;
+
+        let metrics = build_category_mix(&[session], &[]);
+
+        assert_eq!(metric_count(&metrics, "terminal"), 4);
+        assert_eq!(metric_count(&metrics, "library"), 3);
+        assert_eq!(metric_count(&metrics, "forge"), 2);
+        assert_eq!(metric_count(&metrics, "alert"), 1);
+    }
+
+    fn history_event(
+        session_id: &str,
+        timestamp: &str,
+        kind: &str,
+        tool: &str,
+        category: &str,
+        success: bool,
+    ) -> AgentEventSummary {
+        AgentEventSummary {
+            provider: "test".to_string(),
+            session_id: session_id.to_string(),
+            timestamp: timestamp.to_string(),
+            kind: kind.to_string(),
+            tool: tool.to_string(),
+            category: category.to_string(),
+            success,
+            input_tokens: None,
+            output_tokens: None,
+        }
+    }
+
+    fn history_session(id: &str) -> AgentSessionSummary {
+        AgentSessionSummary {
+            provider: "test".to_string(),
+            id: id.to_string(),
+            title: format!("Session {id}"),
+            repository: "copilot-mission-control".to_string(),
+            branch: "main".to_string(),
+            updated_at: "2026-05-28T12:00:00Z".to_string(),
+            status: "working".to_string(),
+            last_tool: "bash".to_string(),
+            last_event_timestamp: "2026-05-28T12:00:00Z".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn metric_count(metrics: &[AgentHistoryMetric], name: &str) -> usize {
+        metrics
+            .iter()
+            .find(|metric| metric.name == name)
+            .map(|metric| metric.count)
+            .unwrap_or(0)
     }
 
     /// Build a synthetic `ProviderScan` containing only the supplied
