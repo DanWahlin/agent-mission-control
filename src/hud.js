@@ -1756,6 +1756,46 @@
     return 'var(--history-palette-' + (Math.max(0, index) % 8) + ')';
   }
 
+  function historyBarPercent(value, max) {
+    var count = Number(value || 0);
+    var limit = Number(max || 0);
+    if (!Number.isFinite(count) || !Number.isFinite(limit) || limit <= 0 || count <= 0) return 0;
+    return Math.max(2, Math.min(100, Math.round((count / limit) * 100)));
+  }
+
+  function historyMetricBarPercent(metric, max) {
+    var percent = Number(metric && metric.percent);
+    if (Number.isFinite(percent) && percent >= 0) {
+      return Math.max(0, Math.min(100, percent));
+    }
+    return historyBarPercent(metric && metric.count, max);
+  }
+
+  function renderHistoryBar(percent, color) {
+    return '<div class="history-bar" aria-hidden="true">'
+      + '<div class="history-bar-fill" style="width:' + percent + '%;background:' + escapeHtml(color) + '"></div>'
+      + '</div>';
+  }
+
+  function renderHistoryVerticalBar(percent, color) {
+    var height = Math.max(0, Math.min(100, Number(percent || 0)));
+    var y = 100 - height;
+    return '<div class="history-bar" aria-hidden="true">'
+      + '<svg class="history-bar-svg history-bar-svg-vertical" viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false">'
+      + '<rect class="history-bar-svg-fill" x="0" y="' + y + '" width="100" height="' + height + '" rx="5" fill="' + escapeHtml(color) + '"></rect>'
+      + '</svg>'
+      + '</div>';
+  }
+
+  function renderHistoryDistributionBar(barPercent, failurePercent, color) {
+    var bar = Math.max(0, Math.min(100, Number(barPercent || 0)));
+    var failure = Math.max(0, Math.min(100, Number(failurePercent || 0)));
+    return '<div class="history-distribution-bar" aria-hidden="true">'
+      + '<div class="history-distribution-fill" style="width:' + bar + '%;background:' + escapeHtml(color) + '"></div>'
+      + '<div class="history-distribution-failure" style="width:' + failure + '%"></div>'
+      + '</div>';
+  }
+
   function historyMetricTotal(history, field, fallback) {
     var direct = Number(history && history[field]);
     if (Number.isFinite(direct)) return direct;
@@ -1956,9 +1996,9 @@
           var label = options && options.categoryLabels ? categoryLabel(name) : name;
           var pct = Number(metric.percent || 0);
           var countLabel = exactNumber(metric.count || 0) + (pct > 0 ? ' · ' + pct.toFixed(1).replace(/\.0$/, '') + '%' : '');
-          return '<div class="history-rank-row" style="--bar-color:' + escapeHtml(color) + '">'
+          return '<div class="history-rank-row">'
             + '<div class="history-rank-meta"><span class="history-rank-name" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</span><span>' + escapeHtml(countLabel) + '</span></div>'
-            + '<div class="history-bar" aria-hidden="true"><div class="history-bar-fill" style="--bar:' + Math.max(2, Math.round((Number(metric.count || 0) / max) * 100)) + '%;--bar-color:' + escapeHtml(color) + '"></div></div>'
+            + renderHistoryBar(historyMetricBarPercent(metric, max), color)
             + '</div>';
         }).join('') + '</div>'
       : '<div class="history-empty">' + escapeHtml(empty) + '</div>';
@@ -1981,9 +2021,9 @@
           var label = options && options.categoryLabels ? categoryLabel(name) : name;
           var pct = Number(metric.percent || 0);
           var countLabel = exactNumber(metric.count || 0) + (pct > 0 ? ' · ' + pct.toFixed(1).replace(/\.0$/, '') + '%' : '');
-          return '<div class="history-rank-row" style="--bar-color:' + escapeHtml(color) + '">'
+          return '<div class="history-rank-row">'
             + '<div class="history-rank-meta"><span class="history-rank-name" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</span><span>' + escapeHtml(countLabel) + '</span></div>'
-            + '<div class="history-bar" aria-hidden="true"><div class="history-bar-fill" style="--bar:' + Math.max(2, Math.round((Number(metric.count || 0) / max) * 100)) + '%;--bar-color:' + escapeHtml(color) + '"></div></div>'
+            + renderHistoryVerticalBar(historyMetricBarPercent(metric, max), color)
             + '</div>';
         }).join('') + '</div>'
       : '<div class="history-empty">' + escapeHtml(empty) + '</div>';
@@ -2023,10 +2063,11 @@
           var events = Number(session.event_count || 0);
           var failures = Number(session.error_count || 0);
           var failurePct = events > 0 ? Math.max(0, Math.min(100, (failures / events) * 100)) : 0;
-          var barPct = Math.max(2, Math.round((events / max) * 100));
-          return '<div class="history-distribution-row" style="--bar:' + barPct + '%;--failure-bar:' + failurePct.toFixed(1) + '%;--bar-color:' + escapeHtml(historyPaletteColor(index)) + '">'
+          var barPct = historyBarPercent(events, max);
+          var color = historyPaletteColor(index);
+          return '<div class="history-distribution-row">'
             + '<div class="history-rank-meta"><span class="history-rank-name" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span><span>' + escapeHtml(exactNumber(events) + ' events') + '</span></div>'
-            + '<div class="history-distribution-bar" aria-hidden="true"><div class="history-distribution-fill"></div><div class="history-distribution-failure"></div></div>'
+            + renderHistoryDistributionBar(barPct, failurePct.toFixed(1), color)
             + '<div class="history-row-meta">' + escapeHtml(exactNumber(failures) + ' failures · ' + (session.last_model || 'model unknown')) + '</div>'
             + '</div>';
         }).join('') + '</div>'

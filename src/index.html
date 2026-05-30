@@ -1353,17 +1353,9 @@
       overflow-wrap: anywhere;
     }
     .vertical-ranks .history-bar {
-      display: flex;
-      align-items: flex-end;
       height: 120px;
       width: 100%;
       border-radius: 9px 9px 4px 4px;
-    }
-    .vertical-ranks .history-bar-fill {
-      width: 100%;
-      height: var(--bar, 0%);
-      min-height: 2px;
-      border-radius: inherit;
     }
     .history-rank-list.sector-distribution {
       gap: 8px;
@@ -1411,10 +1403,13 @@
     }
     .history-bar-fill {
       height: 100%;
-      width: var(--bar, 0%);
-      border-radius: inherit;
-      background: var(--bar-color, var(--history-activity));
       min-width: 2px;
+      border-radius: 999px 0 0 999px;
+    }
+    .history-bar-svg {
+      display: block;
+      width: 100%;
+      height: 100%;
     }
     .history-session-distribution {
       display: grid;
@@ -1437,17 +1432,12 @@
       top: 0;
       bottom: 0;
       left: 0;
-      border-radius: inherit;
-    }
-    .history-distribution-fill {
-      width: var(--bar, 0%);
-      background: var(--bar-color, var(--history-activity));
       min-width: 2px;
+      border-radius: 999px 0 0 999px;
     }
     .history-distribution-failure {
-      width: var(--failure-bar, 0%);
-      background: var(--history-failure);
       min-width: 0;
+      background: var(--history-failure);
       mix-blend-mode: screen;
     }
     .history-session-row,
