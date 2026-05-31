@@ -715,7 +715,7 @@
       }
     },
     {
-      "filename": "planet_mars_hires",
+      "filename": "planet_red_hires",
       "frame": {
         "x": 221,
         "y": 837,
@@ -736,7 +736,7 @@
       }
     },
     {
-      "filename": "planet_nebula_hires",
+      "filename": "planet_purple_hires",
       "frame": {
         "x": 409,
         "y": 837,
@@ -757,7 +757,7 @@
       }
     },
     {
-      "filename": "planet_saturn_hires",
+      "filename": "planet_sun_hires",
       "frame": {
         "x": 966,
         "y": 809,
@@ -778,7 +778,7 @@
       }
     },
     {
-      "filename": "planet_sun",
+      "filename": "planet_ringed_hires",
       "frame": {
         "x": 579,
         "y": 850,
@@ -799,7 +799,7 @@
       }
     },
     {
-      "filename": "planet_blue_rings",
+      "filename": "planet_blue_rings_hires",
       "frame": {
         "x": 774,
         "y": 841,
@@ -820,7 +820,7 @@
       }
     },
     {
-      "filename": "planet_moon_hires",
+      "filename": "ship_cargo_hires",
       "frame": {
         "x": 484,
         "y": 1001,
@@ -841,7 +841,7 @@
       }
     },
     {
-      "filename": "ship_cruiser_large",
+      "filename": "moon_gray_hires",
       "frame": {
         "x": 38,
         "y": 1023,
@@ -862,7 +862,7 @@
       }
     },
     {
-      "filename": "satellite_panels_dish",
+      "filename": "ship_fighter_hires",
       "frame": {
         "x": 227,
         "y": 1054,
@@ -883,7 +883,7 @@
       }
     },
     {
-      "filename": "ship_fighter_sleek",
+      "filename": "satellite_panels_hires",
       "frame": {
         "x": 769,
         "y": 1027,
@@ -904,7 +904,7 @@
       }
     },
     {
-      "filename": "satellite_twin",
+      "filename": "satellite_dish_hires",
       "frame": {
         "x": 960,
         "y": 1022,
@@ -967,7 +967,7 @@
       }
     },
     {
-      "filename": "satellite_dish_stand",
+      "filename": "station_orbital_flat",
       "frame": {
         "x": 218,
         "y": 1200,
@@ -988,7 +988,7 @@
       }
     },
     {
-      "filename": "station_orbital_flat",
+      "filename": "dome_base_blue",
       "frame": {
         "x": 589,
         "y": 1251,
@@ -1030,7 +1030,7 @@
       }
     },
     {
-      "filename": "dome_glass_blue_alt",
+      "filename": "satellite_dish_stand",
       "frame": {
         "x": 984,
         "y": 1202,
@@ -1051,7 +1051,7 @@
       }
     },
     {
-      "filename": "screen_holo_planet",
+      "filename": "screen_solar_system",
       "frame": {
         "x": 28,
         "y": 1405,

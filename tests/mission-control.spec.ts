@@ -1191,6 +1191,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
   });
 
   test('reset button clears visible counters and keeps old file data hidden after refresh', async ({ page }) => {
+    await page.locator('#settings-btn').click();
     await expect(page.locator('#reset-btn')).toBeVisible();
     await page.locator('#reset-btn').click();
 
