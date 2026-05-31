@@ -9,8 +9,8 @@
  * `tests/mission-control.spec.ts`.
  *
  * Usage:
- *   node scripts/snap-layouts.js                  # default viewport set
- *   node scripts/snap-layouts.js 1440x900 800x600 # custom sizes
+ *   node scripts/snap-layouts.ts                  # default viewport set
+ *   node scripts/snap-layouts.ts 1440x900 800x600 # custom sizes
  *
  * Requires the http server on :4173 (run `npm run build:frontend`
  * first). The script starts and stops its own server.

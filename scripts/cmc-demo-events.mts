@@ -8,7 +8,7 @@
 //   1. Open Mission Control (cargo tauri dev, or the installed app)
 //   2. Start a screen recorder (macOS: Cmd+Shift+5 → record selection
 //      over the Mission Control window)
-//   3. node scripts/cmc-demo-events.mjs
+//   3. node scripts/cmc-demo-events.mts
 //      └─ optional flags:
 //           --duration <seconds>   total runtime (default: 25)
 //           --cleanup              delete the demo session at end

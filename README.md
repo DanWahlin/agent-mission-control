@@ -69,7 +69,7 @@ The frontend mounts at `dist/index.html` and Playwright serves it via `python3 -
 - **`src-tauri/src/lib.rs`**: Tauri commands (`get_agent_activity`, legacy `get_copilot_activity`, raw-detail reveal, editor/URL openers, app version, hide/quit) plus tray and single-instance wiring. Uses `tauri-plugin-window-state` to persist window position across launches.
 - **`src/scenes/MissionControl.ts`**: the single Phaser scene. Renders the mission map, nine sectors, pulse/arrival effects, ops status, responsive layout, and the space sprite atlas in `assets/space/`.
 - **`src/main.ts`**: minimal Phaser bootstrap. One scene, opaque background, resizes with the window.
-- **`src/index.html` + `hud.js`**: slim 32 px top bar, route controls, global History analytics, reset/panels/theme controls, dashboard panels, replay controls, inspector dialog, Attention Center, and schema-drift dialog.
+- **`src/index.html` + `hud.ts`**: slim 32 px top bar, route controls, global History analytics, reset/panels/theme controls, dashboard panels, replay controls, inspector dialog, Attention Center, and schema-drift dialog.
 
 ## Assets
 
@@ -81,7 +81,7 @@ Sprites are drawn from a curated combined atlas under `assets/space/` (see `atla
 npm run release 0.2.0
 ```
 
-`scripts/release.js` bumps `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`, regenerates `CHANGELOG.md` via `git-cliff`, commits, tags `v0.2.0`, and pushes. The `Build & Release` workflow then builds installers for all three platforms and attaches them to the GitHub Release.
+`scripts/release.ts` bumps `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`, regenerates `CHANGELOG.md` via `git-cliff`, commits, tags `v0.2.0`, and pushes. The `Build & Release` workflow then builds installers for all three platforms and attaches them to the GitHub Release.
 
 ## License
 

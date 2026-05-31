@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * test-updater.js — Simulate an available update to verify the updater UI flow.
+ * test-updater.ts — Simulate an available update to verify the updater UI flow.
  *
  * What it does:
  *   1. Starts a local HTTP server serving a fake latest.json (version 99.0.0)
@@ -9,8 +9,8 @@
  *   4. On exit (Ctrl+C or app close), restores the original tauri.conf.json
  *
  * Usage:
- *   node scripts/test-updater.js          # default port 8888
- *   node scripts/test-updater.js 9999     # custom port
+ *   node scripts/test-updater.ts          # default port 8888
+ *   node scripts/test-updater.ts 9999     # custom port
  *
  * Expected result:
  *   ~5 seconds after the app window appears, the green "Version v99.0.0 is

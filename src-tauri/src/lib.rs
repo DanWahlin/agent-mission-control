@@ -205,6 +205,19 @@ async fn ask_analytics_chat(
     analytics::analytics_chat(&app, request).await
 }
 
+#[tauri::command]
+async fn read_copilot_definition(
+    app: AppHandle,
+    kind: String,
+    definition: String,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        analytics::read_copilot_definition(&app, &kind, &definition)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
 /// Explicit local-only raw reveal for one inspector row. The normal
 /// activity command remains privacy-safe; this only runs after the user
 /// clicks the Inspector reveal action.
@@ -381,6 +394,7 @@ pub fn run() {
             get_analytics_usage_summary,
             get_analytics_recommendation_facts,
             ask_analytics_chat,
+            read_copilot_definition,
             get_raw_tool_call_details,
             install_update,
             open_in_editor,

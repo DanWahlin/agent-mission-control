@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-const serverPath = path.join(repoRoot, 'mcp', 'mission-control-insights.js');
+const serverPath = path.join(repoRoot, 'mcp', 'mission-control-insights.ts');
 
 test('Mission Control Insights MCP server exposes prompt and skill tools', async () => {
   const temp = mkdtempSync(path.join(tmpdir(), 'cmc-mcp-'));
@@ -17,6 +17,9 @@ test('Mission Control Insights MCP server exposes prompt and skill tools', async
   try {
     mkdirSync(path.join(home, '.copilot', 'session-state', 'session-123'), { recursive: true });
     mkdirSync(path.join(home, '.copilot', 'skills', 'coder'), { recursive: true });
+    mkdirSync(path.join(home, '.copilot', 'skills', 'phaser', 'scenes'), { recursive: true });
+    mkdirSync(path.join(home, '.copilot', 'installed-plugins', 'azure-skills', 'azure', 'skills', 'azure-deploy'), { recursive: true });
+    mkdirSync(path.join(home, '.copilot', 'agents', 'reviewer'), { recursive: true });
     mkdirSync(project, { recursive: true });
 
     writeFileSync(
@@ -37,6 +40,22 @@ test('Mission Control Insights MCP server exposes prompt and skill tools', async
       path.join(home, '.copilot', 'skills', 'coder', 'skill.yaml'),
       'name: coder\ndescription: Writes maintainable code.\n',
     );
+    writeFileSync(
+      path.join(home, '.copilot', 'skills', 'phaser', 'SKILL.md'),
+      '# Phaser\n\nUse for Phaser games.\n',
+    );
+    writeFileSync(
+      path.join(home, '.copilot', 'skills', 'phaser', 'scenes', 'SKILL.md'),
+      '# Phaser Scenes\n\nUse for Phaser scene architecture.\n',
+    );
+    writeFileSync(
+      path.join(home, '.copilot', 'installed-plugins', 'azure-skills', 'azure', 'skills', 'azure-deploy', 'SKILL.md'),
+      '# Azure Deploy\n\nUse for Azure deployment guidance.\n',
+    );
+    writeFileSync(
+      path.join(home, '.copilot', 'agents', 'reviewer', 'agent.yaml'),
+      'name: reviewer\ndescription: Reviews code for correctness.\n',
+    );
 
     const client = await startServer({ HOME: home, CMC_PROJECT_ROOT: project });
     try {
@@ -50,6 +69,8 @@ test('Mission Control Insights MCP server exposes prompt and skill tools', async
 
       const list = await client.request('tools/list', {});
       assert.ok(list.tools.some((tool) => tool.name === 'list_prompt_samples'));
+      assert.ok(list.tools.some((tool) => tool.name === 'analyze_copilot_skills'));
+      assert.ok(list.tools.some((tool) => tool.name === 'analyze_copilot_agents'));
       assert.ok(list.tools.every((tool) => tool.inputSchema && tool.inputSchema.type === 'object'));
 
       const promptResult = await client.request('tools/call', {
@@ -68,6 +89,8 @@ test('Mission Control Insights MCP server exposes prompt and skill tools', async
       });
       const skillsPayload = JSON.parse(skillsResult.content[0].text);
       assert.ok(skillsPayload.skills.some((skill) => skill.id === 'coder'));
+      assert.ok(skillsPayload.skills.some((skill) => skill.relative_path === 'phaser/scenes'));
+      assert.ok(skillsPayload.skills.some((skill) => skill.id === 'azure-deploy'));
 
       const skillResult = await client.request('tools/call', {
         name: 'read_skill_definition',
@@ -75,6 +98,28 @@ test('Mission Control Insights MCP server exposes prompt and skill tools', async
       });
       const skillPayload = JSON.parse(skillResult.content[0].text);
       assert.match(skillPayload.skill.files[0].content, /Writes maintainable code/);
+
+      const skillsAnalysisResult = await client.request('tools/call', {
+        name: 'analyze_copilot_skills',
+        arguments: { max_total_chars: 1000 },
+      });
+      const skillsAnalysisPayload = JSON.parse(skillsAnalysisResult.content[0].text);
+      assert.equal(skillsAnalysisPayload.kind, 'skills');
+      assert.equal(skillsAnalysisPayload.summary.discovered_definitions, 4);
+      assert.equal(skillsAnalysisPayload.summary.included_definitions, 4);
+      assert.ok(skillsAnalysisPayload.definitions.some((skill) => (
+        skill.files.some((file) => /Writes maintainable code/.test(file.content))
+      )));
+
+      const agentsAnalysisResult = await client.request('tools/call', {
+        name: 'analyze_copilot_agents',
+        arguments: { max_total_chars: 1000 },
+      });
+      const agentsAnalysisPayload = JSON.parse(agentsAnalysisResult.content[0].text);
+      assert.equal(agentsAnalysisPayload.kind, 'agents');
+      assert.equal(agentsAnalysisPayload.summary.discovered_definitions, 1);
+      assert.equal(agentsAnalysisPayload.summary.included_definitions, 1);
+      assert.match(agentsAnalysisPayload.definitions[0].files[0].content, /Reviews code for correctness/);
     } finally {
       client.stop();
     }

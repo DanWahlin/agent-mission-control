@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Copilot Mission Control — slim DOM HUD.
 //
 // Responsibilities (deliberately tiny):
@@ -242,8 +243,8 @@
 
   function compactNumber(value) {
     var n = Number(value || 0);
-    if (n >= 1000000) return Math.round(n / 1000000) + 'm';
-    if (n >= 1000) return Math.round(n / 1000) + 'k';
+    if (n >= 1000000) return Math.round(n / 1000000) + 'M';
+    if (n >= 1000) return Math.round(n / 1000) + 'K';
     return String(n);
   }
 
@@ -1071,7 +1072,15 @@
   function scrollAnalyticsTranscriptToLatest() {
     if (!analyticsChatTranscript) return;
     window.requestAnimationFrame(function () {
-      analyticsChatTranscript.scrollTop = analyticsChatTranscript.scrollHeight;
+      var messages = analyticsChatTranscript.querySelectorAll('.analytics-message');
+      var latest = messages[messages.length - 1];
+      if (!latest) {
+        analyticsChatTranscript.scrollTop = 0;
+        return;
+      }
+      var containerRect = analyticsChatTranscript.getBoundingClientRect();
+      var latestRect = latest.getBoundingClientRect();
+      analyticsChatTranscript.scrollTop += latestRect.top - containerRect.top - 8;
     });
   }
 
@@ -1090,15 +1099,18 @@
       var html = '';
       var paragraph = [];
       var list = [];
+      function renderInlineMarkdown(value) {
+        return escapeHtml(value).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      }
       function flushParagraph() {
         if (!paragraph.length) return;
-        html += '<p>' + escapeHtml(paragraph.join(' ')) + '</p>';
+        html += '<p>' + renderInlineMarkdown(paragraph.join(' ')) + '</p>';
         paragraph = [];
       }
       function flushList() {
         if (!list.length) return;
         html += '<ul>' + list.map(function (item) {
-          return '<li>' + escapeHtml(item) + '</li>';
+          return '<li>' + renderInlineMarkdown(item) + '</li>';
         }).join('') + '</ul>';
         list = [];
       }
@@ -1137,11 +1149,15 @@
   function renderAnalyticsArtifact(artifact) {
     var kind = artifact && artifact.kind;
     var body = '';
-    if (kind === 'table') body = renderAnalyticsTable(artifact);
+    if (kind === 'table' || kind === 'wide_table') body = renderAnalyticsTable(artifact);
+    else if (kind === 'definition_inventory') body = renderAnalyticsDefinitionInventory(artifact);
     else if (kind === 'chart') body = renderAnalyticsBars(artifact.points || []);
+    else if (kind === 'bars') body = renderAnalyticsValueBars(artifact);
     else if (kind === 'cards') body = renderAnalyticsCards(artifact.cards || []);
     else body = '<div class="analytics-caveats">No structured data for this artifact.</div>';
-    var className = kind === 'cards' ? 'analytics-artifact analytics-artifact-cards' : 'analytics-artifact';
+    var className = kind === 'cards' ? 'analytics-artifact analytics-artifact-cards'
+      : kind === 'wide_table' || kind === 'definition_inventory' ? 'analytics-artifact analytics-artifact-wide'
+      : 'analytics-artifact';
     return '<section class="' + className + '"><h3>' + escapeHtml((artifact && artifact.title) || 'Artifact') + '</h3>' + body + '</section>';
   }
 
@@ -1149,13 +1165,107 @@
     var columns = artifact.columns || [];
     var rows = artifact.rows || [];
     if (!rows.length) return '<div class="analytics-caveats">No rows for this range.</div>';
-    return '<table class="analytics-table"><thead><tr>' + columns.map(function (col) {
+    var title = String((artifact && artifact.title) || '').toLowerCase();
+    var tableClass = 'analytics-table';
+    var scrollClass = 'analytics-table-scroll';
+    if (title.indexOf('overlap candidates') >= 0) tableClass += ' analytics-table-overlap';
+    if (title.indexOf('completeness gaps') >= 0) {
+      tableClass += ' analytics-table-completeness';
+      scrollClass += ' analytics-table-scroll-compact';
+    }
+
+    return '<div class="' + scrollClass + '"><table class="' + tableClass + '"><thead><tr>' + columns.map(function (col) {
       return '<th>' + escapeHtml(col) + '</th>';
     }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
       return '<tr>' + (row || []).map(function (cell) {
         return '<td>' + escapeHtml(formatAnalyticsTableCell(cell)) + '</td>';
       }).join('') + '</tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table></div>';
+  }
+
+  function renderAnalyticsDefinitionInventory(artifact) {
+    var rows = artifact.rows || [];
+    if (!rows.length) return '<div class="analytics-caveats">No definitions found.</div>';
+    return '<div class="analytics-table-scroll analytics-table-scroll-compact"><table class="analytics-table analytics-table-definitions"><thead><tr>'
+      + '<th>Name</th><th>Summary</th><th>Enabled</th><th>Details</th>'
+      + '</tr></thead><tbody>' + rows.map(function (row) {
+        var details = parseDefinitionDetails(row[3]);
+        var encoded = encodeURIComponent(JSON.stringify(details));
+        return '<tr>'
+          + '<td>' + escapeHtml(row[0] || '') + '</td>'
+          + '<td>' + escapeHtml(row[1] || '') + '</td>'
+          + '<td>' + escapeHtml(row[2] || 'Yes') + '</td>'
+          + '<td><button class="analytics-detail-button" type="button" data-analytics-definition="' + escapeHtml(encoded) + '">View</button></td>'
+          + '</tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  function parseDefinitionDetails(value) {
+    try {
+      return JSON.parse(String(value || '{}')) || {};
+    } catch (_err) {
+      return {};
+    }
+  }
+
+  function openAnalyticsDefinitionDialog(details) {
+    var overlay = document.createElement('section');
+    overlay.className = 'analytics-definition-overlay visible';
+    overlay.setAttribute('aria-hidden', 'false');
+    var definitionLabel = details.kind === 'agents' ? 'Agent' : 'Skill';
+    var definitionTitle = (details.name || 'Definition') + ' ' + definitionLabel;
+    overlay.innerHTML = '<div class="analytics-definition-dialog" role="dialog" aria-modal="true" aria-labelledby="analytics-definition-title" tabindex="-1">'
+      + '<div class="inspector-header"><div><h2 id="analytics-definition-title" class="inspector-title">' + escapeHtml(definitionTitle) + '</h2></div>'
+      + '<button class="inspector-close" type="button" data-analytics-definition-close aria-label="Close definition details">×</button></div>'
+      + '<dl class="analytics-definition-details">'
+      + '<dt>Summary</dt><dd>' + escapeHtml(details.summary || 'No summary available.') + '</dd>'
+      + '<dt>Source</dt><dd>' + escapeHtml(details.root || 'unknown') + '</dd>'
+      + '<dt>Size</dt><dd>' + escapeHtml(compactNumber(details.size || 0) + ' chars') + '</dd>'
+      + '<dt>Description</dt><dd>' + escapeHtml(compactNumber(details.descriptionChars || 0) + ' chars') + '</dd>'
+      + '<dt>Completeness</dt><dd>' + escapeHtml(String(details.score || 0) + '/5') + '</dd>'
+      + '<dt>Issues</dt><dd>' + escapeHtml(details.issues || 'No issues detected.') + '</dd>'
+      + '</dl><section class="analytics-definition-source"><h3>Definition</h3><pre data-analytics-definition-source>Loading definition…</pre></section></div>';
+    document.body.appendChild(overlay);
+    var close = function () { overlay.remove(); };
+    overlay.addEventListener('click', function (event) {
+      if (event.target === overlay || (event.target && event.target.closest && event.target.closest('[data-analytics-definition-close]'))) close();
+    });
+    var dialog = overlay.querySelector('.analytics-definition-dialog');
+    if (dialog && dialog.focus) dialog.focus();
+    loadAnalyticsDefinitionSource(overlay, details);
+  }
+
+  function loadAnalyticsDefinitionSource(overlay, details) {
+    var target = overlay.querySelector('[data-analytics-definition-source]');
+    if (!target) return;
+    var invoke = tauriInvoke();
+    if (!invoke) {
+      target.textContent = 'Definition content is only available in the desktop app.';
+      target.scrollTop = 0;
+      return;
+    }
+    invoke('read_copilot_definition', {
+      kind: details.kind || 'skills',
+      definition: details.definition || details.name || '',
+    }).then(function (payload) {
+      target.textContent = formatDefinitionSource(payload, details.kind || 'skills');
+      target.scrollTop = 0;
+    }).catch(function (err) {
+      target.textContent = 'Unable to load definition: ' + String(err && err.message ? err.message : err);
+      target.scrollTop = 0;
+    });
+  }
+
+  function formatDefinitionSource(payload, kind) {
+    var container = payload && (payload.skill || payload.agent || payload.definition || payload[kind === 'agents' ? 'agent' : 'skill']);
+    var files = (container && container.files) || [];
+    if (!files.length) return 'No definition content was returned.';
+    return files.map(function (file) {
+      var header = file.relative_path || 'definition';
+      var content = file.content || '';
+      var suffix = file.truncated ? '\n\n[truncated]' : '';
+      return '--- ' + header + ' ---\n' + content + suffix;
+    }).join('\n\n');
   }
 
   function formatAnalyticsTableCell(cell) {
@@ -1183,11 +1293,36 @@
     }).join('') + '</div>';
   }
 
+  function renderAnalyticsValueBars(artifact) {
+    var rows = (artifact && artifact.rows) || [];
+    var valueHeader = ((artifact && artifact.columns && artifact.columns[2]) || '').toLowerCase();
+    var valueSuffix = valueHeader.indexOf('char') >= 0 ? ' chars' : '';
+    var parsed = rows.map(function (row) {
+      var cells = row || [];
+      var value = Number(cells[2] || 0);
+      return {
+        label: String(cells[0] || ''),
+        category: String(cells[1] || ''),
+        value: Number.isFinite(value) ? value : 0,
+      };
+    }).filter(function (row) { return row.label && row.value > 0; });
+    if (!parsed.length) return '<div class="analytics-caveats">No values for this artifact.</div>';
+    var max = parsed.reduce(function (m, row) { return Math.max(m, row.value); }, 1);
+    return '<div class="analytics-bars">' + parsed.map(function (row) {
+      var pct = Math.max(4, Math.min(100, Math.round((row.value / max) * 100)));
+      return '<div class="analytics-bar-row">'
+        + '<span title="' + escapeHtml(row.category) + '">' + escapeHtml(row.label) + '</span>'
+        + '<span class="analytics-bar"><span style="width:' + pct + '%"></span></span>'
+        + '<span title="' + escapeHtml(exactNumber(row.value) + valueSuffix) + '">' + escapeHtml(compactNumber(row.value) + valueSuffix) + '</span>'
+        + '</div>';
+    }).join('') + '</div>';
+  }
+
   function renderAnalyticsCards(cards) {
     if (!cards.length) return '<div class="analytics-caveats">No recommendations yet.</div>';
     return '<div class="analytics-card-list">' + cards.map(function (card) {
       return '<div class="analytics-card"><strong>' + escapeHtml(card.title || 'Recommendation') + '</strong>'
-        + escapeHtml(card.body || '') + '</div>';
+        + escapeHtml(card.body || '').replace(/\n/g, '<br>') + '</div>';
     }).join('') + '</div>';
   }
 
@@ -2851,6 +2986,16 @@
         analyticsPromptPanelHidden = !analyticsPromptPanelHidden;
         settings.setBool(STORAGE_KEYS.analyticsPromptPanelCollapsed, analyticsPromptPanelHidden);
         renderAnalyticsSuggestions();
+        return;
+      }
+      var definitionButton = event.target && event.target.closest && event.target.closest('[data-analytics-definition]');
+      if (definitionButton) {
+        var encoded = definitionButton.getAttribute('data-analytics-definition') || '';
+        try {
+          openAnalyticsDefinitionDialog(JSON.parse(decodeURIComponent(encoded)));
+        } catch (_err) {
+          openAnalyticsDefinitionDialog({});
+        }
         return;
       }
       var button = event.target && event.target.closest && event.target.closest('[data-analytics-prompt]');

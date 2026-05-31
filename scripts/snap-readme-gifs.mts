@@ -4,7 +4,7 @@
 //
 //   npm run build:frontend
 //   (cd dist && python3 -m http.server 4173) &
-//   node scripts/snap-readme-gifs.mjs
+//   node scripts/snap-readme-gifs.mts
 //
 // Outputs (5 s loops, 1440x900, 15 fps):
 //   docs/img/dashboard.gif     (panels visible)

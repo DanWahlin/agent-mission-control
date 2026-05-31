@@ -3,7 +3,8 @@
   "version": "0.1.9",
   "description": "Copilot Mission Control — a live dashboard for the GitHub Copilot CLI",
   "scripts": {
-    "build:frontend": "node scripts/build-frontend.js",
+    "build:frontend": "node scripts/build-frontend.ts",
+    "build:docs": "node scripts/build-docs.ts",
     "build": "npm run build:frontend && cd src-tauri && cargo build",
     "tauri": "tauri",
     "start": "npm run build:frontend && cd src-tauri && cargo tauri dev",
@@ -14,10 +15,10 @@
     "dist:linux": "cargo tauri build --target x86_64-unknown-linux-gnu",
     "test": "npm run build:frontend && npx playwright test",
     "test:headed": "npm run build:frontend && npx playwright test --headed",
-    "test:mcp": "node --test tests/mcp-insights.test.mjs",
-    "mcp:insights": "node mcp/mission-control-insights.js",
-    "release": "node scripts/release.js",
-    "test:updater": "node scripts/test-updater.js"
+    "test:mcp": "node --test tests/mcp-insights.test.mts",
+    "mcp:insights": "node mcp/mission-control-insights.ts",
+    "release": "node scripts/release.ts",
+    "test:updater": "node scripts/test-updater.ts"
   },
   "author": "Dan Wahlin",
   "license": "MIT",

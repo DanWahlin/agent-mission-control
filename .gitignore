@@ -7,6 +7,7 @@ pnpm-debug.log*
 
 # Build output
 dist/
+.docs-dist/
 build/
 out/
 *.tsbuildinfo
@@ -41,5 +42,5 @@ tests/screenshots/
 test-results/
 playwright-report/
 
-# Visual snapshot harness (scripts/snap-layouts.js)
+# Visual snapshot harness (scripts/snap-layouts.ts)
 .snapshots/

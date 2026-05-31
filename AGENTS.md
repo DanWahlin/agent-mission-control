@@ -15,7 +15,7 @@ src/scenes/              — Phaser scenes
   viewport.ts            — W/H exports + refreshDimensions() (resize helper)
 src/main.ts              — Single-scene Phaser bootstrap (~55 lines)
 src/index.html           — Slim 32 px top bar + #game div
-src/hud.js               — Top bar, History route, dashboard panels, inspectors, Attention Center
+src/hud.ts               — Top bar, History route, dashboard panels, inspectors, Attention Center
 src-tauri/               — Tauri 2 Rust backend
   src/lib.rs             — Tauri commands + tray + window-state plugin
   src/agent.rs           — AgentProvider trait + CopilotProvider + fs watcher
@@ -27,7 +27,7 @@ assets/space/              — Space-themed sprite atlas (Phaser texture)
 assets/icon.png            — App icon (square, used by tools that need a single PNG)
 docs/                    — GitHub Pages site
   img/                   — README + landing-page screenshots (regenerable)
-scripts/release.js       — Version bump + git-cliff + tag + push
+scripts/release.ts       — Version bump + git-cliff + tag + push
 scripts/snap-readme.mjs  — Playwright screenshotter for docs/img/
 tests/                   — Playwright (Chromium, headless)
   app.spec.ts                — App shell smoke tests
@@ -69,7 +69,7 @@ The Playwright `webServer` config serves `dist/` over `python3 -m http.server 41
 
 - **`MissionControlScene` extends `Phaser.Scene` directly.** There is no `BaseScene`. The scene paints its own full-window backdrop in `create()` (depth -100) and redraws it on `scale.resize`.
 - **Single scene.** Boot Phaser → instantiate `MissionControlScene` → resize listener calls `refreshDimensions()` + `scale.resize(W, H)` so the scene re-lays-out the dashboard on every window change.
-- **DOM dashboard ownership.** Phaser renders the mission map, sectors, pulses, and ops status. `hud.js` owns dashboard panels, History, replay controls, the session/sector inspector, Attention Center, and schema-drift dialog.
+- **DOM dashboard ownership.** Phaser renders the mission map, sectors, pulses, and ops status. `hud.ts` owns dashboard panels, History, replay controls, the session/sector inspector, Attention Center, and schema-drift dialog.
 - **Push-driven updates.** The Rust watcher debounces FS events (~300 ms) and calls `win.eval("window.__cmcOnAgentActivityChanged && window.__cmcOnAgentActivityChanged()")`. The 30 s poll in the scene is a fallback for environments where the watcher fails to attach.
 - **Privacy invariant.** The `AgentProvider::scan()` boundary is the only place where Copilot session data is read. Only allowlisted fields cross into `AgentEventSummary` / `AgentSessionSummary` — never raw prompts, tool args, command output, file paths, or diffs.
 - **Provider schemas.** Copilot scanning is driven by the bundled schema in `src-tauri/provider-schemas/copilot.json`; the matching published copy lives in `docs/provider-schemas/copilot/` for GitHub Pages. Schema changes must keep both copies byte-identical, update the index checksum, and preserve strict allowlists for safe paths/details only.
@@ -97,7 +97,7 @@ The watcher automatically attaches to each provider's `state_roots()`, the merge
 ```bash
 npm run build:frontend
 (cd dist && python3 -m http.server 4173) &
-node scripts/snap-readme-gifs.mjs   # 5 s loops at 1280 wide / 15 fps
+node scripts/snap-readme-gifs.mts   # 5 s loops at 1280 wide / 15 fps
 kill %1
 ```
 
@@ -109,7 +109,7 @@ The script uses the same deterministic rich fixture as the old PNG script and th
 npm run release <version>    # e.g. npm run release 0.2.0
 ```
 
-`scripts/release.js`:
+`scripts/release.ts`:
 
 1. Bumps version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
 2. Regenerates `CHANGELOG.md` from git via `git-cliff` (config: `cliff.toml`).

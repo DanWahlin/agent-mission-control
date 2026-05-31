@@ -6,11 +6,12 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -37,8 +38,27 @@ const SNAPSHOT_SOURCE_HASH: &str = "agent-activity-snapshot";
 const LOCAL_HISTORY_SOURCE_HASH: &str = "copilot-local-history";
 const LOCAL_HISTORY_PROVIDER: &str = "copilot";
 const MISSION_CONTROL_ANALYTICS_MARKER: &str = "COPILOT_MISSION_CONTROL_ANALYTICS_CHAT_IGNORE";
-const INSIGHTS_MCP_SERVER_SOURCE: &str = include_str!("../../mcp/mission-control-insights.js");
+const INSIGHTS_MCP_SERVER_SOURCE: &str = include_str!("../../mcp/mission-control-insights.ts");
+const ANALYTICS_EXCLUDED_BUILT_IN_TOOLS: &[&str] = &[
+    "apply_patch",
+    "ask_user",
+    "bash",
+    "edit",
+    "glob",
+    "grep",
+    "list_bash",
+    "read_bash",
+    "report_intent",
+    "rg",
+    "run_in_terminal",
+    "shell",
+    "stop_bash",
+    "terminal",
+    "view",
+    "write_bash",
+];
 static INGESTION_RUNNING: AtomicBool = AtomicBool::new(false);
+static SCHEMA_READY_DB: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 #[derive(serde::Deserialize, Default)]
 pub struct AnalyticsRangeRequest {
@@ -185,21 +205,21 @@ pub struct AnalyticsChatResponse {
 
 pub fn analytics_status(app: &AppHandle) -> Result<AnalyticsStatus, String> {
     let mut conn = open_connection(app)?;
-    ensure_schema(&mut conn)?;
+    ensure_schema(app, &mut conn)?;
     status_from_db(app, &conn)
 }
 
 pub fn run_analytics_ingestion_once(app: &AppHandle) -> Result<AnalyticsStatus, String> {
     if !begin_ingestion() {
         let mut conn = open_connection(app)?;
-        ensure_schema(&mut conn)?;
+        ensure_schema(app, &mut conn)?;
         return status_from_db(app, &conn);
     }
     let result = run_analytics_ingestion(app);
     finish_ingestion(app);
     result?;
     let mut conn = open_connection(app)?;
-    ensure_schema(&mut conn)?;
+    ensure_schema(app, &mut conn)?;
     status_from_db(app, &conn)
 }
 
@@ -217,7 +237,7 @@ pub fn start_background_ingestion(app: AppHandle) {
 
 fn run_analytics_ingestion(app: &AppHandle) -> Result<(), String> {
     let mut conn = open_connection(app)?;
-    ensure_schema(&mut conn)?;
+    ensure_schema(app, &mut conn)?;
     if !ingest_local_copilot_history(&mut conn)? {
         let activity = collect_agent_activity_with_history();
         ingest_activity(&mut conn, &activity)?;
@@ -231,7 +251,7 @@ pub fn analytics_usage_summary(
 ) -> Result<AnalyticsUsageSummary, String> {
     ensure_recent_ingestion(app)?;
     let mut conn = open_connection(app)?;
-    ensure_schema(&mut conn)?;
+    ensure_schema(app, &mut conn)?;
     usage_summary_from_db(
         &conn,
         normalize_range_days(request.range_days),
@@ -273,7 +293,13 @@ pub async fn analytics_chat(
                     "Question is outside Copilot Mission Control analytics scope.".to_string(),
                 );
             } else {
-                response.artifacts = artifacts_for_keys(&summary, &answer.artifacts);
+                let mut artifacts = artifacts_for_keys(&summary, &answer.artifacts);
+                artifacts.extend(answer.definition_review_artifacts);
+                extend_unique_artifacts(
+                    &mut artifacts,
+                    local_definition_review_artifacts_for_prompt(app, &response.prompt),
+                );
+                response.artifacts = artifacts;
             }
         }
         Err(err) => {
@@ -300,6 +326,25 @@ pub async fn analytics_chat(
     Ok(response)
 }
 
+pub fn read_copilot_definition(
+    app: &AppHandle,
+    kind: &str,
+    definition: &str,
+) -> Result<Value, String> {
+    let (tool_name, argument_name) = match kind {
+        "agents" | "agent" => ("read_agent_definition", "agent"),
+        "skills" | "skill" => ("read_skill_definition", "skill"),
+        _ => return Err(format!("Unsupported definition kind: {}", kind)),
+    };
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        argument_name.to_string(),
+        Value::String(definition.to_string()),
+    );
+    arguments.insert("max_chars".to_string(), Value::from(120000));
+    call_insights_mcp_tool_with_args(app, tool_name, Value::Object(arguments))
+}
+
 fn requires_insights_tools(prompt: &str) -> bool {
     let lower = prompt.to_ascii_lowercase();
     [
@@ -320,15 +365,30 @@ fn open_connection(app: &AppHandle) -> Result<Connection, String> {
     let dir = analytics_dir(app)?;
     fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     let conn = Connection::open(dir.join(ANALYTICS_DB_FILE)).map_err(|err| err.to_string())?;
-    conn.busy_timeout(Duration::from_secs(2))
+    conn.busy_timeout(Duration::from_secs(15))
         .map_err(|err| err.to_string())?;
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(|err| err.to_string())?;
+    if let Err(err) = conn.pragma_update(None, "journal_mode", "WAL") {
+        if !is_sqlite_locked_error(&err) {
+            return Err(err.to_string());
+        }
+        log::debug!("Analytics database is busy while enabling WAL: {}", err);
+    }
     conn.pragma_update(None, "synchronous", "NORMAL")
         .map_err(|err| err.to_string())?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|err| err.to_string())?;
     Ok(conn)
+}
+
+fn is_sqlite_locked_error(err: &rusqlite::Error) -> bool {
+    matches!(
+        err,
+        rusqlite::Error::SqliteFailure(error, _)
+            if matches!(
+                error.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            )
+    )
 }
 
 fn analytics_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -339,7 +399,11 @@ fn analytics_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .join("analytics"))
 }
 
-fn ensure_schema(conn: &mut Connection) -> Result<(), String> {
+fn ensure_schema(app: &AppHandle, conn: &mut Connection) -> Result<(), String> {
+    let db_path = analytics_dir(app)?.join(ANALYTICS_DB_FILE);
+    if schema_ready_for(&db_path) {
+        return Ok(());
+    }
     let tx = conn.transaction().map_err(|err| err.to_string())?;
     tx.execute_batch(
         r#"
@@ -497,12 +561,14 @@ fn ensure_schema(conn: &mut Connection) -> Result<(), String> {
         params![SCHEMA_VERSION.to_string()],
     )
     .map_err(|err| err.to_string())?;
-    tx.commit().map_err(|err| err.to_string())
+    tx.commit().map_err(|err| err.to_string())?;
+    mark_schema_ready(db_path);
+    Ok(())
 }
 
 fn ensure_recent_ingestion(app: &AppHandle) -> Result<(), String> {
     let mut conn = open_connection(app)?;
-    ensure_schema(&mut conn)?;
+    ensure_schema(app, &mut conn)?;
     let last: Option<i64> = conn
         .query_row(
             "SELECT MAX(last_ingested_at_ms) FROM ingestion_cursors",
@@ -520,6 +586,19 @@ fn ensure_recent_ingestion(app: &AppHandle) -> Result<(), String> {
         start_background_ingestion(app.clone());
     }
     Ok(())
+}
+
+fn schema_ready_for(path: &Path) -> bool {
+    SCHEMA_READY_DB
+        .lock()
+        .map(|ready_path| ready_path.as_deref() == Some(path))
+        .unwrap_or(false)
+}
+
+fn mark_schema_ready(path: PathBuf) {
+    if let Ok(mut ready_path) = SCHEMA_READY_DB.lock() {
+        *ready_path = Some(path);
+    }
 }
 
 fn begin_ingestion() -> bool {
@@ -1988,23 +2067,35 @@ async fn synthesize_chat_answer_with_copilot(
     let summary_json = serde_json::to_string(summary).map_err(|err| err.to_string())?;
     let mcp_script = ensure_insights_mcp_server_script(app)?;
     let project_root = project_root_for_mcp().or_else(|| std::env::current_dir().ok());
-    let mcp_servers = mission_control_insights_mcp_servers(&mcp_script, project_root.as_deref());
+    let mcp_tools = mission_control_insights_tools_for_prompt(prompt);
+    let mcp_servers =
+        mission_control_insights_mcp_servers(&mcp_script, project_root.as_deref(), mcp_tools);
     let client = Client::start(ClientOptions::new())
         .await
         .map_err(|err| err.to_string())?;
+    let sdk_event_state = Arc::new(Mutex::new(AnalyticsSdkEventState::default()));
     let system_message = SystemMessageConfig::new()
         .with_mode("append")
         .with_content(format!(
-            "{marker}\nYou are the Copilot Mission Control Analytics assistant.\n\nAllowed scope: answer questions about Copilot CLI usage analytics and improvement opportunities based on this app's indexed analytics plus the Mission Control Insights MCP tools. Indexed JSON covers sessions, turns, token usage, model mix, tool usage, failures, trends, comparisons, recommendations, and indexing status. MCP tools can inspect bounded local prompt samples, skills, and agent definitions when the user asks about prompts, skills, agents, or improvement analysis.\n\nNot allowed: weather, temperature, general knowledge, coding help unrelated to these local analytics, external facts, live web data, personal advice, arbitrary SQL, or details not present in the supplied JSON or MCP tool results. Do not reveal raw file paths. Do not quote raw prompt text unless the user explicitly asks to inspect prompts; prefer summaries and improvement recommendations.\n\nIf the user asks anything outside the allowed scope, set in_scope=false and answer exactly: \"I can only answer questions about indexed Copilot CLI usage, prompts, skills, agents, and analytics.\"\n\nIf the question is in scope but the supplied JSON and available tools do not include the requested detail, set in_scope=true and say the indexed analytics do not include that detail.\n\nUse Mission Control Insights MCP tools naturally when they are needed. For prompt-pattern, prompt-improvement, skill-review, agent-review, or missing-skill/agent questions, call the relevant MCP tools before answering. Do not answer those questions from aggregate metrics alone.\n\nFormat answer text for readability using lightweight Markdown: short paragraphs, blank lines between paragraphs, and '-' bullet lists when listing steps, patterns, recommendations, or examples. Keep answers concise.\n\nChoose only the supporting UI artifacts that directly answer metric questions. Use zero artifacts when the concise answer or MCP tool result summary is enough. Artifact keys you may request: changes, token_trend, token_hotspots, model_mix, model_shifts, tool_failures, tool_changes, recommendations. Examples: top models -> [\"model_mix\"]; token hotspots -> [\"token_hotspots\"]; what changed -> [\"changes\",\"model_shifts\",\"tool_changes\"]; top failed tools -> [\"tool_failures\"]; prompt improvements -> [].\n\nReturn strict JSON only with this shape: {{\"in_scope\": boolean, \"answer\": string, \"artifacts\": [string]}}. The answer string may contain lightweight Markdown. Do not include code fences, extra keys, SQL, or preambles outside the JSON.",
+            "{marker}\nYou are the Copilot Mission Control Analytics assistant.\n\nAllowed scope: answer questions about Copilot CLI usage analytics and improvement opportunities based on this app's indexed analytics plus the Mission Control Insights MCP tools. Indexed JSON covers sessions, turns, token usage, model mix, tool usage, failures, trends, comparisons, recommendations, and indexing status. MCP tools can inspect bounded local prompt samples, skills, and agent definitions when the user asks about prompts, skills, agents, or improvement analysis.\n\nNot allowed: weather, temperature, general knowledge, coding help unrelated to these local analytics, external facts, live web data, personal advice, arbitrary SQL, or details not present in the supplied JSON or MCP tool results. Do not reveal raw file paths. Do not quote raw prompt text unless the user explicitly asks to inspect prompts; prefer summaries and improvement recommendations.\n\nIf the user asks anything outside the allowed scope, set in_scope=false and answer exactly: \"I can only answer questions about indexed Copilot CLI usage, prompts, skills, agents, and analytics.\"\n\nIf the question is in scope but the supplied JSON and available tools do not include the requested detail, set in_scope=true and say the indexed analytics do not include that detail.\n\nUse only Mission Control Insights MCP tools when tools are needed. Do not call built-in filesystem, shell, view, edit, search, planning, or status tools. For prompt-pattern, prompt-improvement, skill-review, agent-review, or missing-skill/agent questions, call the relevant Mission Control Insights MCP tool before answering. Do not answer those questions from aggregate metrics alone. For broad skill audits such as \"Review my Copilot skills\", call analyze_copilot_skills first and answer from that result. For broad agent audits such as \"Review my Copilot agents\", call analyze_copilot_agents first and answer from that result. Use list_* and read_* only for targeted follow-up on specific named definitions.\n\nFormat answer text for readability using lightweight Markdown: short paragraphs, blank lines between paragraphs, and '-' bullet lists when listing steps, patterns, recommendations, or examples. Keep answers concise.\n\nChoose only the supporting UI artifacts that directly answer metric questions. Definition-review charts are attached automatically when analyze_copilot_skills or analyze_copilot_agents runs. Other artifact keys you may request: changes, token_trend, token_hotspots, model_mix, model_shifts, tool_failures, tool_changes, recommendations. Examples: top models -> [\"model_mix\"]; token hotspots -> [\"token_hotspots\"]; what changed -> [\"changes\",\"model_shifts\",\"tool_changes\"]; top failed tools -> [\"tool_failures\"]; prompt improvements -> [].\n\nReturn strict JSON only with this shape: {{\"in_scope\": boolean, \"answer\": string, \"artifacts\": [string]}}. The answer string may contain lightweight Markdown. Do not include code fences, extra keys, SQL, or preambles outside the JSON.",
             marker = MISSION_CONTROL_ANALYTICS_MARKER
         ));
     let mut config = SessionConfig::default()
-        .with_handler(Arc::new(AnalyticsSdkHandler { app: app.clone() }))
+        .with_handler(Arc::new(AnalyticsSdkHandler {
+            app: app.clone(),
+            state: sdk_event_state.clone(),
+        }))
         .with_system_message(system_message)
+        .with_excluded_tools(ANALYTICS_EXCLUDED_BUILT_IN_TOOLS.iter().copied())
+        .with_enable_config_discovery(false)
+        .with_request_user_input(false)
+        .with_request_exit_plan_mode(false)
+        .with_request_elicitation(false)
         .with_mcp_servers(mcp_servers)
         .approve_permissions_if(is_mission_control_insights_permission);
     config.client_name = Some("copilot-mission-control-analytics".to_string());
     config.streaming = Some(false);
+    config.hooks = Some(false);
 
     let session = match client.create_session(config).await {
         Ok(session) => session,
@@ -2018,24 +2109,228 @@ async fn synthesize_chat_answer_with_copilot(
         marker = MISSION_CONTROL_ANALYTICS_MARKER
     );
     let result = session
-        .send_and_wait(MessageOptions::new(message).with_wait_timeout(Duration::from_secs(45)))
+        .send_and_wait(MessageOptions::new(message).with_wait_timeout(Duration::from_secs(75)))
         .await;
     let _ = session.destroy().await;
     let _ = client.stop().await;
 
     let event = result.map_err(|err| err.to_string())?;
     let content = event
-        .and_then(|event| {
-            event
-                .data
-                .get("content")
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        })
+        .as_ref()
+        .and_then(sdk_assistant_message_content)
+        .or_else(|| sdk_event_state_content(&sdk_event_state))
         .ok_or_else(|| "Copilot SDK did not return answer content".to_string())?;
-    parse_sdk_analytics_answer(&content)
+    let mut answer = parse_sdk_analytics_answer(&content)?;
+    answer.definition_review_artifacts = definition_review_artifacts_from_state(&sdk_event_state);
+    Ok(answer)
+}
+
+#[derive(Default)]
+struct AnalyticsSdkEventState {
+    last_assistant_content: Option<String>,
+    streamed_content: String,
+    definition_reviews: HashMap<String, Value>,
+}
+
+fn sdk_event_state_content(state: &Arc<Mutex<AnalyticsSdkEventState>>) -> Option<String> {
+    let state = state.lock().ok()?;
+    state
+        .last_assistant_content
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            let content = state.streamed_content.trim();
+            if content.is_empty() {
+                None
+            } else {
+                Some(content.to_string())
+            }
+        })
+}
+
+fn sdk_assistant_message_content(
+    event: &github_copilot_sdk::types::SessionEvent,
+) -> Option<String> {
+    if event.event_type != "assistant.message" {
+        return None;
+    }
+    clean_sdk_text(event.data.get("content").or_else(|| {
+        event
+            .data
+            .get("message")
+            .and_then(|message| message.get("content"))
+    }))
+}
+
+fn sdk_assistant_delta_content(event: &github_copilot_sdk::types::SessionEvent) -> Option<String> {
+    if event.event_type != "assistant.message_delta" {
+        return None;
+    }
+    clean_sdk_text(
+        event
+            .data
+            .get("deltaContent")
+            .or_else(|| event.data.get("delta_content")),
+    )
+}
+
+fn clean_sdk_text(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn local_definition_review_artifacts_for_prompt(
+    app: &AppHandle,
+    prompt: &str,
+) -> Vec<AnalyticsArtifact> {
+    let lower = prompt.to_ascii_lowercase();
+    let mut artifacts = Vec::new();
+    if lower.contains("skill") {
+        artifacts.extend(local_definition_review_artifacts(
+            app,
+            "analyze_copilot_skills",
+        ));
+    }
+    if lower.contains("agent") {
+        artifacts.extend(local_definition_review_artifacts(
+            app,
+            "analyze_copilot_agents",
+        ));
+    }
+    artifacts
+}
+
+fn extend_unique_artifacts(
+    artifacts: &mut Vec<AnalyticsArtifact>,
+    additions: Vec<AnalyticsArtifact>,
+) {
+    let mut seen: BTreeSet<String> = artifacts
+        .iter()
+        .map(|artifact| format!("{}:{}", artifact.kind, artifact.title))
+        .collect();
+    for artifact in additions {
+        let key = format!("{}:{}", artifact.kind, artifact.title);
+        if seen.insert(key) {
+            artifacts.push(artifact);
+        }
+    }
+}
+
+fn local_definition_review_artifacts(app: &AppHandle, tool_name: &str) -> Vec<AnalyticsArtifact> {
+    match call_insights_mcp_tool(app, tool_name) {
+        Ok(payload) => normalize_definition_review_payload(payload)
+            .map(|(_, payload)| definition_review_artifacts_from_payload(&payload))
+            .unwrap_or_default(),
+        Err(err) => {
+            log::debug!(
+                "Local definition review artifact generation failed: {}",
+                err
+            );
+            Vec::new()
+        }
+    }
+}
+
+fn call_insights_mcp_tool(app: &AppHandle, tool_name: &str) -> Result<Value, String> {
+    call_insights_mcp_tool_with_args(
+        app,
+        tool_name,
+        serde_json::json!({ "max_definitions": 1, "max_total_chars": 1000 }),
+    )
+}
+
+fn call_insights_mcp_tool_with_args(
+    app: &AppHandle,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<Value, String> {
+    let script = ensure_insights_mcp_server_script(app)?;
+    let mut command = Command::new("node");
+    command
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(project_root) = project_root_for_mcp() {
+        command.env("CMC_PROJECT_ROOT", project_root);
+    }
+    let mut child = command.spawn().map_err(|err| err.to_string())?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "MCP process stdin unavailable".to_string())?;
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": { "name": "mission-control", "version": "0" }
+                }
+            })
+        )
+        .map_err(|err| err.to_string())?;
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments
+                }
+            })
+        )
+        .map_err(|err| err.to_string())?;
+    }
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "MCP process stdout unavailable".to_string())?;
+    let mut reader = BufReader::new(stdout);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut line = String::new();
+    loop {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            return Err("MCP tool call timed out".to_string());
+        }
+        line.clear();
+        let bytes = reader.read_line(&mut line).map_err(|err| err.to_string())?;
+        if bytes == 0 {
+            break;
+        }
+        let Ok(message) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if message.get("id").and_then(Value::as_u64) != Some(2) {
+            continue;
+        }
+        let _ = child.kill();
+        let text = message
+            .get("result")
+            .and_then(|result| result.get("content"))
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "MCP tool result did not include text content".to_string())?;
+        return serde_json::from_str(text).map_err(|err| err.to_string());
+    }
+    let _ = child.kill();
+    Err("MCP tool call exited without a result".to_string())
 }
 
 fn strip_mission_control_marker(answer: &str) -> String {
@@ -2065,6 +2360,7 @@ fn ensure_insights_mcp_server_script(app: &AppHandle) -> Result<PathBuf, String>
 fn mission_control_insights_mcp_servers(
     script_path: &Path,
     project_root: Option<&Path>,
+    tools: Vec<String>,
 ) -> HashMap<String, github_copilot_sdk::types::McpServerConfig> {
     use github_copilot_sdk::types::{McpServerConfig, McpStdioServerConfig};
 
@@ -2079,16 +2375,7 @@ fn mission_control_insights_mcp_servers(
     servers.insert(
         "mission-control-insights".to_string(),
         McpServerConfig::Stdio(McpStdioServerConfig {
-            tools: vec![
-                "list_prompt_samples".to_string(),
-                "get_prompt_sample".to_string(),
-                "summarize_prompt_patterns".to_string(),
-                "list_copilot_skills".to_string(),
-                "read_skill_definition".to_string(),
-                "list_copilot_agents".to_string(),
-                "read_agent_definition".to_string(),
-                "health".to_string(),
-            ],
+            tools,
             timeout: Some(20_000),
             command: "node".to_string(),
             args: vec![script_path.to_string_lossy().to_string()],
@@ -2097,6 +2384,55 @@ fn mission_control_insights_mcp_servers(
         }),
     );
     servers
+}
+
+fn mission_control_insights_tools_for_prompt(prompt: &str) -> Vec<String> {
+    let lower = prompt.to_ascii_lowercase();
+    let broad_review = [
+        "review",
+        "audit",
+        "improve",
+        "coverage",
+        "duplicate",
+        "overlap",
+        "compare",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    let asks_for_list = ["list", "which", "show me", "available"]
+        .iter()
+        .any(|needle| lower.contains(needle));
+    if broad_review && !asks_for_list {
+        let mut tools = Vec::new();
+        if lower.contains("skill") {
+            tools.push("analyze_copilot_skills".to_string());
+        }
+        if lower.contains("agent") {
+            tools.push("analyze_copilot_agents".to_string());
+        }
+        if !tools.is_empty() {
+            return tools;
+        }
+    }
+    all_mission_control_insights_tools()
+}
+
+fn all_mission_control_insights_tools() -> Vec<String> {
+    [
+        "list_prompt_samples",
+        "get_prompt_sample",
+        "summarize_prompt_patterns",
+        "list_copilot_skills",
+        "read_skill_definition",
+        "analyze_copilot_skills",
+        "list_copilot_agents",
+        "read_agent_definition",
+        "analyze_copilot_agents",
+        "health",
+    ]
+    .iter()
+    .map(|tool| (*tool).to_string())
+    .collect()
 }
 
 fn project_root_for_mcp() -> Option<PathBuf> {
@@ -2109,6 +2445,7 @@ fn project_root_for_mcp() -> Option<PathBuf> {
 
 struct AnalyticsSdkHandler {
     app: AppHandle,
+    state: Arc<Mutex<AnalyticsSdkEventState>>,
 }
 
 #[async_trait::async_trait]
@@ -2121,7 +2458,148 @@ impl github_copilot_sdk::handler::SessionHandler for AnalyticsSdkHandler {
         if let Some(tool_name) = analytics_mcp_tool_name(&event) {
             emit_analytics_chat_tool_started(&self.app, &tool_name);
         }
+        if let Some(content) = sdk_assistant_message_content(&event) {
+            if let Ok(mut state) = self.state.lock() {
+                state.last_assistant_content = Some(content);
+            }
+        }
+        if let Some(delta) = sdk_assistant_delta_content(&event) {
+            if let Ok(mut state) = self.state.lock() {
+                state.streamed_content.push_str(&delta);
+            }
+        }
+        if let Some((kind, payload)) = sdk_definition_review_payload(&event) {
+            if let Ok(mut state) = self.state.lock() {
+                state.definition_reviews.insert(kind, payload);
+            }
+        }
     }
+}
+
+fn sdk_definition_review_payload(
+    event: &github_copilot_sdk::types::SessionEvent,
+) -> Option<(String, Value)> {
+    if event.event_type != "tool.execution_complete" {
+        return None;
+    }
+    if event
+        .data
+        .get("success")
+        .and_then(Value::as_bool)
+        .is_some_and(|success| !success)
+    {
+        return None;
+    }
+    let result = event.data.get("result")?;
+    for content in sdk_tool_result_texts(result) {
+        if let Ok(payload) = serde_json::from_str::<Value>(&content) {
+            if let Some((kind, payload)) = normalize_definition_review_payload(payload) {
+                return Some((kind, payload));
+            }
+        }
+        if let Some((kind, payload)) = partial_definition_review_payload(&content) {
+            return Some((kind, payload));
+        }
+    }
+    None
+}
+
+fn normalize_definition_review_payload(payload: Value) -> Option<(String, Value)> {
+    let kind = payload.get("kind").and_then(Value::as_str)?;
+    if !matches!(kind, "skills" | "agents") {
+        return None;
+    }
+    if payload.get("review").is_some() {
+        return Some((kind.to_string(), payload));
+    }
+    if let Some(review) = payload.get("artifact_review") {
+        return Some((
+            kind.to_string(),
+            serde_json::json!({ "kind": kind, "review": review }),
+        ));
+    }
+    None
+}
+
+fn partial_definition_review_payload(content: &str) -> Option<(String, Value)> {
+    let kind = extract_json_string_field(content, "kind")?;
+    if !matches!(kind.as_str(), "skills" | "agents") {
+        return None;
+    }
+    let review = extract_json_object_field(content, "artifact_review")?;
+    Some((
+        kind.clone(),
+        serde_json::json!({ "kind": kind, "review": review }),
+    ))
+}
+
+fn extract_json_string_field(content: &str, field: &str) -> Option<String> {
+    let needle = format!("\"{}\"", field);
+    let start = content.find(&needle)?;
+    let after_key = &content[start + needle.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let value_start = after_colon.strip_prefix('"')?;
+    let end = value_start.find('"')?;
+    Some(value_start[..end].to_string())
+}
+
+fn extract_json_object_field(content: &str, field: &str) -> Option<Value> {
+    let needle = format!("\"{}\"", field);
+    let start = content.find(&needle)?;
+    let after_key = &content[start + needle.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = &after_key[colon + 1..];
+    let object_offset = after_colon.find('{')?;
+    let object_start = start + needle.len() + colon + 1 + object_offset;
+    let mut depth = 0_i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, ch) in content[object_start..].char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+        if ch == '{' {
+            depth += 1;
+        } else if ch == '}' {
+            depth -= 1;
+            if depth == 0 {
+                let end = object_start + offset + ch.len_utf8();
+                return serde_json::from_str(&content[object_start..end]).ok();
+            }
+        }
+    }
+    None
+}
+
+fn sdk_tool_result_texts(result: &Value) -> Vec<String> {
+    let mut texts = Vec::new();
+    for key in ["detailedContent", "content"] {
+        match result.get(key) {
+            Some(Value::String(value)) => texts.push(value.clone()),
+            Some(Value::Array(items)) => {
+                for item in items {
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        texts.push(text.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    texts
 }
 
 fn analytics_mcp_tool_name(event: &github_copilot_sdk::types::SessionEvent) -> Option<String> {
@@ -2135,8 +2613,10 @@ fn analytics_mcp_tool_name(event: &github_copilot_sdk::types::SessionEvent) -> O
         "summarize_prompt_patterns",
         "list_copilot_skills",
         "read_skill_definition",
+        "analyze_copilot_skills",
         "list_copilot_agents",
         "read_agent_definition",
+        "analyze_copilot_agents",
     ];
     let tool_name = event
         .data
@@ -2211,6 +2691,8 @@ struct SdkAnalyticsAnswer {
     answer: String,
     #[serde(default)]
     artifacts: Vec<String>,
+    #[serde(default, skip_deserializing)]
+    definition_review_artifacts: Vec<AnalyticsArtifact>,
 }
 
 fn parse_sdk_analytics_answer(content: &str) -> Result<SdkAnalyticsAnswer, String> {
@@ -2425,6 +2907,382 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
         }
     }
     artifacts
+}
+
+fn definition_review_artifacts_from_state(
+    state: &Arc<Mutex<AnalyticsSdkEventState>>,
+) -> Vec<AnalyticsArtifact> {
+    let Ok(state) = state.lock() else {
+        return Vec::new();
+    };
+    let mut keys: Vec<_> = state.definition_reviews.keys().cloned().collect();
+    keys.sort();
+    keys.into_iter()
+        .filter_map(|key| state.definition_reviews.get(&key))
+        .flat_map(definition_review_artifacts_from_payload)
+        .collect()
+}
+
+fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArtifact> {
+    let kind = payload
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("definitions");
+    let label = if kind == "agents" { "Agent" } else { "Skill" };
+    let label_plural = if kind == "agents" { "Agents" } else { "Skills" };
+    let Some(review) = payload.get("review") else {
+        return Vec::new();
+    };
+    let mut artifacts = Vec::new();
+    artifacts.push(AnalyticsArtifact {
+        kind: "cards".to_string(),
+        title: format!("{} inventory", label_plural),
+        cards: definition_inventory_cards(review, label_plural),
+        ..Default::default()
+    });
+    let duplicate_rows = definition_duplicate_rows(review);
+    if !duplicate_rows.is_empty() {
+        artifacts.push(AnalyticsArtifact {
+            kind: "wide_table".to_string(),
+            title: format!("Duplicate {} IDs", label.to_ascii_lowercase()),
+            columns: vec!["ID".to_string(), "Count".to_string(), "Roots".to_string()],
+            rows: duplicate_rows,
+            ..Default::default()
+        });
+    }
+    let definition_rows = definition_inventory_rows(review, kind);
+    if !definition_rows.is_empty() {
+        artifacts.push(AnalyticsArtifact {
+            kind: "definition_inventory".to_string(),
+            title: format!("All {}", label_plural.to_ascii_lowercase()),
+            columns: vec![
+                "Name".to_string(),
+                "Summary".to_string(),
+                "Enabled".to_string(),
+                "Details".to_string(),
+            ],
+            rows: definition_rows,
+            ..Default::default()
+        });
+    }
+    let context_rows = definition_review_rows(
+        review
+            .get("context_cost")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+        "source_chars",
+        10,
+    );
+    if !context_rows.is_empty() {
+        artifacts.push(AnalyticsArtifact {
+            kind: "bars".to_string(),
+            title: format!("Largest {} definitions", label.to_ascii_lowercase()),
+            columns: vec![label.to_string(), "Root".to_string(), "Chars".to_string()],
+            rows: context_rows,
+            ..Default::default()
+        });
+    }
+    let description_rows = definition_review_rows(
+        review
+            .get("description_lengths")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+        "description_chars",
+        10,
+    );
+    if !description_rows.is_empty() {
+        artifacts.push(AnalyticsArtifact {
+            kind: "bars".to_string(),
+            title: format!("Longest {} descriptions", label.to_ascii_lowercase()),
+            columns: vec![label.to_string(), "Root".to_string(), "Chars".to_string()],
+            rows: description_rows,
+            ..Default::default()
+        });
+    }
+    let completeness_rows = definition_completeness_rows(review, label);
+    if !completeness_rows.is_empty() {
+        artifacts.push(AnalyticsArtifact {
+            kind: "wide_table".to_string(),
+            title: format!("{} completeness gaps", label),
+            columns: vec![
+                label.to_string(),
+                "Score".to_string(),
+                "Description".to_string(),
+            ],
+            rows: completeness_rows,
+            ..Default::default()
+        });
+    }
+    let overlap_rows = definition_overlap_rows(review, 8);
+    if !overlap_rows.is_empty() {
+        artifacts.push(AnalyticsArtifact {
+            kind: "wide_table".to_string(),
+            title: format!("{} overlap candidates", label),
+            columns: vec![
+                "Definition A".to_string(),
+                "Definition B".to_string(),
+                "Score".to_string(),
+                "Shared terms".to_string(),
+            ],
+            rows: overlap_rows,
+            ..Default::default()
+        });
+    }
+    let action_cards = definition_action_cards(review);
+    if !action_cards.is_empty() {
+        artifacts.push(AnalyticsArtifact {
+            kind: "cards".to_string(),
+            title: format!("Prioritized {} fixes", label.to_ascii_lowercase()),
+            cards: action_cards,
+            ..Default::default()
+        });
+    }
+    artifacts
+}
+
+fn definition_duplicate_rows(review: &Value) -> Vec<Vec<String>> {
+    review
+        .get("duplicate_groups")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|item| {
+            let roots = item
+                .get("roots")
+                .and_then(Value::as_array)
+                .map(|roots| {
+                    roots
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            Some(vec![
+                json_string(item, "id")?,
+                json_u64(item, "count").to_string(),
+                roots,
+            ])
+        })
+        .collect()
+}
+
+fn definition_inventory_rows(review: &Value, kind: &str) -> Vec<Vec<String>> {
+    review
+        .get("definitions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|item| {
+            let name = json_string(item, "id")?;
+            let summary =
+                json_string(item, "summary").unwrap_or_else(|| "No summary available.".to_string());
+            let enabled = if item.get("enabled").and_then(Value::as_bool).unwrap_or(true) {
+                "Yes"
+            } else {
+                "No"
+            };
+            let issues = item
+                .get("issues")
+                .and_then(Value::as_array)
+                .map(|issues| {
+                    issues
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let details = serde_json::json!({
+                "name": name,
+                "definition": json_string(item, "definition_ref").unwrap_or_else(|| name.clone()),
+                "kind": if kind == "agents" { "agents" } else { "skills" },
+                "summary": summary,
+                "enabled": enabled,
+                "root": json_string(item, "root").unwrap_or_else(|| "unknown".to_string()),
+                "size": json_u64(item, "source_chars"),
+                "descriptionChars": json_u64(item, "description_chars"),
+                "score": json_u64(item, "completeness_score"),
+                "issues": issues,
+            })
+            .to_string();
+            Some(vec![name, summary, enabled.to_string(), details])
+        })
+        .collect()
+}
+
+fn definition_inventory_cards(review: &Value, label_plural: &str) -> Vec<AnalyticsRecommendation> {
+    let inventory = review.get("inventory").unwrap_or(&Value::Null);
+    let discovered = json_u64(inventory, "discovered_definitions");
+    let analyzed = json_u64(inventory, "analyzed_definitions");
+    let skipped = json_u64(inventory, "skipped_definitions");
+    let model_context_definitions = json_u64(inventory, "model_context_definitions");
+    let model_context_skipped = json_u64(inventory, "model_context_skipped");
+    let roots = inventory
+        .get("roots")
+        .and_then(Value::as_array)
+        .map(|roots| {
+            roots
+                .iter()
+                .filter_map(|root| {
+                    Some(format!(
+                        "{}: {}",
+                        root.get("root").and_then(Value::as_str)?,
+                        json_u64(root, "count")
+                    ))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "No roots reported".to_string());
+    vec![
+        AnalyticsRecommendation {
+            title: format!("{} discovered", label_plural),
+            body: if model_context_skipped > 0 {
+                format!(
+                    "{} discovered and {} analyzed for dashboard metrics. {} definition{} were included in model context; {} skipped model context because of content caps.",
+                    discovered,
+                    analyzed,
+                    model_context_definitions,
+                    plural(model_context_definitions),
+                    model_context_skipped
+                )
+            } else {
+                format!(
+                    "{} discovered, {} analyzed{}.",
+                    discovered,
+                    analyzed,
+                    if skipped > 0 {
+                        format!(", {} skipped by caps", skipped)
+                    } else {
+                        String::new()
+                    }
+                )
+            },
+            severity: "info".to_string(),
+            metric: "inventory".to_string(),
+        },
+        AnalyticsRecommendation {
+            title: "Source roots".to_string(),
+            body: roots,
+            severity: "info".to_string(),
+            metric: "roots".to_string(),
+        },
+    ]
+}
+
+fn definition_review_rows(items: &[Value], value_key: &str, limit: usize) -> Vec<Vec<String>> {
+    items
+        .iter()
+        .take(limit)
+        .filter_map(|item| {
+            Some(vec![
+                json_string(item, "id")?,
+                json_string(item, "root").unwrap_or_else(|| "unknown".to_string()),
+                json_u64(item, value_key).to_string(),
+            ])
+        })
+        .collect()
+}
+
+fn definition_completeness_rows(review: &Value, label: &str) -> Vec<Vec<String>> {
+    review
+        .get("completeness")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|item| {
+            let id = json_string(item, "id")?;
+            let score = json_u64(item, "completeness_score");
+            let issues = item
+                .get("issues")
+                .and_then(Value::as_array)
+                .map(|issues| {
+                    issues
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .take(5)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| format!("{} looks complete", label));
+            Some(vec![id, format!("{}/5", score), issues])
+        })
+        .collect()
+}
+
+fn definition_overlap_rows(review: &Value, limit: usize) -> Vec<Vec<String>> {
+    review
+        .get("overlap_pairs")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .take(limit)
+        .filter_map(|item| {
+            let terms = item
+                .get("shared_tokens")
+                .and_then(Value::as_array)
+                .map(|tokens| {
+                    tokens
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .take(6)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            Some(vec![
+                json_string(item, "left_id")?,
+                json_string(item, "right_id")?,
+                format!(
+                    "{:.2}",
+                    item.get("score").and_then(Value::as_f64).unwrap_or(0.0)
+                ),
+                terms,
+            ])
+        })
+        .collect()
+}
+
+fn definition_action_cards(review: &Value) -> Vec<AnalyticsRecommendation> {
+    review
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .take(6)
+        .filter_map(|item| {
+            Some(AnalyticsRecommendation {
+                title: json_string(item, "title")?,
+                body: json_string(item, "body").unwrap_or_default(),
+                severity: json_string(item, "severity").unwrap_or_else(|| "info".to_string()),
+                metric: json_string(item, "metric")
+                    .unwrap_or_else(|| "definition_review".to_string()),
+            })
+        })
+        .collect()
+}
+
+fn json_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn json_u64(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
 fn daily_points_window(
@@ -3374,6 +4232,91 @@ mod tests {
     }
 
     #[test]
+    fn sdk_content_is_recovered_from_assistant_message() {
+        let event = test_session_event(
+            "assistant.message",
+            serde_json::json!({ "content": " {\"in_scope\":true,\"answer\":\"ok\"} " }),
+        );
+        assert_eq!(
+            sdk_assistant_message_content(&event),
+            Some(r#"{"in_scope":true,"answer":"ok"}"#.to_string())
+        );
+    }
+
+    #[test]
+    fn sdk_content_is_recovered_from_streamed_deltas() {
+        let state = Arc::new(Mutex::new(AnalyticsSdkEventState::default()));
+        {
+            let mut state = state.lock().expect("state lock");
+            state.streamed_content.push_str(r#"{"in_scope":true,"#);
+            state.streamed_content.push_str(r#""answer":"ok"}"#);
+        }
+        assert_eq!(
+            sdk_event_state_content(&state),
+            Some(r#"{"in_scope":true,"answer":"ok"}"#.to_string())
+        );
+    }
+
+    #[test]
+    fn sdk_definition_review_payload_is_captured_from_tool_result() {
+        let event = test_session_event(
+            "tool.execution_complete",
+            serde_json::json!({
+                "success": true,
+                "result": {
+                    "detailedContent": sample_definition_review_payload().to_string()
+                }
+            }),
+        );
+        let (kind, payload) = sdk_definition_review_payload(&event).expect("review payload");
+        assert_eq!(kind, "skills");
+        assert_eq!(
+            json_u64(
+                payload.get("review").unwrap().get("inventory").unwrap(),
+                "discovered_definitions"
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn sdk_definition_review_payload_is_captured_from_truncated_tool_result() {
+        let review = sample_definition_review_payload()
+            .get("review")
+            .unwrap()
+            .to_string();
+        let compact = format!(
+            r#"{{"schemaVersion":1,"kind":"skills","artifact_review":{},"summary":{{"discovered_definitions":2}},"definitions":["#,
+            review
+        );
+        let event = test_session_event(
+            "tool.execution_complete",
+            serde_json::json!({
+                "success": true,
+                "result": { "detailedContent": compact }
+            }),
+        );
+        let (kind, payload) =
+            sdk_definition_review_payload(&event).expect("partial review payload");
+        assert_eq!(kind, "skills");
+        assert!(payload.get("review").is_some());
+    }
+
+    #[test]
+    fn definition_review_artifacts_do_not_expose_paths() {
+        let payload = sample_definition_review_payload();
+        let artifacts = definition_review_artifacts_from_payload(&payload);
+        assert!(artifacts
+            .iter()
+            .any(|artifact| artifact.title == "Skills inventory"));
+        let rendered = serde_json::to_string(&artifacts).expect("serialize artifacts");
+        assert!(!rendered.contains("relative_path"));
+        assert!(!rendered.contains("copilot:"));
+        assert!(rendered.contains("Largest skill definitions"));
+        assert!(rendered.contains("Skill completeness gaps"));
+    }
+
+    #[test]
     fn prompt_skill_agent_questions_require_insights_tools() {
         assert!(requires_insights_tools(
             "Analyze my recent Copilot prompts."
@@ -3387,7 +4330,11 @@ mod tests {
     fn mcp_server_config_exposes_insights_tools() {
         let script_path = PathBuf::from("/tmp/mission-control-insights.js");
         let project_root = PathBuf::from("/tmp/project");
-        let servers = mission_control_insights_mcp_servers(&script_path, Some(&project_root));
+        let servers = mission_control_insights_mcp_servers(
+            &script_path,
+            Some(&project_root),
+            all_mission_control_insights_tools(),
+        );
         let server = servers
             .get("mission-control-insights")
             .expect("insights server configured");
@@ -3398,9 +4345,27 @@ mod tests {
         assert_eq!(config.args, vec!["/tmp/mission-control-insights.js"]);
         assert!(config.tools.contains(&"list_prompt_samples".to_string()));
         assert!(config.tools.contains(&"read_skill_definition".to_string()));
+        assert!(config.tools.contains(&"analyze_copilot_skills".to_string()));
+        assert!(config.tools.contains(&"analyze_copilot_agents".to_string()));
         assert_eq!(
             config.env.get("CMC_PROJECT_ROOT"),
             Some(&"/tmp/project".to_string())
+        );
+    }
+
+    #[test]
+    fn broad_agent_review_only_exposes_bulk_agent_tool() {
+        assert_eq!(
+            mission_control_insights_tools_for_prompt("Review my Copilot agents."),
+            vec!["analyze_copilot_agents".to_string()]
+        );
+    }
+
+    #[test]
+    fn broad_skill_review_only_exposes_bulk_skill_tool() {
+        assert_eq!(
+            mission_control_insights_tools_for_prompt("Review my Copilot skills."),
+            vec!["analyze_copilot_skills".to_string()]
         );
     }
 
@@ -3432,5 +4397,68 @@ mod tests {
             ..Default::default()
         };
         assert!(!is_mission_control_insights_permission(&data));
+    }
+
+    fn test_session_event(
+        event_type: &str,
+        data: Value,
+    ) -> github_copilot_sdk::types::SessionEvent {
+        github_copilot_sdk::types::SessionEvent {
+            id: "event-1".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            parent_id: None,
+            ephemeral: None,
+            agent_id: None,
+            debug_cli_received_at_ms: None,
+            debug_ws_forwarded_at_ms: None,
+            event_type: event_type.to_string(),
+            data,
+        }
+    }
+
+    fn sample_definition_review_payload() -> Value {
+        serde_json::json!({
+            "kind": "skills",
+            "review": {
+                "inventory": {
+                    "discovered_definitions": 2,
+                    "analyzed_definitions": 2,
+                    "skipped_definitions": 0,
+                    "duplicate_id_groups": 0,
+                    "roots": [{ "root": "~/.copilot/skills", "count": 2 }]
+                },
+                "context_cost": [
+                    { "id": "large-skill", "root": "~/.copilot/skills", "source_chars": 16000 },
+                    { "id": "small-skill", "root": "~/.copilot/skills", "source_chars": 1200 }
+                ],
+                "description_lengths": [
+                    { "id": "large-skill", "root": "~/.copilot/skills", "description_chars": 720 }
+                ],
+                "completeness": [
+                    {
+                        "id": "small-skill",
+                        "root": "~/.copilot/skills",
+                        "completeness_score": 2,
+                        "issues": ["missing anti-triggers", "missing validation"]
+                    }
+                ],
+                "overlap_pairs": [
+                    {
+                        "left_id": "large-skill",
+                        "right_id": "small-skill",
+                        "score": 0.44,
+                        "shared_tokens": ["skill", "review", "routing"]
+                    }
+                ],
+                "actions": [
+                    {
+                        "title": "Trim oversized skills",
+                        "body": "large-skill has the largest context footprint.",
+                        "severity": "warning",
+                        "metric": "definition_size"
+                    }
+                ]
+            }
+        })
     }
 }
