@@ -29,7 +29,7 @@
       color: #e8ecff;
       font-family: var(--cmc-ui-font);
     }
-    body.theme-light, body.theme-light html { background: #dfe7f2; color: #172033; }
+    body.theme-light, body.theme-light html { background: #ffffff; color: #172033; }
     body.theme-light {
       --cmc-scrollbar-track: #e0e6f3;
       --cmc-scrollbar-track-border: #d6dee9;
@@ -56,9 +56,7 @@
       background:
         linear-gradient(180deg, #1d2a55 0%, #131b39 60%, #0d1430 100%);
       border-bottom: 2px solid #ffd54a;
-      box-shadow:
-        0 1px 0 rgba(255, 213, 74, 0.25) inset,
-        0 6px 14px rgba(0, 0, 0, 0.55);
+      box-shadow: 0 1px 0 rgba(255, 213, 74, 0.25) inset;
       font-size: 13px;
       letter-spacing: 0.06em;
       user-select: none;
@@ -66,11 +64,9 @@
       z-index: 10;
     }
     body.theme-light #topbar {
-      background: linear-gradient(180deg, #fbfdff 0%, #eef3f9 100%);
+      background: linear-gradient(180deg, #ffffff 0%, #f5f8fc 100%);
       border-bottom: 1px solid #b9c6d8;
-      box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.9) inset,
-        0 10px 26px rgba(32, 47, 76, 0.13);
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset;
     }
     #topbar .brand {
       display: inline-flex;
@@ -148,9 +144,19 @@
       stroke-linecap: round;
       stroke-linejoin: round;
     }
+    .topbar-route svg {
+      width: 20px;
+      height: 20px;
+      stroke-width: 2;
+    }
     #reset-btn svg {
       width: 18px;
       height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     #reset-btn .reset-arrow {
       stroke-width: 2.2;
@@ -214,7 +220,6 @@
        so the icon stays crisp in both themes and morphs between the
        "hide" (inward arrows) and "show" (outward arrows) states. */
     #panels-btn,
-    #reset-btn,
     #settings-btn,
     #theme-btn {
       display: inline-flex;
@@ -301,17 +306,6 @@
       background: #ffffff;
       color: #24344f;
       border-color: #b9c6d8;
-    }
-    #reset-btn {
-      height: 28px;
-      padding: 0;
-      border-color: rgba(96, 255, 154, 0.35);
-      color: #b8ffcf;
-      border-radius: 9px;
-    }
-    body.theme-light #reset-btn {
-      border-color: #8fb0d8;
-      color: #1e3a5f;
     }
     @media (max-width: 1280px) {
       #topbar {
@@ -465,6 +459,21 @@
       font-weight: 700;
     }
     body.theme-light .settings-label { color: #1e3a5f; }
+    .settings-description {
+      margin: 0;
+      color: rgba(232, 236, 255, 0.72);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    body.theme-light .settings-description { color: #64748b; }
+    .settings-reset-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: fit-content;
+      padding: 9px 12px;
+    }
     .settings-select {
       width: 100%;
       border: 1px solid #4566c7;
@@ -753,7 +762,7 @@
       bottom: 0;
       background: #0a0e22;
     }
-    body.theme-light #game { background: #dfe7f2; }
+    body.theme-light #game { background: #ffffff; }
     canvas { display: block; }
     #dashboard-overlay {
       position: fixed;
@@ -827,7 +836,10 @@
     }
     body.history-route #game,
     body.history-route #dashboard-overlay,
-    body.history-route #dashboard-loading {
+    body.history-route #dashboard-loading,
+    body.analytics-route #game,
+    body.analytics-route #dashboard-overlay,
+    body.analytics-route #dashboard-loading {
       display: none;
     }
     #history-screen {
@@ -863,10 +875,7 @@
       box-sizing: border-box;
       padding: 24px;
       color: var(--history-text);
-      background:
-        radial-gradient(circle at 18% 10%, rgba(54, 215, 255, 0.18), transparent 30%),
-        radial-gradient(circle at 82% 4%, rgba(96, 255, 154, 0.12), transparent 28%),
-        linear-gradient(180deg, #071121 0%, #030815 100%);
+      background: #05081a;
       font-family: var(--cmc-ui-font);
     }
     #history-screen::before,
@@ -877,6 +886,7 @@
       pointer-events: none;
     }
     #history-screen::before {
+      display: none;
       opacity: 0.34;
       background-image:
         linear-gradient(rgba(97, 214, 255, 0.11) 1px, transparent 1px),
@@ -885,6 +895,7 @@
       mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), transparent 80%);
     }
     #history-screen::after {
+      display: none;
       opacity: 0.2;
       background: repeating-linear-gradient(180deg, transparent 0 7px, rgba(255, 255, 255, 0.08) 8px);
       mix-blend-mode: screen;
@@ -914,10 +925,7 @@
       --history-palette-5: #047857;
       --history-palette-6: #c2410c;
       --history-palette-7: #4f46e5;
-      background:
-        radial-gradient(circle at 20% 6%, rgba(15, 99, 206, 0.16), transparent 30%),
-        radial-gradient(circle at 86% 0%, rgba(21, 128, 61, 0.12), transparent 28%),
-        linear-gradient(180deg, #e6eef8 0%, #d8e3ef 100%);
+      background: #ffffff;
     }
     body.theme-light #history-screen::before { opacity: 0.28; }
     body.theme-light #history-screen::after { opacity: 0.12; mix-blend-mode: multiply; }
@@ -2061,6 +2069,7 @@
     .history-session-distribution,
     .history-failure-list,
     .cmc-session-menu,
+    .analytics-chat-transcript,
     #dom-session .cmc-panel-body,
     #dom-feed .cmc-panel-body,
     #dom-quarter .cmc-panel-body {
@@ -2076,6 +2085,7 @@
     .history-session-distribution::-webkit-scrollbar,
     .history-failure-list::-webkit-scrollbar,
     .cmc-session-menu::-webkit-scrollbar,
+    .analytics-chat-transcript::-webkit-scrollbar,
     #dom-session .cmc-panel-body::-webkit-scrollbar,
     #dom-feed .cmc-panel-body::-webkit-scrollbar,
     #dom-quarter .cmc-panel-body::-webkit-scrollbar {
@@ -2091,6 +2101,7 @@
     .history-session-distribution::-webkit-scrollbar-track,
     .history-failure-list::-webkit-scrollbar-track,
     .cmc-session-menu::-webkit-scrollbar-track,
+    .analytics-chat-transcript::-webkit-scrollbar-track,
     #dom-session .cmc-panel-body::-webkit-scrollbar-track,
     #dom-feed .cmc-panel-body::-webkit-scrollbar-track,
     #dom-quarter .cmc-panel-body::-webkit-scrollbar-track {
@@ -2107,6 +2118,7 @@
     .history-session-distribution::-webkit-scrollbar-thumb,
     .history-failure-list::-webkit-scrollbar-thumb,
     .cmc-session-menu::-webkit-scrollbar-thumb,
+    .analytics-chat-transcript::-webkit-scrollbar-thumb,
     #dom-session .cmc-panel-body::-webkit-scrollbar-thumb,
     #dom-feed .cmc-panel-body::-webkit-scrollbar-thumb,
     #dom-quarter .cmc-panel-body::-webkit-scrollbar-thumb {
@@ -2124,6 +2136,7 @@
     .history-session-distribution::-webkit-scrollbar-thumb:hover,
     .history-failure-list::-webkit-scrollbar-thumb:hover,
     .cmc-session-menu::-webkit-scrollbar-thumb:hover,
+    .analytics-chat-transcript::-webkit-scrollbar-thumb:hover,
     #dom-session .cmc-panel-body::-webkit-scrollbar-thumb:hover,
     #dom-feed .cmc-panel-body::-webkit-scrollbar-thumb:hover,
     #dom-quarter .cmc-panel-body::-webkit-scrollbar-thumb:hover {
@@ -2273,6 +2286,463 @@
     body.theme-light .cmc-replay-knob { background: #234ee8; }
     body.theme-light .cmc-replay-status { color: #2442b8; }
 
+    #analytics-chat-screen {
+      position: fixed;
+      inset: 40px 0 0 0;
+      z-index: 8;
+      display: none;
+      overflow: hidden;
+      padding: 24px;
+      box-sizing: border-box;
+      background: #05081a;
+    }
+    body.analytics-route #analytics-chat-screen { display: block; }
+    body.theme-light #analytics-chat-screen {
+      background: #ffffff;
+    }
+    .analytics-chat-shell {
+      max-width: 1180px;
+      height: calc(100vh - 88px);
+      min-height: 0;
+      margin: 0 auto;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      gap: 16px;
+    }
+    .analytics-chat-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      align-items: start;
+    }
+    .analytics-chat-title {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: 0.02em;
+      color: #f5f7ff;
+    }
+    body.theme-light .analytics-chat-title { color: #172033; }
+    .analytics-chat-subtitle {
+      margin: 6px 0 0;
+      color: #aebbf0;
+      line-height: 1.45;
+      max-width: 920px;
+      white-space: nowrap;
+    }
+    body.theme-light .analytics-chat-subtitle { color: #52627a; }
+    .analytics-chat-status,
+    .analytics-chat-suggestions,
+    .analytics-message,
+    .analytics-artifact {
+      border: 1px solid rgba(127, 151, 239, 0.35);
+      background: rgba(13, 20, 48, 0.78);
+      border-radius: 14px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.24);
+    }
+    body.theme-light .analytics-chat-status,
+    body.theme-light .analytics-chat-suggestions,
+    body.theme-light .analytics-message,
+    body.theme-light .analytics-artifact {
+      background: rgba(255, 255, 255, 0.88);
+      border-color: #cbd5e1;
+      box-shadow: 0 14px 32px rgba(32, 47, 76, 0.12);
+    }
+    .analytics-chat-status {
+      padding: 10px 12px;
+      color: #b8ffcf;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    body.theme-light .analytics-chat-status { color: #166534; }
+    .analytics-chat-status-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .analytics-token-help {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      border: 1px solid rgba(127, 151, 239, 0.45);
+      background: rgba(13, 20, 48, 0.78);
+      color: #b8ffcf;
+      font-size: 14px;
+      font-weight: 800;
+      line-height: 1;
+      cursor: pointer;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+    }
+    .analytics-token-help:hover,
+    .analytics-token-help:focus-visible {
+      color: #f8d84a;
+      border-color: rgba(248, 216, 74, 0.7);
+      outline: none;
+    }
+    body.theme-light .analytics-token-help {
+      background: rgba(255, 255, 255, 0.9);
+      border-color: #cbd5e1;
+      color: #166534;
+      box-shadow: 0 8px 18px rgba(32, 47, 76, 0.12);
+    }
+    .analytics-token-notice {
+      position: fixed;
+      inset: 0;
+      z-index: 150;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(2, 6, 23, 0.72);
+      backdrop-filter: blur(8px);
+    }
+    .analytics-token-notice.visible { display: flex; }
+    .analytics-token-dialog {
+      width: min(520px, 100%);
+      border: 1px solid rgba(127, 151, 239, 0.45);
+      border-radius: 18px;
+      background: rgba(13, 20, 48, 0.96);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+      color: #e8ecff;
+      padding: 20px;
+    }
+    body.theme-light .analytics-token-dialog {
+      background: rgba(255, 255, 255, 0.98);
+      border-color: #cbd5e1;
+      color: #172033;
+      box-shadow: 0 24px 70px rgba(32, 47, 76, 0.24);
+    }
+    .analytics-token-dialog h2 {
+      margin: 0 0 10px;
+      color: #f8d84a;
+      font-size: 20px;
+    }
+    .analytics-token-dialog p {
+      margin: 0 0 12px;
+      line-height: 1.5;
+    }
+    .analytics-token-dialog .cmc-button {
+      margin-top: 4px;
+      width: 100%;
+      justify-content: center;
+      padding: 11px 14px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .analytics-chat-suggestions {
+      display: grid;
+      gap: 14px;
+      padding: 14px 48px 14px 14px;
+      position: relative;
+      color: #e8ecff;
+      line-height: 1.48;
+    }
+    body.theme-light .analytics-chat-suggestions { color: #172033; }
+    .analytics-chat-suggestions[hidden] {
+      display: none;
+    }
+    .analytics-chat-prompt-copy {
+      margin: 0;
+    }
+    .analytics-chat-prompt-list {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .analytics-chat-prompt-list[hidden] {
+      display: none;
+    }
+    .analytics-chat-prompt-close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid rgba(127, 151, 239, 0.35);
+      border-radius: 999px;
+      background: rgba(7, 12, 30, 0.5);
+      color: #aebbf0;
+      cursor: pointer;
+      font: inherit;
+      line-height: 1;
+    }
+    .analytics-chat-prompt-close svg {
+      width: 16px;
+      height: 16px;
+      display: block;
+      stroke: currentColor;
+    }
+    .analytics-chat-prompt-close:hover {
+      color: #f5f7ff;
+      border-color: rgba(97, 214, 255, 0.7);
+    }
+    body.theme-light .analytics-chat-prompt-close {
+      background: rgba(255, 255, 255, 0.7);
+      color: #52627a;
+      border-color: #cbd5e1;
+    }
+    body.theme-light .analytics-chat-prompt-close:hover {
+      color: #172033;
+      border-color: #60a5fa;
+    }
+    .analytics-message-prompts {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    .analytics-chip {
+      border: 1px solid rgba(96, 255, 154, 0.36);
+      background: rgba(96, 255, 154, 0.1);
+      color: #d7ffe4;
+      border-radius: 999px;
+      padding: 7px 11px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+    }
+    body.theme-light .analytics-chip {
+      background: #f0fdf4;
+      border-color: #86efac;
+      color: #166534;
+    }
+    .analytics-chat-transcript {
+      height: 100%;
+      min-height: 0;
+      display: grid;
+      align-content: start;
+      align-self: stretch;
+      gap: 14px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .analytics-message {
+      padding: 14px;
+      color: #e8ecff;
+      line-height: 1.48;
+    }
+    body.theme-light .analytics-message { color: #172033; }
+    .analytics-message.user {
+      justify-self: end;
+      max-width: 760px;
+      background: rgba(37, 99, 235, 0.22);
+    }
+    .analytics-message.assistant {
+      justify-self: start;
+      max-width: 940px;
+    }
+    .analytics-message-body p {
+      margin: 0 0 10px;
+    }
+    .analytics-message-body p:last-child {
+      margin-bottom: 0;
+    }
+    .analytics-message-body ul {
+      margin: 8px 0 12px 22px;
+      padding: 0;
+    }
+    .analytics-message-body li {
+      margin: 4px 0;
+    }
+    .analytics-message-label {
+      color: #61d6ff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+    body.theme-light .analytics-message-label { color: #1d4ed8; }
+    .analytics-tool-calls {
+      display: grid;
+      gap: 4px;
+      margin-top: 10px;
+      color: #aebbf0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    body.theme-light .analytics-tool-calls { color: #475569; }
+    .analytics-artifacts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .analytics-artifact {
+      padding: 12px;
+      overflow: hidden;
+    }
+    .analytics-artifact-cards {
+      grid-column: 1 / -1;
+      overflow: visible;
+    }
+    .analytics-artifact h3 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      color: #ffd54a;
+    }
+    body.theme-light .analytics-artifact h3 { color: #92400e; }
+    .analytics-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .analytics-table th,
+    .analytics-table td {
+      padding: 6px 7px;
+      border-bottom: 1px solid rgba(127, 151, 239, 0.22);
+      text-align: left;
+    }
+    .analytics-bars { display: grid; gap: 8px; }
+    .analytics-bar-row {
+      display: grid;
+      grid-template-columns: 80px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+    }
+    .analytics-bar {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(97, 214, 255, 0.18);
+      overflow: hidden;
+    }
+    .analytics-bar span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #60ff9a, #61d6ff);
+    }
+    .analytics-card-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 8px;
+    }
+    .analytics-card {
+      min-width: 0;
+      border: 1px solid rgba(255, 213, 74, 0.28);
+      border-radius: 10px;
+      padding: 10px;
+      color: #d7defc;
+      font-size: 12px;
+      line-height: 1.42;
+    }
+    body.theme-light .analytics-card { color: #334155; }
+    .analytics-card strong {
+      display: block;
+      color: #ffd54a;
+      margin-bottom: 4px;
+    }
+    body.theme-light .analytics-card strong { color: #92400e; }
+    .analytics-caveats {
+      margin-top: 12px;
+      color: #aebbf0;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    body.theme-light .analytics-caveats { color: #64748b; }
+    .analytics-chat-form {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid rgba(127, 151, 239, 0.42);
+      border-radius: 999px;
+      background: rgba(245, 248, 255, 0.96);
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22);
+    }
+    body.theme-light .analytics-chat-form {
+      background: rgba(255, 255, 255, 0.96);
+      border-color: #d8dee9;
+      box-shadow: 0 14px 32px rgba(32, 47, 76, 0.1);
+    }
+    .analytics-chat-plus,
+    .analytics-chat-mic {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: rgba(5, 9, 24, 0.78);
+      font: inherit;
+      font-size: 28px;
+      line-height: 1;
+    }
+    .analytics-chat-plus {
+      cursor: pointer;
+    }
+    .analytics-chat-plus:hover {
+      background: rgba(11, 18, 42, 0.08);
+      color: #050914;
+    }
+    .analytics-chat-mic {
+      display: none;
+      cursor: default;
+      font-size: 22px;
+    }
+    .analytics-chat-input {
+      min-width: 0;
+      height: 44px;
+      box-sizing: border-box;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #111827;
+      padding: 0 6px;
+      font: inherit;
+      outline: none;
+    }
+    .analytics-chat-input::placeholder,
+    body.theme-light .analytics-chat-input::placeholder {
+      color: rgba(17, 24, 39, 0.45);
+    }
+    .analytics-chat-form .cmc-button {
+      height: 44px;
+      min-width: 44px;
+    }
+    .analytics-chat-form .analytics-chat-submit {
+      width: 44px;
+      padding: 0;
+      border-radius: 999px;
+      border-color: #050914;
+      background: #050914;
+      color: #ffffff;
+      font-size: 28px;
+      line-height: 1;
+    }
+    .analytics-chat-form .analytics-chat-submit:hover {
+      background: #111827;
+      border-color: #111827;
+    }
+    @media (max-width: 760px) {
+      #analytics-chat-screen { padding: 16px; }
+      .analytics-chat-shell { height: calc(100vh - 72px); }
+      .analytics-chat-header { flex-direction: column; }
+      .analytics-chat-subtitle { white-space: normal; }
+      .analytics-chat-form {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+      }
+      .analytics-chat-mic {
+        display: none;
+      }
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
     #update-banner {
       position: fixed;
       top: 52px;
@@ -2338,7 +2808,6 @@
   <div id="topbar">
     <span class="brand">Copilot Mission Control</span>
     <span id="topbar-controls">
-      <span id="model-chip" class="empty" title="Active model for the selected session"></span>
       <span class="topbar-route-group" role="group" aria-label="App views">
         <button id="mission-route-btn" class="topbar-button topbar-route active" type="button" title="Show Home" aria-label="Show Home" aria-current="page">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2353,13 +2822,14 @@
             <path d="M12 7v5l3.5 2"></path>
           </svg>
         </button>
+        <button id="analytics-route-btn" class="topbar-button topbar-route" type="button" title="Ask Analytics Chat" aria-label="Ask Analytics Chat">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 5h16v11H9l-5 4V5Z"></path>
+            <path d="M8 9h8"></path>
+            <path d="M8 12.5h6"></path>
+          </svg>
+        </button>
       </span>
-      <button id="reset-btn" class="topbar-button" type="button" title="Reset visible activity counters without deleting Copilot session files" aria-label="Reset visible activity counters">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path class="reset-arc" d="M5 12a7 7 0 1 0 2.1-5"></path>
-          <path class="reset-arrow" d="M5 4v4.7h4.7"></path>
-        </svg>
-      </button>
       <button id="panels-btn" class="topbar-button" type="button" title="Hide side panels for focus mode" aria-label="Hide side panels for focus mode"></button>
       <button id="settings-btn" class="topbar-button" type="button" title="Open settings" aria-label="Open settings">
         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -2367,6 +2837,7 @@
         </svg>
       </button>
       <button id="theme-btn" class="topbar-button" type="button" title="Toggle light/dark theme" aria-label="Switch to light theme">🌙</button>
+      <span id="model-chip" class="empty" title="Active model for the selected session"></span>
     </span>
   </div>
 
@@ -2413,6 +2884,41 @@
       </section>
     </div>
   </main>
+  <main id="analytics-chat-screen" aria-hidden="true" aria-labelledby="analytics-chat-title" tabindex="-1">
+    <div class="analytics-chat-shell">
+      <header class="analytics-chat-header">
+        <div>
+          <h1 id="analytics-chat-title" class="analytics-chat-title">Mission Analytics Chat</h1>
+        </div>
+        <div class="analytics-chat-status-wrap">
+          <div id="analytics-chat-status" class="analytics-chat-status">Waiting for analytics…</div>
+          <button id="analytics-token-help" class="analytics-token-help" type="button" aria-label="About Mission Analytics Chat token usage" title="About token usage">?</button>
+        </div>
+      </header>
+      <section id="analytics-chat-suggestions" class="analytics-chat-suggestions" aria-label="Suggested analytics prompts"></section>
+      <section id="analytics-chat-transcript" class="analytics-chat-transcript" aria-live="polite"></section>
+      <form id="analytics-chat-form" class="analytics-chat-form">
+        <label class="sr-only" for="analytics-chat-input">Ask an analytics question</label>
+        <button id="analytics-chat-new" class="analytics-chat-plus" type="button" aria-label="New chat">+</button>
+        <input id="analytics-chat-input" class="analytics-chat-input" type="text" autocomplete="off" placeholder="Ask what changed this week…" />
+        <span class="analytics-chat-mic" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" role="img" focusable="false">
+            <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" fill="none" stroke="currentColor" stroke-width="2" />
+            <path d="M19 11a7 7 0 0 1-14 0M12 18v4M8 22h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </span>
+        <button id="analytics-chat-submit" class="cmc-button analytics-chat-submit" type="submit" aria-label="Ask">↑</button>
+      </form>
+    </div>
+  </main>
+  <section id="analytics-token-notice" class="analytics-token-notice" aria-hidden="true">
+    <div class="analytics-token-dialog" role="dialog" aria-modal="true" aria-labelledby="analytics-token-title" tabindex="-1">
+      <h2 id="analytics-token-title">Welcome to Mission Analytics Chat</h2>
+      <p>Answers are generated using the GitHub Copilot SDK through your local Copilot CLI setup. Asking questions here will consume Copilot requests and tokens.</p>
+      <p>The app sends indexed Copilot Mission Control analytics summaries to the model. If you ask about prompts, skills, or agents, it may also use local read-only Mission Control Insights tools to inspect bounded Copilot data and definitions.</p>
+      <button id="analytics-token-ack" class="cmc-button" type="button">I understand</button>
+    </div>
+  </section>
 
   <section id="settings-overlay" aria-hidden="true">
     <div id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
@@ -2430,6 +2936,17 @@
             <option value="medieval">Medieval Kingdom</option>
           </select>
         </label>
+        <div class="settings-field">
+          <span class="settings-label">Session counters</span>
+          <p class="settings-description">Reset visible activity counters without deleting Copilot session files.</p>
+          <button id="reset-btn" class="cmc-button warn settings-reset-button" type="button" title="Reset visible activity counters without deleting Copilot session files" aria-label="Reset visible activity counters">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path class="reset-arc" d="M5 12a7 7 0 1 0 2.1-5"></path>
+              <path class="reset-arrow" d="M5 4v4.7h4.7"></path>
+            </svg>
+            Reset counters
+          </button>
+        </div>
       </div>
       <div class="cmc-actions">
         <button id="settings-done" class="cmc-button accent" type="button">Done</button>
@@ -2488,6 +3005,7 @@
     </div>
   </section>
 
+  <script src="./settings.js"></script>
   <script src="./hud.js"></script>
   <script src="./phaser.min.js"></script>
   <script type="module" src="./main.js"></script>

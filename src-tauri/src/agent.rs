@@ -452,6 +452,7 @@ const SUPPORTED_SCHEMA_MAJOR: &str = "1";
 const REMOTE_COPILOT_SCHEMA_INDEX_URL: &str =
     "https://danwahlin.github.io/copilot-mission-control/provider-schemas/copilot/index.json";
 const SCHEMA_FETCH_TIMEOUT_SECS: u64 = 2;
+const MISSION_CONTROL_ANALYTICS_MARKER: &str = "COPILOT_MISSION_CONTROL_ANALYTICS_CHAT_IGNORE";
 static COPILOT_SCHEMA: OnceLock<(ProviderSchema, Vec<String>)> = OnceLock::new();
 static ACTIVITY_CACHE: OnceLock<RwLock<AgentActivity>> = OnceLock::new();
 static ACTIVITY_REFRESH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1322,6 +1323,17 @@ fn first_existing_child(parent: &Path, names: &[String]) -> PathBuf {
         .map(|name| parent.join(name))
         .find(|path| path.exists())
         .unwrap_or_else(|| parent.join(&names[0]))
+}
+
+fn is_mission_control_analytics_session(events_path: &Path) -> bool {
+    let Ok(file) = fs::File::open(events_path) else {
+        return false;
+    };
+    let reader = BufReader::new(file);
+    reader.lines().map_while(Result::ok).any(|line| {
+        line.contains(MISSION_CONTROL_ANALYTICS_MARKER)
+            || line.contains("copilot-mission-control-analytics")
+    })
 }
 
 fn activity_cache() -> &'static RwLock<AgentActivity> {
@@ -2253,7 +2265,6 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
     let now = SystemTime::now();
 
     for (session_path, modified) in session_dirs {
-        active_session_paths.insert(session_path.clone());
         let session_id = session_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -2261,6 +2272,10 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
             .to_string();
         let workspace_path = first_existing_child(&session_path, &schema.session.workspace_files);
         let events_path = first_existing_child(&session_path, &schema.session.events_files);
+        if is_mission_control_analytics_session(&events_path) {
+            continue;
+        }
+        active_session_paths.insert(session_path.clone());
         active_events_paths.insert(events_path.clone());
         let workspace = parse_workspace(&workspace_path, &schema);
         let session_name = sanitize_session_title(workspace.get("name"));

@@ -62,7 +62,21 @@ interface ArrivalEffect {
 }
 
 declare global {
+  interface CmcSettings {
+    keys: {
+      theme: string;
+      appTheme: string;
+      panelsHidden: string;
+      missionPrefs: string;
+    };
+    get: (key: string) => string | null;
+    getBool: (key: string) => boolean;
+    getJson: <T>(key: string, fallback: T) => T;
+    setJson: (key: string, value: unknown) => void;
+  }
+
   interface Window {
+    __cmcSettings?: CmcSettings;
     __missionControlFixture?: CopilotActivity;
     __missionControlAutoFixture?: boolean;
     __cmcOnAgentActivityChanged?: () => void;
@@ -110,13 +124,17 @@ const DARK_THEME: MissionTheme = {
 
 const LIGHT_THEME: MissionTheme = {
   mode: 'light',
-  backdropFill: 0xdfe7f2,
+  backdropFill: 0xffffff,
   panelBg: 0xffffff,
   text: '#172033',
   muted: '#52627a',
 };
 
 let theme: MissionTheme = DARK_THEME;
+
+function settings() {
+  return window.__cmcSettings;
+}
 
 function setActiveTheme(mode: ThemeMode) {
   if (theme.mode === mode) return false;
@@ -126,7 +144,8 @@ function setActiveTheme(mode: ThemeMode) {
 
 function loadInitialThemeMode(): ThemeMode {
   try {
-    const stored = window.localStorage?.getItem('cmc_theme');
+    const appSettings = settings();
+    const stored = appSettings?.get(appSettings.keys.theme);
     if (stored === 'light' || stored === 'dark') return stored;
   } catch { /* private mode / no storage — fall through */ }
   return 'dark';
@@ -138,7 +157,8 @@ function normalizeAppTheme(value: string | null | undefined): AppTheme {
 
 function loadInitialAppTheme(): AppTheme {
   try {
-    return normalizeAppTheme(window.localStorage?.getItem('cmc_app_theme'));
+    const appSettings = settings();
+    return normalizeAppTheme(appSettings?.get(appSettings.keys.appTheme));
   } catch {
     return 'space';
   }
@@ -172,13 +192,14 @@ const SPACE_ART_SET: MissionArtSet = {
     terminal: 'console_wide_teal',
     signal: 'telescope_blue',
     hooks: 'screen_radar_blue',
-    delegates: 'ship_fighter_blue',
+    delegates: 'ship_fighter_hires',
     skills: 'satellite_dish_stand',
     court: 'console_sphere',
     mcp: 'satellite_8panel',
   },
   quarterSpriteScale: {
     hooks: 0.82,
+    delegates: 1.1,
   },
   quarterSpriteOffsetY: {
     library: 0.12,
@@ -231,10 +252,10 @@ const QUARTER_COLORS: Record<MissionCategory, number> = {
   forge: 0xf0911d,
   library: 0xe1ae45,
   terminal: 0x86d4b7,
-  signal: 0xc37ee8,
+  signal: 0x5b8cff,
   hooks: 0x61d6ff,
-  delegates: 0xfc60c7,
-  skills: 0xda58e0,
+  delegates: 0x8b5cf6,
+  skills: 0xff6f61,
   court: 0x2fc5e8,
   mcp: 0x45cea5,
   alert: 0xff5252,
@@ -488,7 +509,8 @@ export class MissionControlScene extends Phaser.Scene {
     // the mission paints in its final layout instead of flashing the
     // side panels in for one frame and then collapsing them.
     try {
-      this.panelsHidden = localStorage.getItem('cmc_panels_hidden') === '1';
+      const appSettings = settings();
+      this.panelsHidden = appSettings?.getBool(appSettings.keys.panelsHidden) ?? false;
     } catch { /* private mode / quota — fall back to default false */ }
     this.renderActivity();
     // Bootstrap is done — any further ingest is a genuine push from
@@ -1213,18 +1235,11 @@ export class MissionControlScene extends Phaser.Scene {
   private drawBackground() {
     const layout = this.layout;
     if (theme.mode === 'light') {
-      // Light mode uses a cool slate surface instead of a near-white wash
-      // so the mission map reads as a designed cockpit, not an empty page.
-      this.map.fillGradientStyle(0xf1f5fb, 0xf1f5fb, 0xd7e1ee, 0xdbe4ef, 1, 1, 1, 1);
+      this.map.fillStyle(theme.backdropFill, 1);
       this.map.fillRect(0, 0, W, H);
       if (layout) {
-        this.map.fillStyle(0xc2d7f2, 0.24);
+        this.map.fillStyle(0xdceaf8, 0.46);
         this.map.fillEllipse(layout.centerX, layout.hubY, layout.radiusX * 2.45, layout.radiusY * 1.7);
-      }
-      for (let i = 0; i < 22; i++) {
-        const alpha = 0.04 + i * 0.0025;
-        this.map.fillStyle(i % 2 === 0 ? 0xb9c6d9 : 0xcbd6e5, alpha);
-        this.map.fillRect(0, (H / 22) * i, W, H / 18);
       }
       return;
     }
@@ -1271,7 +1286,8 @@ export class MissionControlScene extends Phaser.Scene {
       // Every quarter renders with the same colored pedestal regardless
       // of 24h activity count. The activity badge in the corner already
       // signals zero activity, so desaturating idle quarters was redundant noise.
-      const pedestalColor = quarter.color;
+      const pedestalColor = quarterFillColor(quarter.color);
+      const accentColor = quarterAccentColor(quarter.color);
       // Background discs scale with quarterR (via pedestalUnit) instead of
       // raw scene scale so they keep their visual proportion when focus-mode
       // bumps the quarter sprite size. The sector frame/border was removed so
@@ -1284,7 +1300,25 @@ export class MissionControlScene extends Phaser.Scene {
       const haloOuterR = 70.5375 * pedestalUnit;
       const haloFillR = 47.025 * pedestalUnit;
       const haloRingR = 61.39375 * pedestalUnit;
-      this.map.lineStyle(Math.max(1, Math.round(1.5 * s)), theme.mode === 'light' ? darkenColor(quarter.color, 0.7) : quarter.color, focused ? 0.72 : 0.4);
+      const sectorText = sectorTextMetrics(quarterR);
+      const labelSize = sectorText.labelSize;
+      const countSize = sectorText.countSize;
+      // Place the label just below the visible ring with a small breathing
+      // gap so text never overlaps the enlarged disc.
+      const labelY = haloCenterY + haloRingR + 11 + labelSize / 2;
+      const countY = labelY + labelSize / 2 + 6 + countSize / 2;
+      const labelBlockWidth = Math.max(
+        quarter.short.length * labelSize * 0.66,
+        String(quarter.count).length * countSize * 0.56,
+      ) + 18;
+      const labelBlock = {
+        left: quarter.x - labelBlockWidth / 2,
+        right: quarter.x + labelBlockWidth / 2,
+        top: labelY - labelSize / 2 - 5,
+        bottom: countY + countSize / 2 + 6,
+      };
+      const spokeWidth = Math.max(1, Math.round(1.5 * s));
+      const spokeAlpha = focused ? 0.72 : 0.4;
       // Stop the spoke at the disc's outer edge (facing the hub) instead of
       // running it into the sector center, so the line reads as a connector.
       const spokeDx = centerX - quarter.x;
@@ -1292,16 +1326,16 @@ export class MissionControlScene extends Phaser.Scene {
       const spokeLen = Math.hypot(spokeDx, spokeDy) || 1;
       const spokeEndX = quarter.x + (spokeDx / spokeLen) * haloOuterR;
       const spokeEndY = haloCenterY + (spokeDy / spokeLen) * haloOuterR;
-      this.map.lineBetween(centerX, hubY, spokeEndX, spokeEndY);
+      this.drawSpokeWithLabelFade(centerX, hubY, spokeEndX, spokeEndY, labelBlock, spokeWidth, accentColor, spokeAlpha);
       if (theme.mode === 'dark') {
         this.map.fillStyle(theme.backdropFill, 1);
         this.map.fillCircle(quarter.x, haloCenterY, haloOuterR);
       }
-      this.map.fillStyle(pedestalColor, haloAlpha * (theme.mode === 'light' ? 0.2 : 0.36));
+      this.map.fillStyle(pedestalColor, haloAlpha * (theme.mode === 'light' ? 0.28 : 0.36));
       this.map.fillCircle(quarter.x, haloCenterY, haloOuterR);
-      this.map.fillStyle(pedestalColor, theme.mode === 'light' ? 0.38 : 0.72);
+      this.map.fillStyle(pedestalColor, theme.mode === 'light' ? 0.56 : 0.72);
       this.map.fillCircle(quarter.x, haloCenterY, haloFillR);
-      this.map.lineStyle(Math.max(1, Math.round(2 * pedestalUnit)), theme.mode === 'light' ? darkenColor(quarter.color, 0.64) : quarter.color, focused ? 0.95 : 0.62);
+      this.map.lineStyle(Math.max(1, Math.round(2 * pedestalUnit)), accentColor, focused ? 0.95 : 0.62);
       this.map.strokeCircle(quarter.x, haloCenterY, haloRingR);
       const artSet = this.activeArtSet();
       const texture = artSet.quarterTextures[quarter.key as keyof SectorTextureMap] ?? artSet.centerTexture;
@@ -1317,18 +1351,92 @@ export class MissionControlScene extends Phaser.Scene {
         .setAlpha(focused ? 1 : 0.9);
       sprite.setDisplaySize(fit.w, fit.h);
       this.textObjects.push(sprite);
-      const sectorText = sectorTextMetrics(quarterR);
-      const labelSize = sectorText.labelSize;
-      const countSize = sectorText.countSize;
-      // Place the label just below the visible ring with a small breathing
-      // gap so text never overlaps the enlarged disc.
-      const labelY = haloCenterY + haloRingR + 11 + labelSize / 2;
-      const countY = labelY + labelSize / 2 + 6 + countSize / 2;
       const countColor = colorToCss(quarterTextColor(quarter.color));
       this.addText(quarter.x, labelY, quarter.short.toUpperCase(), labelSize, theme.text).setOrigin(0.5);
       const countText = this.addText(quarter.x, countY, String(quarter.count), countSize, countColor).setOrigin(0.5);
       this.quarterCountTextObjects.set(quarter.key, countText);
     }
+  }
+
+  private drawSpokeWithLabelFade(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    labelBlock: { left: number; right: number; top: number; bottom: number },
+    lineWidth: number,
+    color: number,
+    alpha: number,
+  ) {
+    const clipped = this.lineRectIntersection(startX, startY, endX, endY, labelBlock);
+    const drawSegment = (from: number, to: number, segmentAlpha: number) => {
+      if (to - from < 0.004) return;
+      const x1 = startX + (endX - startX) * from;
+      const y1 = startY + (endY - startY) * from;
+      const x2 = startX + (endX - startX) * to;
+      const y2 = startY + (endY - startY) * to;
+      this.map.lineStyle(lineWidth, color, segmentAlpha);
+      this.map.lineBetween(x1, y1, x2, y2);
+    };
+
+    if (!clipped) {
+      drawSegment(0, 1, alpha);
+      return;
+    }
+
+    const lineLength = Math.hypot(endX - startX, endY - startY) || 1;
+    const fadeT = Math.min(0.1, 20 / lineLength);
+    const labelAlpha = Math.max(0.08, alpha * (theme.mode === 'light' ? 0.22 : 0.28));
+    const fadeInStart = Math.max(0, clipped.entry - fadeT);
+    const fadeOutEnd = Math.min(1, clipped.exit + fadeT);
+    const drawFade = (from: number, to: number, fromAlpha: number, toAlpha: number) => {
+      const steps = 5;
+      for (let i = 0; i < steps; i++) {
+        const segmentFrom = from + ((to - from) * i) / steps;
+        const segmentTo = from + ((to - from) * (i + 1)) / steps;
+        const midpoint = (i + 0.5) / steps;
+        drawSegment(segmentFrom, segmentTo, fromAlpha + (toAlpha - fromAlpha) * midpoint);
+      }
+    };
+
+    drawSegment(0, fadeInStart, alpha);
+    drawFade(fadeInStart, clipped.entry, alpha, labelAlpha);
+    drawSegment(clipped.entry, clipped.exit, labelAlpha);
+    drawFade(clipped.exit, fadeOutEnd, labelAlpha, alpha);
+    drawSegment(fadeOutEnd, 1, alpha);
+  }
+
+  private lineRectIntersection(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    rect: { left: number; right: number; top: number; bottom: number },
+  ): { entry: number; exit: number } | undefined {
+    const dx = endX - startX;
+    const dy = endY - startY;
+    let entry = 0;
+    let exit = 1;
+
+    const clip = (p: number, q: number) => {
+      if (p === 0) return q >= 0;
+      const r = q / p;
+      if (p < 0) {
+        if (r > exit) return false;
+        if (r > entry) entry = r;
+      } else {
+        if (r < entry) return false;
+        if (r < exit) exit = r;
+      }
+      return true;
+    };
+
+    const intersects = clip(-dx, startX - rect.left)
+      && clip(dx, rect.right - startX)
+      && clip(-dy, startY - rect.top)
+      && clip(dy, rect.bottom - startY);
+
+    return intersects && entry < exit ? { entry, exit } : undefined;
   }
 
   private updateQuarterCountLabels() {
@@ -2235,11 +2343,19 @@ function darkenColor(color: number, factor: number): number {
   return (r << 16) | (g << 8) | b;
 }
 
+function quarterAccentColor(color: number): number {
+  return theme.mode === 'light' ? darkenColor(color, 0.5) : color;
+}
+
+function quarterFillColor(color: number): number {
+  return theme.mode === 'light' ? darkenColor(color, 0.78) : color;
+}
+
 /// In light mode the count number sits on white — bright cyan/yellow
 /// don't have enough contrast. Darken those hues for the text color
 /// while leaving dark theme alone.
 function quarterTextColor(color: number): number {
-  return theme.mode === 'light' ? darkenColor(color, 0.55) : color;
+  return theme.mode === 'light' ? darkenColor(color, 0.45) : color;
 }
 
 function truncate(text: string, max: number) {
@@ -2307,8 +2423,6 @@ function validResetAtMs(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 
-const PREFS_KEY = 'cmc_prefs';
-
 interface MissionPrefs {
   /// Sticky last-hovered quarter. Persists across window restarts so
   /// the inspector resumes on whatever the user was last looking at.
@@ -2321,9 +2435,8 @@ interface MissionPrefs {
 
 function loadMissionPrefs(): MissionPrefs {
   try {
-    const raw = window.localStorage?.getItem(PREFS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
+    const appSettings = settings();
+    const parsed = appSettings?.getJson<MissionPrefs>(appSettings.keys.missionPrefs, {}) ?? {};
     if (parsed && typeof parsed === 'object') {
       const prefs = parsed as MissionPrefs & {
         // Legacy fields that may still be in old users' localStorage:
@@ -2352,7 +2465,7 @@ function loadMissionPrefs(): MissionPrefs {
       }
       if (mutated) {
         try {
-          window.localStorage?.setItem(PREFS_KEY, JSON.stringify(prefs));
+          appSettings?.setJson(appSettings.keys.missionPrefs, prefs);
         } catch { /* ignore — quota/private-mode is non-fatal */ }
       }
       return prefs;
@@ -2363,9 +2476,11 @@ function loadMissionPrefs(): MissionPrefs {
 
 function savePref<K extends keyof MissionPrefs>(key: K, value: MissionPrefs[K]) {
   try {
+    const appSettings = settings();
+    if (!appSettings) return;
     const current = loadMissionPrefs();
     current[key] = value;
-    window.localStorage?.setItem(PREFS_KEY, JSON.stringify(current));
+    appSettings.setJson(appSettings.keys.missionPrefs, current);
   } catch { /* ignore — quota/private-mode is non-fatal */ }
 }
 

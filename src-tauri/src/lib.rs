@@ -15,6 +15,7 @@
 //   - Provide a tray icon for quick show/hide
 
 mod agent;
+mod analytics;
 
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
@@ -27,6 +28,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use agent::{
     collect_agent_activity, collect_agent_activity_with_history, AgentActivity, RawToolCallDetails,
+};
+use analytics::{
+    AnalyticsChatRequest, AnalyticsChatResponse, AnalyticsRangeRequest, AnalyticsRecommendation,
+    AnalyticsStatus, AnalyticsUsageSummary,
 };
 
 // Icons baked into the binary so they survive whether the binary is
@@ -154,6 +159,50 @@ async fn get_copilot_activity() -> Result<AgentActivity, String> {
     tauri::async_runtime::spawn_blocking(collect_agent_activity)
         .await
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn get_analytics_status(app: AppHandle) -> Result<AnalyticsStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || analytics::analytics_status(&app))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn run_analytics_ingestion_once(app: AppHandle) -> Result<AnalyticsStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || analytics::run_analytics_ingestion_once(&app))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn get_analytics_usage_summary(
+    app: AppHandle,
+    request: AnalyticsRangeRequest,
+) -> Result<AnalyticsUsageSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || analytics::analytics_usage_summary(&app, request))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn get_analytics_recommendation_facts(
+    app: AppHandle,
+    request: AnalyticsRangeRequest,
+) -> Result<Vec<AnalyticsRecommendation>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        analytics::analytics_recommendation_facts(&app, request)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn ask_analytics_chat(
+    app: AppHandle,
+    request: AnalyticsChatRequest,
+) -> Result<AnalyticsChatResponse, String> {
+    analytics::analytics_chat(&app, request).await
 }
 
 /// Explicit local-only raw reveal for one inspector row. The normal
@@ -327,6 +376,11 @@ pub fn run() {
             get_agent_activity,
             get_agent_activity_with_history,
             get_copilot_activity,
+            get_analytics_status,
+            run_analytics_ingestion_once,
+            get_analytics_usage_summary,
+            get_analytics_recommendation_facts,
+            ask_analytics_chat,
             get_raw_tool_call_details,
             install_update,
             open_in_editor,
@@ -342,6 +396,7 @@ pub fn run() {
             // the app lifetime and pushes refresh callbacks to the
             // renderer whenever any provider's state directory changes.
             agent::start_watcher(app.handle().clone());
+            analytics::start_background_ingestion(app.handle().clone());
 
             if let Some(win) = app.get_webview_window("main") {
                 ensure_window_visible(&win);

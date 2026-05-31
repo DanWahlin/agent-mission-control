@@ -16,21 +16,18 @@
 
   function $(id) { return document.getElementById(id); }
 
-  function safeGet(key) {
-    try { return localStorage.getItem(key); }
-    catch (e) { return null; }
-  }
-  function safeSet(key, value) {
-    try { localStorage.setItem(key, value); }
-    catch (e) { /* quota or private mode — non-fatal */ }
-  }
+  var settings = window.__cmcSettings;
+  var STORAGE_KEYS = settings.keys;
+
+  function safeGet(key) { return settings.get(key); }
+  function safeSet(key, value) { settings.set(key, value); }
 
   // -------------------------------------------------------------------
   // Theme toggle (light/dark).
   // -------------------------------------------------------------------
 
   var themeBtn = $('theme-btn');
-  var currentTheme = safeGet('cmc_theme') === 'light' ? 'light' : 'dark';
+  var currentTheme = safeGet(STORAGE_KEYS.theme) === 'light' ? 'light' : 'dark';
   var lastSceneTheme = null;
 
   function applyTheme() {
@@ -51,7 +48,7 @@
 
   function toggleTheme() {
     currentTheme = currentTheme === 'light' ? 'dark' : 'light';
-    safeSet('cmc_theme', currentTheme);
+    safeSet(STORAGE_KEYS.theme, currentTheme);
     applyTheme();
   }
 
@@ -81,7 +78,7 @@
   var settingsDone = $('settings-done');
   var appThemeSelect = $('app-theme-select');
   var settingsReturnFocus = null;
-  var APP_THEME_KEY = 'cmc_app_theme';
+  var APP_THEME_KEY = STORAGE_KEYS.appTheme;
   var DEFAULT_APP_THEME = 'space';
   var APP_THEMES = ['space', 'medieval'];
   var lastSceneAppTheme = null;
@@ -802,12 +799,27 @@
   var gameRoot = $('game');
   var dashboardOverlay = $('dashboard-overlay');
   var historyScreen = $('history-screen');
+  var analyticsChatScreen = $('analytics-chat-screen');
+  var analyticsChatStatus = $('analytics-chat-status');
+  var analyticsChatSuggestions = $('analytics-chat-suggestions');
+  var analyticsChatTranscript = $('analytics-chat-transcript');
+  var analyticsChatForm = $('analytics-chat-form');
+  var analyticsChatInput = $('analytics-chat-input');
+  var analyticsChatNew = $('analytics-chat-new');
+  var analyticsTokenNotice = $('analytics-token-notice');
+  var analyticsTokenDialog = analyticsTokenNotice && analyticsTokenNotice.querySelector('.analytics-token-dialog');
+  var analyticsTokenAck = $('analytics-token-ack');
+  var analyticsTokenHelp = $('analytics-token-help');
+  var analyticsPromptPanelHidden = settings.getBool(STORAGE_KEYS.analyticsPromptPanelCollapsed);
+  var analyticsTokenNoticeSeen = settings.getBool(STORAGE_KEYS.analyticsTokenNoticeSeen);
+  var analyticsTokenReturnFocus = null;
   var historyContent = $('history-content');
   var historyKpiSummary = $('history-kpi-summary');
   var historyLiveStamp = $('history-live-stamp');
   var historySessionFilterSelect = $('history-session-filter');
   var missionRouteBtn = $('mission-route-btn');
   var historyRouteBtn = $('history-route-btn');
+  var analyticsRouteBtn = $('analytics-route-btn');
   var domLoadingImage = domLoading ? domLoading.querySelector('img') : null;
   var attentionOverlay = $('attention-overlay');
   var attentionDialog = $('attention-dialog');
@@ -845,6 +857,20 @@
   var historyFetchFrame = 0;
   var historyFetchTimer = 0;
   var historyBarRefreshFrame = 0;
+  var analyticsChatMessages = [];
+  var analyticsChatLoading = false;
+  var analyticsChatRequestSeq = 0;
+  var analyticsStatusCache = null;
+  var ANALYTICS_PROMPTS = [
+    'What changed in my Copilot CLI usage this week?',
+    'Where are my token hotspots?',
+    'Which tools failed the most?',
+    'Compare my recent model mix.',
+    'How can I improve my prompts?',
+    'Review my Copilot skills.',
+    'Review my Copilot agents.',
+    'What skill or agent gaps do I have?',
+  ];
 
   function nowMs() {
     return window.performance && typeof window.performance.now === 'function'
@@ -853,11 +879,14 @@
   }
 
   function routeFromHash() {
-    return String(window.location.hash || '').toLowerCase() === '#history' ? 'history' : 'mission';
+    var hash = String(window.location.hash || '').toLowerCase();
+    if (hash === '#history') return 'history';
+    if (hash === '#analytics' || hash === '#analytics-chat') return 'analytics';
+    return 'mission';
   }
 
   function syncRouteHash(route) {
-    var target = route === 'history' ? '#history' : '#mission';
+    var target = route === 'history' ? '#history' : (route === 'analytics' ? '#analytics-chat' : '#mission');
     if (window.location.hash === target) return;
     if (window.history && typeof window.history.replaceState === 'function') {
       window.history.replaceState(null, '', target);
@@ -916,19 +945,350 @@
     updateHistorySessionFilter(null);
   }
 
+  function analyticsFixture() {
+    return window.__analyticsChatFixture || window.__analyticsFixture || null;
+  }
+
+  function callAnalyticsCommand(command, payload) {
+    var fixture = analyticsFixture();
+    if (fixture) {
+      if (command === 'get_analytics_status') return Promise.resolve(fixture.status || defaultAnalyticsStatus());
+      if (command === 'ask_analytics_chat') return Promise.resolve(fixture.chat || defaultAnalyticsChat(payload && payload.request && payload.request.prompt));
+    }
+    var invoke = tauriInvoke();
+    if (!invoke) {
+      if (command === 'get_analytics_status') return Promise.resolve(defaultAnalyticsStatus());
+      if (command === 'ask_analytics_chat') return Promise.resolve(defaultAnalyticsChat(payload && payload.request && payload.request.prompt));
+    }
+    return invoke(command, payload || {});
+  }
+
+  function defaultAnalyticsStatus() {
+    return {
+      available: false,
+      ingestion_running: false,
+      session_count: 0,
+      event_count: 0,
+      db_size_bytes: 0,
+      snapshot_limited: true,
+      privacy_summary: 'Analytics chat uses indexed local Copilot CLI history and derived metrics.',
+      warnings: ['Open the Tauri app to index local analytics data.'],
+    };
+  }
+
+  function defaultAnalyticsChat(prompt) {
+    return {
+      prompt: prompt || ANALYTICS_PROMPTS[0],
+      answer: 'Analytics chat is ready, but local Tauri analytics are not available in this browser preview.',
+      artifacts: [
+        {
+          kind: 'cards',
+          title: 'Preview recommendations',
+          cards: [
+            {
+              title: 'Run in the desktop app',
+              body: 'The packaged Tauri app can scan local Copilot CLI summaries and return grounded artifacts.',
+              severity: 'info',
+              metric: 'preview',
+            },
+          ],
+        },
+      ],
+      caveats: ['Browser preview uses fixture data unless window.__analyticsChatFixture is provided.'],
+    };
+  }
+
+  function renderAnalyticsSuggestions() {
+    if (!analyticsChatSuggestions) return;
+    var toggleIcon = analyticsPromptPanelHidden
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" fill="none" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    analyticsChatSuggestions.hidden = false;
+    analyticsChatSuggestions.setAttribute('aria-hidden', 'false');
+    analyticsChatSuggestions.classList.toggle('collapsed', analyticsPromptPanelHidden);
+    analyticsChatSuggestions.innerHTML = '<button class="analytics-chat-prompt-close" type="button" data-analytics-prompt-toggle aria-expanded="' + (analyticsPromptPanelHidden ? 'false' : 'true') + '" aria-label="' + (analyticsPromptPanelHidden ? 'Show suggested prompts' : 'Hide suggested prompts') + '">' + toggleIcon + '</button>'
+      + '<p class="analytics-chat-prompt-copy">Ask a question and I\'ll answer from local derived metrics and include charts, tables, or recommendations when available.</p>'
+      + '<div class="analytics-chat-prompt-list"' + (analyticsPromptPanelHidden ? ' hidden' : '') + '>' + renderAnalyticsPromptChips() + '</div>';
+  }
+
+  function renderAnalyticsPromptChips() {
+    return ANALYTICS_PROMPTS.map(function (prompt) {
+      return '<button class="analytics-chip" type="button" data-analytics-prompt="' + escapeHtml(prompt) + '">' + escapeHtml(prompt) + '</button>';
+    }).join('');
+  }
+
+  function maybeShowAnalyticsTokenNotice(returnFocus) {
+    if (!analyticsTokenNotice || analyticsTokenNoticeSeen) return;
+    analyticsTokenReturnFocus = returnFocus || document.activeElement;
+    analyticsTokenNotice.classList.add('visible');
+    analyticsTokenNotice.setAttribute('aria-hidden', 'false');
+    if (analyticsTokenDialog && analyticsTokenDialog.focus) analyticsTokenDialog.focus();
+  }
+
+  function showAnalyticsTokenNotice(returnFocus) {
+    if (!analyticsTokenNotice) return;
+    analyticsTokenReturnFocus = returnFocus || document.activeElement;
+    analyticsTokenNotice.classList.add('visible');
+    analyticsTokenNotice.setAttribute('aria-hidden', 'false');
+    if (analyticsTokenDialog && analyticsTokenDialog.focus) analyticsTokenDialog.focus();
+  }
+
+  function closeAnalyticsTokenNotice() {
+    if (!analyticsTokenNotice) return;
+    analyticsTokenNoticeSeen = true;
+    settings.setBool(STORAGE_KEYS.analyticsTokenNoticeSeen, true);
+    analyticsTokenNotice.classList.remove('visible');
+    analyticsTokenNotice.setAttribute('aria-hidden', 'true');
+    if (analyticsTokenReturnFocus && analyticsTokenReturnFocus.focus) {
+      analyticsTokenReturnFocus.focus({ preventScroll: true });
+    }
+    analyticsTokenReturnFocus = null;
+  }
+
+  function renderAnalyticsStatus(status) {
+    analyticsStatusCache = status || analyticsStatusCache || defaultAnalyticsStatus();
+    if (analyticsChatStatus) {
+      var statusText = analyticsStatusCache.ingestion_running
+        ? 'Analyzing Copilot history…'
+        : analyticsStatusCache.available
+        ? 'Ready · ' + exactNumber(analyticsStatusCache.session_count || 0) + ' sessions · ' + exactNumber(analyticsStatusCache.event_count || 0) + ' recent facts'
+        : 'Waiting for analytics ingestion';
+      analyticsChatStatus.textContent = statusText;
+    }
+  }
+
+  function renderAnalyticsChat() {
+    if (!analyticsChatTranscript) return;
+    if (!analyticsChatMessages.length) {
+      analyticsChatTranscript.innerHTML = '';
+      analyticsChatTranscript.scrollTop = 0;
+      return;
+    }
+    analyticsChatTranscript.innerHTML = analyticsChatMessages.map(renderAnalyticsMessage).join('');
+    scrollAnalyticsTranscriptToLatest();
+  }
+
+  function scrollAnalyticsTranscriptToLatest() {
+    if (!analyticsChatTranscript) return;
+    window.requestAnimationFrame(function () {
+      analyticsChatTranscript.scrollTop = analyticsChatTranscript.scrollHeight;
+    });
+  }
+
+  function renderAnalyticsMessage(message) {
+    var html = '<div class="analytics-message ' + escapeHtml(message.role || 'assistant') + '">'
+      + '<div class="analytics-message-label">' + escapeHtml(message.role === 'user' ? 'You' : 'Assistant') + '</div>'
+      + '<div class="analytics-message-body">' + renderLightMarkdown(message.text || '') + '</div>';
+    if (message.toolCalls && message.toolCalls.length) {
+      html += '<div class="analytics-tool-calls">' + message.toolCalls.map(function (toolName) {
+        return '<div>Calling MCP tool ' + escapeHtml(toolName) + '</div>';
+      }).join('') + '</div>';
+    }
+
+    function renderLightMarkdown(text) {
+      var lines = String(text || '').split(/\r?\n/);
+      var html = '';
+      var paragraph = [];
+      var list = [];
+      function flushParagraph() {
+        if (!paragraph.length) return;
+        html += '<p>' + escapeHtml(paragraph.join(' ')) + '</p>';
+        paragraph = [];
+      }
+      function flushList() {
+        if (!list.length) return;
+        html += '<ul>' + list.map(function (item) {
+          return '<li>' + escapeHtml(item) + '</li>';
+        }).join('') + '</ul>';
+        list = [];
+      }
+      lines.forEach(function (line) {
+        var trimmed = line.trim();
+        if (!trimmed) {
+          flushParagraph();
+          flushList();
+          return;
+        }
+        var bullet = /^[-*]\s+(.+)$/.exec(trimmed);
+        if (bullet) {
+          flushParagraph();
+          list.push(bullet[1]);
+          return;
+        }
+        flushList();
+        paragraph.push(trimmed);
+      });
+      flushParagraph();
+      flushList();
+      return html || '<p></p>';
+    }
+    if (message.artifacts && message.artifacts.length) {
+      html += '<div class="analytics-artifacts">' + message.artifacts.map(renderAnalyticsArtifact).join('') + '</div>';
+    }
+    if (message.caveats && message.caveats.length) {
+      html += '<div class="analytics-caveats">' + message.caveats.map(function (caveat) {
+        return '<div>• ' + escapeHtml(caveat) + '</div>';
+      }).join('') + '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderAnalyticsArtifact(artifact) {
+    var kind = artifact && artifact.kind;
+    var body = '';
+    if (kind === 'table') body = renderAnalyticsTable(artifact);
+    else if (kind === 'chart') body = renderAnalyticsBars(artifact.points || []);
+    else if (kind === 'cards') body = renderAnalyticsCards(artifact.cards || []);
+    else body = '<div class="analytics-caveats">No structured data for this artifact.</div>';
+    var className = kind === 'cards' ? 'analytics-artifact analytics-artifact-cards' : 'analytics-artifact';
+    return '<section class="' + className + '"><h3>' + escapeHtml((artifact && artifact.title) || 'Artifact') + '</h3>' + body + '</section>';
+  }
+
+  function renderAnalyticsTable(artifact) {
+    var columns = artifact.columns || [];
+    var rows = artifact.rows || [];
+    if (!rows.length) return '<div class="analytics-caveats">No rows for this range.</div>';
+    return '<table class="analytics-table"><thead><tr>' + columns.map(function (col) {
+      return '<th>' + escapeHtml(col) + '</th>';
+    }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
+      return '<tr>' + (row || []).map(function (cell) {
+        return '<td>' + escapeHtml(formatAnalyticsTableCell(cell)) + '</td>';
+      }).join('') + '</tr>';
+    }).join('') + '</tbody></table>';
+  }
+
+  function formatAnalyticsTableCell(cell) {
+    if (typeof cell === 'number') return exactNumber(cell);
+    var value = String(cell == null ? '' : cell);
+    if (/^[+-]?\d+$/.test(value)) {
+      var prefix = value.charAt(0) === '+' || value.charAt(0) === '-' ? value.charAt(0) : '';
+      var digits = prefix ? value.slice(1) : value;
+      if (digits.length > 3) return prefix + Number(digits).toLocaleString();
+    }
+    return value;
+  }
+
+  function renderAnalyticsBars(points) {
+    if (!points.length) return '<div class="analytics-caveats">No trend points for this range.</div>';
+    var max = points.reduce(function (m, point) { return Math.max(m, Number(point.output_tokens || 0), Number(point.tool_calls || 0)); }, 1);
+    return '<div class="analytics-bars">' + points.map(function (point) {
+      var value = Number(point.output_tokens || 0);
+      var pct = Math.max(4, Math.min(100, Math.round((value / max) * 100)));
+      return '<div class="analytics-bar-row">'
+        + '<span>' + escapeHtml(point.local_day || '') + '</span>'
+        + '<span class="analytics-bar"><span style="width:' + pct + '%"></span></span>'
+        + '<span>' + escapeHtml(exactNumber(value)) + '</span>'
+        + '</div>';
+    }).join('') + '</div>';
+  }
+
+  function renderAnalyticsCards(cards) {
+    if (!cards.length) return '<div class="analytics-caveats">No recommendations yet.</div>';
+    return '<div class="analytics-card-list">' + cards.map(function (card) {
+      return '<div class="analytics-card"><strong>' + escapeHtml(card.title || 'Recommendation') + '</strong>'
+        + escapeHtml(card.body || '') + '</div>';
+    }).join('') + '</div>';
+  }
+
+  function loadAnalyticsStatus() {
+    callAnalyticsCommand('get_analytics_status').then(function (status) {
+      renderAnalyticsStatus(status);
+    }).catch(function (err) {
+      renderAnalyticsStatus({
+        available: false,
+        privacy_summary: defaultAnalyticsStatus().privacy_summary,
+        warnings: [err && err.message ? err.message : String(err || 'Unable to load analytics status')],
+      });
+    });
+  }
+
+  window.__cmcAnalyticsStatusChanged = function () {
+    if (appRoute === 'analytics') loadAnalyticsStatus();
+  };
+
+  window.__cmcAnalyticsChatToolStarted = function (toolName) {
+    if (!analyticsChatLoading || !analyticsChatMessages.length) return;
+    var last = analyticsChatMessages[analyticsChatMessages.length - 1];
+    if (!last || last.role !== 'assistant') return;
+    var label = String(toolName || '').trim();
+    if (!label) return;
+    last.toolCalls = last.toolCalls || [];
+    if (last.toolCalls.indexOf(label) < 0) {
+      last.toolCalls.push(label);
+      renderAnalyticsChat();
+    }
+  };
+
+  function askAnalytics(prompt) {
+    var question = String(prompt || '').trim();
+    if (!question || analyticsChatLoading) return;
+    var requestSeq = ++analyticsChatRequestSeq;
+    analyticsChatLoading = true;
+    analyticsChatMessages.push({ role: 'user', text: question });
+    analyticsChatMessages.push({
+      role: 'assistant',
+      text: analyticsStatusCache && analyticsStatusCache.ingestion_running
+        ? 'Analyzing Copilot history… I can answer from the data indexed so far.'
+        : 'Checking local analytics…',
+    });
+    renderAnalyticsChat();
+    if (analyticsChatInput && analyticsChatInput.value.trim() === question) {
+      analyticsChatInput.value = '';
+    }
+    callAnalyticsCommand('ask_analytics_chat', { request: { prompt: question, rangeDays: 7 } }).then(function (response) {
+      if (requestSeq !== analyticsChatRequestSeq) return;
+      analyticsChatMessages[analyticsChatMessages.length - 1] = {
+        role: 'assistant',
+        text: response.answer || 'No analytics answer was returned.',
+        artifacts: response.artifacts || [],
+        caveats: response.caveats || [],
+      };
+      analyticsChatLoading = false;
+      renderAnalyticsChat();
+    }).catch(function (err) {
+      if (requestSeq !== analyticsChatRequestSeq) return;
+      analyticsChatMessages[analyticsChatMessages.length - 1] = {
+        role: 'assistant',
+        text: 'Analytics chat failed: ' + (err && err.message ? err.message : String(err || 'unknown error')),
+      };
+      analyticsChatLoading = false;
+      renderAnalyticsChat();
+    });
+  }
+
+  function loadAnalyticsRoute(options) {
+    renderAnalyticsSuggestions();
+    renderAnalyticsStatus(analyticsStatusCache || defaultAnalyticsStatus());
+    renderAnalyticsChat();
+    loadAnalyticsStatus();
+    maybeShowAnalyticsTokenNotice(analyticsRouteBtn);
+    if (options && options.focus && analyticsChatInput && typeof analyticsChatInput.focus === 'function') {
+      analyticsChatInput.focus({ preventScroll: true });
+    }
+  }
+
+  function unloadAnalyticsRoute() {
+    if (analyticsChatScreen) analyticsChatScreen.scrollTop = 0;
+  }
+
   function applyAppRoute(route, options) {
-    var next = route === 'history' ? 'history' : 'mission';
+    var next = route === 'history' ? 'history' : (route === 'analytics' ? 'analytics' : 'mission');
     var previous = appRoute;
     appRoute = next;
     document.body.classList.toggle('history-route', appRoute === 'history');
+    document.body.classList.toggle('analytics-route', appRoute === 'analytics');
     setRouteButtonState(missionRouteBtn, appRoute === 'mission');
     setRouteButtonState(historyRouteBtn, appRoute === 'history');
+    setRouteButtonState(analyticsRouteBtn, appRoute === 'analytics');
     if (historyScreen) historyScreen.setAttribute('aria-hidden', appRoute === 'history' ? 'false' : 'true');
+    if (analyticsChatScreen) analyticsChatScreen.setAttribute('aria-hidden', appRoute === 'analytics' ? 'false' : 'true');
     [gameRoot, dashboardOverlay, domLoading].forEach(function (el) {
-      if (el) el.setAttribute('aria-hidden', appRoute === 'history' ? 'true' : 'false');
+      if (el) el.setAttribute('aria-hidden', appRoute === 'mission' ? 'false' : 'true');
     });
     if (!options || options.syncHash !== false) syncRouteHash(appRoute);
     if (appRoute === 'history') {
+      if (previous === 'analytics') unloadAnalyticsRoute();
       if (dashboardHasLoadedHistory(lastDashboard)) {
         renderHistory(lastDashboard, previous !== 'history');
       } else {
@@ -938,8 +1298,12 @@
       if (options && options.focus && historyScreen && typeof historyScreen.focus === 'function') {
         historyScreen.focus({ preventScroll: true });
       }
-    } else if (previous === 'history') {
-      unloadHistoryRoute();
+    } else if (appRoute === 'analytics') {
+      if (previous === 'history') unloadHistoryRoute();
+      loadAnalyticsRoute(options || {});
+    } else if (previous === 'history' || previous === 'analytics') {
+      if (previous === 'history') unloadHistoryRoute();
+      if (previous === 'analytics') unloadAnalyticsRoute();
       window.requestAnimationFrame(function () {
         if (appRoute === 'mission' && lastDashboard && typeof window.__cmcRenderDashboard === 'function') {
           window.__cmcRenderDashboard(lastDashboard);
@@ -1643,7 +2007,7 @@
     var fingerprint = schemaDriftFingerprint(report);
     var dismissed = '';
     try {
-      dismissed = window.localStorage && window.localStorage.getItem('cmc_schema_drift_dismissed');
+      dismissed = safeGet(STORAGE_KEYS.schemaDriftDismissed);
     } catch (_err) {
       dismissed = '';
     }
@@ -2410,7 +2774,7 @@
     button.addEventListener('click', function () {
       if (activeSchemaDriftReport) {
         try {
-          window.localStorage && window.localStorage.setItem('cmc_schema_drift_dismissed', schemaDriftFingerprint(activeSchemaDriftReport));
+          safeSet(STORAGE_KEYS.schemaDriftDismissed, schemaDriftFingerprint(activeSchemaDriftReport));
         } catch (_err) {
           // Ignore storage failures; the dialog can appear again on refresh.
         }
@@ -2445,6 +2809,55 @@
   if (historyRouteBtn) {
     historyRouteBtn.addEventListener('click', function () {
       navigateAppRoute('history', true);
+    });
+  }
+  if (analyticsRouteBtn) {
+    analyticsRouteBtn.addEventListener('click', function () {
+      navigateAppRoute('analytics', true);
+    });
+  }
+  if (analyticsChatForm) {
+    analyticsChatForm.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var prompt = analyticsChatInput ? analyticsChatInput.value : '';
+      askAnalytics(prompt);
+    });
+  }
+  if (analyticsTokenAck) analyticsTokenAck.addEventListener('click', closeAnalyticsTokenNotice);
+  if (analyticsTokenHelp) {
+    analyticsTokenHelp.addEventListener('click', function () {
+      showAnalyticsTokenNotice(analyticsTokenHelp);
+    });
+  }
+  if (analyticsTokenNotice) {
+    analyticsTokenNotice.addEventListener('click', function (event) {
+      if (event.target === analyticsTokenNotice) closeAnalyticsTokenNotice();
+    });
+  }
+  if (analyticsChatNew) {
+    analyticsChatNew.addEventListener('click', function () {
+      analyticsChatRequestSeq += 1;
+      analyticsChatLoading = false;
+      analyticsChatMessages = [];
+      if (analyticsChatInput) analyticsChatInput.value = '';
+      renderAnalyticsChat();
+      if (analyticsChatInput && analyticsChatInput.focus) analyticsChatInput.focus();
+    });
+  }
+  if (analyticsChatScreen) {
+    analyticsChatScreen.addEventListener('click', function (event) {
+      var toggleButton = event.target && event.target.closest && event.target.closest('[data-analytics-prompt-toggle]');
+      if (toggleButton) {
+        analyticsPromptPanelHidden = !analyticsPromptPanelHidden;
+        settings.setBool(STORAGE_KEYS.analyticsPromptPanelCollapsed, analyticsPromptPanelHidden);
+        renderAnalyticsSuggestions();
+        return;
+      }
+      var button = event.target && event.target.closest && event.target.closest('[data-analytics-prompt]');
+      if (!button) return;
+      var prompt = button.getAttribute('data-analytics-prompt') || '';
+      if (analyticsChatInput) analyticsChatInput.value = '';
+      askAnalytics(prompt);
     });
   }
   if (historySessionFilterSelect) {
@@ -2508,6 +2921,10 @@
       closeSchemaDriftDialog();
       return;
     }
+    if (event.key === 'Escape' && analyticsTokenNotice && analyticsTokenNotice.classList.contains('visible')) {
+      closeAnalyticsTokenNotice();
+      return;
+    }
     var target = event.target;
     if (!target || !target.matches || !target.matches('[data-cmc-action="replay-seek"]')) return;
     if (typeof window.__cmcSeekReplayRatio !== 'function') return;
@@ -2541,7 +2958,7 @@
   // -------------------------------------------------------------------
 
   var panelsBtn = $('panels-btn');
-  var panelsHidden = safeGet('cmc_panels_hidden') === '1';
+  var panelsHidden = settings.getBool(STORAGE_KEYS.panelsHidden);
 
   // Two-state icon (state-based, like password-field toggles): icon
   // shows what's currently visible. Open eye when panels are shown,
@@ -2575,7 +2992,7 @@
 
   function togglePanels() {
     panelsHidden = !panelsHidden;
-    safeSet('cmc_panels_hidden', panelsHidden ? '1' : '0');
+    settings.setBool(STORAGE_KEYS.panelsHidden, panelsHidden);
     applyPanelsState();
   }
 

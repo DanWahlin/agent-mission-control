@@ -24,6 +24,7 @@ execFileSync(process.execPath, [require.resolve('typescript/bin/tsc'), '-p', 'ts
 });
 
 copyFile('src/index.html', 'dist');
+copyFile('src/settings.js', 'dist');
 copyFile('src/hud.js', 'dist');
 copyFile('node_modules/phaser/dist/phaser.min.js', 'dist');
 

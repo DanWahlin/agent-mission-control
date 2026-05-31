@@ -14,6 +14,8 @@
     "dist:linux": "cargo tauri build --target x86_64-unknown-linux-gnu",
     "test": "npm run build:frontend && npx playwright test",
     "test:headed": "npm run build:frontend && npx playwright test --headed",
+    "test:mcp": "node --test tests/mcp-insights.test.mjs",
+    "mcp:insights": "node mcp/mission-control-insights.js",
     "release": "node scripts/release.js",
     "test:updater": "node scripts/test-updater.js"
   },

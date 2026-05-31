@@ -9,21 +9,18 @@ test.describe('Copilot Mission Control app shell', () => {
 
   test('top bar shows brand and theme toggle', async ({ page }) => {
     await expect(page.locator('#topbar .brand')).toContainText('Copilot Mission Control');
-    await expect(page.locator('#reset-btn')).toBeVisible();
     await expect(page.locator('#settings-btn')).toBeVisible();
     await expect(page.locator('#theme-btn')).toBeVisible();
     await expect(page.locator('#mission-route-btn')).toHaveAttribute('aria-label', 'Show Home');
     await expect(page.locator('#history-route-btn')).toHaveAttribute('aria-label', 'Show global History analytics');
-    await expect(page.locator('#reset-btn')).toHaveAttribute('aria-label', 'Reset visible activity counters');
+    await expect(page.locator('#analytics-route-btn')).toHaveAttribute('aria-label', 'Ask Analytics Chat');
     await expect(page.locator('#mission-route-btn svg')).toBeVisible();
     await expect(page.locator('#history-route-btn svg')).toBeVisible();
-    await expect(page.locator('#reset-btn svg')).toBeVisible();
+    await expect(page.locator('#analytics-route-btn svg')).toBeVisible();
     await expect(page.locator('#topbar-controls')).not.toContainText(/Home|History|Reset/);
     const topbarIconStyles = await page.evaluate(() => {
       const routeGroup = document.querySelector('.topbar-route-group') as HTMLElement;
       const missionRoute = document.querySelector('#mission-route-btn') as HTMLElement;
-      const resetSvg = document.querySelector('#reset-btn svg') as SVGElement;
-      const resetPaths = Array.from(document.querySelectorAll('#reset-btn svg path')).map((path) => path.getAttribute('d'));
       const routeGroupStyle = getComputedStyle(routeGroup);
       const missionRouteStyle = getComputedStyle(missionRoute);
       return {
@@ -31,16 +28,12 @@ test.describe('Copilot Mission Control app shell', () => {
         routeBorderColor: missionRouteStyle.borderTopColor,
         routeBackgroundImage: missionRouteStyle.backgroundImage,
         routeBoxShadow: missionRouteStyle.boxShadow,
-        resetIconWidth: getComputedStyle(resetSvg).width,
-        resetPaths,
       };
     });
     expect(topbarIconStyles.routeGroupBorderWidth).toBe('0px');
     expect(topbarIconStyles.routeBorderColor).toBe('rgba(0, 0, 0, 0)');
     expect(topbarIconStyles.routeBackgroundImage).not.toBe('none');
     expect(topbarIconStyles.routeBoxShadow).not.toBe('none');
-    expect(topbarIconStyles.resetIconWidth).toBe('18px');
-    expect(topbarIconStyles.resetPaths).toEqual(['M5 12a7 7 0 1 0 2.1-5', 'M5 4v4.7h4.7']);
   });
 
   test('top bar route buttons visually mark the active route in both themes', async ({ page }) => {
@@ -49,23 +42,30 @@ test.describe('Copilot Mission Control app shell', () => {
     const routeStyles = async () => page.evaluate(() => {
       const mission = document.querySelector('#mission-route-btn') as HTMLElement;
       const history = document.querySelector('#history-route-btn') as HTMLElement;
+      const analytics = document.querySelector('#analytics-route-btn') as HTMLElement;
       const missionStyle = getComputedStyle(mission);
       const historyStyle = getComputedStyle(history);
+      const analyticsStyle = getComputedStyle(analytics);
       return {
         missionCurrent: mission.getAttribute('aria-current'),
         historyCurrent: history.getAttribute('aria-current'),
+        analyticsCurrent: analytics.getAttribute('aria-current'),
         missionBackgroundImage: missionStyle.backgroundImage,
         historyBackgroundImage: historyStyle.backgroundImage,
+        analyticsBackgroundImage: analyticsStyle.backgroundImage,
         missionColor: missionStyle.color,
         historyColor: historyStyle.color,
+        analyticsColor: analyticsStyle.color,
       };
     });
 
     const initial = await routeStyles();
     expect(initial.missionCurrent).toBe('page');
     expect(initial.historyCurrent).toBeNull();
+    expect(initial.analyticsCurrent).toBeNull();
     expect(initial.missionBackgroundImage).not.toBe('none');
     expect(initial.historyBackgroundImage).toBe('none');
+    expect(initial.analyticsBackgroundImage).toBe('none');
     expect(initial.missionColor).toBe(darkActiveColor);
 
     await page.locator('#history-route-btn').click();
@@ -73,8 +73,10 @@ test.describe('Copilot Mission Control app shell', () => {
     const darkHistory = await routeStyles();
     expect(darkHistory.missionCurrent).toBeNull();
     expect(darkHistory.historyCurrent).toBe('page');
+    expect(darkHistory.analyticsCurrent).toBeNull();
     expect(darkHistory.missionBackgroundImage).toBe('none');
     expect(darkHistory.historyBackgroundImage).not.toBe('none');
+    expect(darkHistory.analyticsBackgroundImage).toBe('none');
     expect(darkHistory.historyBackgroundImage).toBe(initial.missionBackgroundImage);
     expect(darkHistory.historyColor).toBe(initial.missionColor);
 
@@ -85,15 +87,253 @@ test.describe('Copilot Mission Control app shell', () => {
     expect(lightHistory.historyBackgroundImage).not.toBe('none');
     expect(lightHistory.historyColor).toBe(lightActiveColor);
 
+    await page.locator('#analytics-route-btn').click();
+    await expect.poll(async () => (await routeStyles()).analyticsColor).toBe(lightActiveColor);
+    if (await page.locator('#analytics-token-notice.visible').count()) {
+      await page.locator('#analytics-token-ack').click();
+    }
+    const lightAnalytics = await routeStyles();
+    expect(lightAnalytics.analyticsCurrent).toBe('page');
+    expect(lightAnalytics.missionCurrent).toBeNull();
+    expect(lightAnalytics.historyCurrent).toBeNull();
+    expect(lightAnalytics.analyticsBackgroundImage).not.toBe('none');
+    expect(lightAnalytics.analyticsBackgroundImage).toBe(lightHistory.historyBackgroundImage);
+
     await page.locator('#mission-route-btn').click();
     await expect.poll(async () => (await routeStyles()).missionColor).toBe(lightActiveColor);
     const lightMission = await routeStyles();
     expect(lightMission.missionCurrent).toBe('page');
     expect(lightMission.historyCurrent).toBeNull();
+    expect(lightMission.analyticsCurrent).toBeNull();
     expect(lightMission.missionBackgroundImage).not.toBe('none');
     expect(lightMission.historyBackgroundImage).toBe('none');
     expect(lightMission.missionBackgroundImage).toBe(lightHistory.historyBackgroundImage);
     expect(lightMission.missionColor).toBe(lightHistory.historyColor);
+  });
+
+  test('analytics chat route renders grounded fixture artifacts', async ({ page }) => {
+    await page.evaluate(() => localStorage.removeItem('cmc_analytics_prompt_panel_collapsed'));
+    await page.evaluate(() => {
+      (window as any).__analyticsChatFixture = {
+        status: {
+          available: true,
+          session_count: 3,
+          event_count: 12,
+          privacy_summary: 'Fixture analytics excludes prompts, args, output, paths, and diffs.',
+          warnings: [],
+        },
+        chat: {
+          answer: 'I found a token hotspot in Commands and a repeated failure pattern.',
+          artifacts: [
+            {
+              kind: 'chart',
+              title: 'Token trend',
+              points: [
+                { local_day: '2026-05-29', output_tokens: 1200, tool_calls: 4 },
+                { local_day: '2026-05-30', output_tokens: 2400, tool_calls: 6 },
+              ],
+            },
+            {
+              kind: 'table',
+              title: 'Model shifts',
+              columns: ['Model', 'Current', 'Previous', 'Delta Turns'],
+              rows: [['gpt-5.5', '5573', '4126507', '+36012649']],
+            },
+            {
+              kind: 'cards',
+              title: 'Recommendations',
+              cards: [
+                { title: 'Review repeated tool failures', body: 'Commands failed twice.', severity: 'review', metric: 'tool_failures' },
+                { title: 'Investigate token hotspot', body: 'Session abc12345 produced 2400 output tokens.', severity: 'review', metric: 'output_tokens' },
+                { title: 'Model mix context', body: 'gpt-5.5 appears most often in this range.', severity: 'info', metric: 'model_mix' },
+              ],
+            },
+          ],
+          caveats: ['Active window is estimated.'],
+        },
+      };
+    });
+
+    await page.locator('#analytics-route-btn').click();
+    if (await page.locator('#analytics-token-notice.visible').count()) {
+      await page.locator('#analytics-token-ack').click();
+    }
+    await expect(page.locator('body')).toHaveClass(/analytics-route/);
+    await expect(page.locator('#analytics-chat-title')).toHaveText('Mission Analytics Chat');
+    await expect(page.locator('#analytics-chat-status')).toContainText('Ready');
+    await expect(page.locator('.analytics-chat-subtitle')).toHaveCount(0);
+    await expect(page.locator('#analytics-chat-privacy')).toHaveCount(0);
+    await expect(page.locator('#game')).toBeHidden();
+    await expect(page.locator('#analytics-chat-transcript .analytics-message-label')).toHaveCount(0);
+    await expect(page.locator('#analytics-chat-suggestions')).toContainText('Ask a question and I\'ll answer from local derived metrics');
+    await expect(page.locator('#analytics-chat-transcript')).not.toContainText('Ask a question and I\'ll answer from local derived metrics');
+    const layout = await page.evaluate(() => {
+      const input = document.querySelector('#analytics-chat-input') as HTMLElement;
+      const submit = document.querySelector('#analytics-chat-submit') as HTMLElement;
+      const transcript = document.querySelector('#analytics-chat-transcript') as HTMLElement;
+      const screen = document.querySelector('#analytics-chat-screen') as HTMLElement;
+      return {
+        input: input.getBoundingClientRect().toJSON(),
+        submit: submit.getBoundingClientRect().toJSON(),
+        transcript: transcript.getBoundingClientRect().toJSON(),
+        screenOverflow: getComputedStyle(screen).overflow,
+        transcriptOverflowY: getComputedStyle(transcript).overflowY,
+      };
+    });
+    expect(layout.input.height).toBeLessThanOrEqual(56);
+    expect(layout.submit.height).toBeLessThanOrEqual(56);
+    expect(layout.input.width).toBeGreaterThan(300);
+    expect(layout.transcript.height).toBeGreaterThan(200);
+    expect(layout.screenOverflow).toBe('hidden');
+    expect(layout.transcriptOverflowY).toBe('auto');
+    await expect(page.locator('.analytics-chat-mic')).toBeHidden();
+
+    await page.locator('[data-analytics-prompt]').first().click();
+    await expect(page.locator('#analytics-chat-input')).toHaveValue('');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('I found a token hotspot');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Token trend');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Model shifts');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('5,573');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('4,126,507');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('+36,012,649');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Review repeated tool failures');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Active window is estimated.');
+    await expect(page.locator('#analytics-chat-suggestions')).toBeVisible();
+    await expect(page.locator('.analytics-card')).toHaveCount(3);
+    await expect.poll(() => page.locator('#analytics-chat-transcript').evaluate((el) => {
+      const transcript = el as HTMLElement;
+      return Math.round(transcript.scrollTop + transcript.clientHeight - transcript.scrollHeight);
+    })).toBeGreaterThanOrEqual(-2);
+
+    await page.locator('#analytics-chat-input').fill('second prompt');
+    await page.locator('#analytics-chat-form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
+    await expect(page.locator('#analytics-chat-transcript .analytics-message-label')).toHaveCount(4);
+    await expect.poll(() => page.locator('#analytics-chat-transcript').evaluate((el) => {
+      const transcript = el as HTMLElement;
+      return Math.round(transcript.scrollTop + transcript.clientHeight - transcript.scrollHeight);
+    })).toBeGreaterThanOrEqual(-2);
+
+    await page.locator('#analytics-chat-input').fill('draft question');
+    await page.locator('#analytics-chat-new').click();
+    await expect(page.locator('#analytics-chat-input')).toHaveValue('');
+    await expect(page.locator('#analytics-chat-transcript')).not.toContainText('I found a token hotspot');
+
+    await page.locator('[data-analytics-prompt-toggle]').click();
+    await expect(page.locator('#analytics-chat-suggestions')).toBeVisible();
+    await expect(page.locator('#analytics-chat-suggestions')).toContainText('Ask a question');
+    await expect(page.locator('.analytics-chat-prompt-list')).toBeHidden();
+    await page.locator('[data-analytics-prompt-toggle]').click();
+    await expect(page.locator('.analytics-chat-prompt-list')).toBeVisible();
+    await page.locator('[data-analytics-prompt-toggle]').click();
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('cmc_analytics_prompt_panel_collapsed'))).toBe('1');
+    await page.locator('#mission-route-btn').click();
+    await page.locator('#analytics-route-btn').click();
+    await expect(page.locator('#analytics-chat-suggestions')).toBeVisible();
+    await expect(page.locator('.analytics-chat-prompt-list')).toBeHidden();
+    await page.reload();
+    await waitForGame(page);
+    await expect(page.locator('#analytics-chat-suggestions')).toBeVisible();
+    await expect(page.locator('.analytics-chat-prompt-list')).toBeHidden();
+  });
+
+  test('analytics chat shows background indexing status', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).__analyticsChatFixture = {
+        status: {
+          available: false,
+          ingestion_running: true,
+          session_count: 0,
+          event_count: 0,
+          privacy_summary: 'Indexing local Copilot CLI history.',
+          warnings: ['Analyzing Copilot history in the background.'],
+        },
+      };
+    });
+
+    await page.locator('#analytics-route-btn').click();
+    await expect(page.locator('#analytics-chat-status')).toContainText('Analyzing Copilot history');
+  });
+
+  test('analytics chat lists MCP tool calls while waiting', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).__analyticsChatFixture = {
+        status: {
+          available: true,
+          session_count: 1,
+          event_count: 1,
+          privacy_summary: 'Fixture analytics.',
+          warnings: [],
+        },
+        chat: new Promise((resolve) => {
+          setTimeout(() => resolve({ answer: 'Prompt analysis complete.', artifacts: [], caveats: [] }), 1500);
+        }),
+      };
+    });
+
+    await page.locator('#analytics-route-btn').click();
+    if (await page.locator('#analytics-token-notice.visible').count()) {
+      await page.locator('#analytics-token-ack').click();
+    }
+    await page.locator('#analytics-chat-input').fill('Analyze my recent prompts.');
+    await page.locator('#analytics-chat-form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
+    await page.evaluate(() => {
+      (window as any).__cmcAnalyticsChatToolStarted('list_prompt_samples');
+      (window as any).__cmcAnalyticsChatToolStarted('summarize_prompt_patterns');
+    });
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Calling MCP tool list_prompt_samples');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Calling MCP tool summarize_prompt_patterns');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Prompt analysis complete.');
+  });
+
+  test('analytics chat renders lightweight markdown bullets', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).__analyticsChatFixture = {
+        status: {
+          available: true,
+          session_count: 1,
+          event_count: 1,
+          privacy_summary: 'Fixture analytics.',
+          warnings: [],
+        },
+        chat: {
+          answer: 'Try this pattern:\n- state the goal\n- add constraints\n\nThen ask for validation.',
+          artifacts: [],
+          caveats: [],
+        },
+      };
+    });
+
+    await page.locator('#analytics-route-btn').click();
+    if (await page.locator('#analytics-token-notice.visible').count()) {
+      await page.locator('#analytics-token-ack').click();
+    }
+    await page.locator('#analytics-chat-input').fill('How can I improve my prompts?');
+    await page.locator('#analytics-chat-form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Try this pattern:');
+    await expect(page.locator('.analytics-message-body ul li')).toHaveText(['state the goal', 'add constraints']);
+    await expect(page.locator('.analytics-message-body p')).toContainText(['Try this pattern:', 'Then ask for validation.']);
+  });
+
+  test('analytics chat shows one-time Copilot token notice and help reopens it', async ({ page }) => {
+    await page.evaluate(() => localStorage.removeItem('cmc_analytics_token_notice_seen'));
+
+    await page.locator('#analytics-route-btn').click();
+    await expect(page.locator('#analytics-token-notice')).toHaveClass(/visible/);
+    await expect(page.locator('#analytics-token-title')).toHaveText('Welcome to Mission Analytics Chat');
+    await expect(page.locator('#analytics-token-notice')).toContainText('will consume Copilot requests and tokens');
+    await expect(page.locator('#analytics-token-notice')).toContainText('Mission Control Insights tools');
+
+    await page.locator('#analytics-token-ack').click();
+    await expect(page.locator('#analytics-token-notice')).not.toHaveClass(/visible/);
+    await page.locator('#analytics-token-help').click();
+    await expect(page.locator('#analytics-token-notice')).toHaveClass(/visible/);
+    await page.locator('#analytics-token-ack').click();
+    await expect(page.locator('#analytics-token-notice')).not.toHaveClass(/visible/);
+    await page.locator('#mission-route-btn').click();
+    await page.locator('#analytics-route-btn').click();
+    await expect(page.locator('#analytics-token-notice')).not.toHaveClass(/visible/);
+    await page.locator('#analytics-token-help').click();
+    await expect(page.locator('#analytics-token-notice')).toHaveClass(/visible/);
   });
 
   test('history dashboard unloads when returning to home', async ({ page }) => {
@@ -137,6 +377,9 @@ test.describe('Copilot Mission Control app shell', () => {
     await expect(page.locator('#settings-overlay')).toBeVisible();
     await expect(page.locator('#settings-title')).toHaveText('Settings');
     await expect(page.locator('#app-theme-select option')).toHaveText(['Space', 'Medieval Kingdom']);
+    await expect(page.locator('#reset-btn')).toBeVisible();
+    await expect(page.locator('#reset-btn')).toHaveAttribute('aria-label', 'Reset visible activity counters');
+    await expect(page.locator('#reset-btn svg')).toBeVisible();
     await expect(page.locator('#app-theme-select')).toHaveValue('space');
     await expect(page.locator('#app-theme-select option:checked')).toHaveText('Space');
     await expect.poll(() => page.evaluate(() => localStorage.getItem('cmc_app_theme'))).toBe('space');
