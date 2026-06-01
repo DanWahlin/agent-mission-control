@@ -1177,7 +1177,12 @@
     return '<div class="' + scrollClass + '"><table class="' + tableClass + '"><thead><tr>' + columns.map(function (col) {
       return '<th>' + escapeHtml(col) + '</th>';
     }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
-      return '<tr>' + (row || []).map(function (cell) {
+      return '<tr>' + (row || []).map(function (cell, index) {
+        if (title.indexOf('completeness gaps') >= 0 && columns[index] === 'Open') {
+          var details = parseDefinitionDetails(cell);
+          var encoded = encodeURIComponent(JSON.stringify(details));
+          return '<td><button class="analytics-detail-button" type="button" data-analytics-open-definition="' + escapeHtml(encoded) + '">Open</button></td>';
+        }
         return '<td>' + escapeHtml(formatAnalyticsTableCell(cell)) + '</td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody></table></div>';
@@ -1206,6 +1211,18 @@
     } catch (_err) {
       return {};
     }
+  }
+
+  function openAnalyticsDefinitionInEditor(details) {
+    var invoke = tauriInvoke();
+    if (!invoke) return;
+    invoke('open_copilot_definition', {
+      kind: details.kind || 'skills',
+      definition: details.definition || details.name || '',
+      root: details.root || null,
+    }).catch(function (err) {
+      window.console.warn('Unable to open definition', err);
+    });
   }
 
   function openAnalyticsDefinitionDialog(details) {
@@ -2995,6 +3012,16 @@
           openAnalyticsDefinitionDialog(JSON.parse(decodeURIComponent(encoded)));
         } catch (_err) {
           openAnalyticsDefinitionDialog({});
+        }
+        return;
+      }
+      var openDefinitionButton = event.target && event.target.closest && event.target.closest('[data-analytics-open-definition]');
+      if (openDefinitionButton) {
+        var openEncoded = openDefinitionButton.getAttribute('data-analytics-open-definition') || '';
+        try {
+          openAnalyticsDefinitionInEditor(JSON.parse(decodeURIComponent(openEncoded)));
+        } catch (_err) {
+          openAnalyticsDefinitionInEditor({});
         }
         return;
       }

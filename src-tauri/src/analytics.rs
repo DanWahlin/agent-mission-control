@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -343,6 +343,48 @@ pub fn read_copilot_definition(
     );
     arguments.insert("max_chars".to_string(), Value::from(120000));
     call_insights_mcp_tool_with_args(app, tool_name, Value::Object(arguments))
+}
+
+pub fn resolve_copilot_definition_path(
+    kind: &str,
+    definition: &str,
+    root: Option<&str>,
+) -> Result<PathBuf, String> {
+    let kind = match kind {
+        "agents" | "agent" => "agents",
+        "skills" | "skill" => "skills",
+        _ => return Err(format!("Unsupported definition kind: {}", kind)),
+    };
+    let relative = safe_definition_relative_path(definition)?;
+    let requested_root = root
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "unknown");
+    let mut matched_requested_root = requested_root.is_none();
+    for root in definition_roots(kind) {
+        if let Some(requested_root) = requested_root {
+            if root.label != requested_root {
+                continue;
+            }
+            matched_requested_root = true;
+        }
+        let candidate = root.path.join(&relative);
+        if candidate.is_dir() {
+            if let Some(file) = primary_definition_file(&candidate, kind) {
+                return Ok(file);
+            }
+        } else if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    if let Some(requested_root) = requested_root {
+        if !matched_requested_root {
+            return Err(format!(
+                "Unsupported {} definition root: {}",
+                kind, requested_root
+            ));
+        }
+    }
+    Err(format!("No {} definition found for: {}", kind, definition))
 }
 
 fn requires_insights_tools(prompt: &str) -> bool {
@@ -2443,6 +2485,79 @@ fn project_root_for_mcp() -> Option<PathBuf> {
     Some(cwd)
 }
 
+struct DefinitionRoot {
+    label: String,
+    path: PathBuf,
+}
+
+fn definition_roots(kind: &str) -> Vec<DefinitionRoot> {
+    let project_candidates: &[&str] = if kind == "agents" {
+        &[
+            ".copilot/agents",
+            ".github/copilot/agents",
+            ".github/agents",
+        ]
+    } else {
+        &[".copilot/skills", ".github/copilot/skills"]
+    };
+    let user_candidates: &[&str] = if kind == "agents" {
+        &["agents", "installed-plugins", "marketplace-cache"]
+    } else {
+        &["skills", "installed-plugins", "marketplace-cache"]
+    };
+    let mut roots = Vec::new();
+    if let Some(project_root) = project_root_for_mcp() {
+        roots.extend(project_candidates.iter().map(|candidate| DefinitionRoot {
+            label: format!("project:{}", candidate),
+            path: project_root.join(candidate),
+        }));
+    }
+    if let Some(home) = user_home_dir() {
+        roots.extend(user_candidates.iter().map(|candidate| DefinitionRoot {
+            label: format!("~/.copilot/{}", candidate),
+            path: home.join(".copilot").join(candidate),
+        }));
+    }
+    roots
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+}
+
+fn safe_definition_relative_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err("Definition reference must be relative".to_string());
+    }
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            Component::CurDir => {}
+            _ => return Err("Definition reference contains unsafe path components".to_string()),
+        }
+    }
+    if clean.as_os_str().is_empty() {
+        return Err("Definition reference is empty".to_string());
+    }
+    Ok(clean)
+}
+
+fn primary_definition_file(dir: &Path, kind: &str) -> Option<PathBuf> {
+    let names: &[&str] = if kind == "agents" {
+        &["AGENT.md", "agent.yaml", "agent.yml", "AGENTS.md"]
+    } else {
+        &["SKILL.md", "skill.yaml", "skill.yml"]
+    };
+    names
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
+}
+
 struct AnalyticsSdkHandler {
     app: AppHandle,
     state: Arc<Mutex<AnalyticsSdkEventState>>,
@@ -3010,6 +3125,7 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
                 label.to_string(),
                 "Score".to_string(),
                 "Description".to_string(),
+                "Open".to_string(),
             ],
             rows: completeness_rows,
             ..Default::default()
@@ -3200,6 +3316,13 @@ fn definition_completeness_rows(review: &Value, label: &str) -> Vec<Vec<String>>
         .filter_map(|item| {
             let id = json_string(item, "id")?;
             let score = json_u64(item, "completeness_score");
+            let details = serde_json::json!({
+                "name": id,
+                "definition": json_string(item, "definition_ref").unwrap_or_else(|| id.clone()),
+                "kind": if label == "Agent" { "agents" } else { "skills" },
+                "root": json_string(item, "root").unwrap_or_else(|| "unknown".to_string()),
+            })
+            .to_string();
             let issues = item
                 .get("issues")
                 .and_then(Value::as_array)
@@ -3213,7 +3336,7 @@ fn definition_completeness_rows(review: &Value, label: &str) -> Vec<Vec<String>>
                 })
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| format!("{} looks complete", label));
-            Some(vec![id, format!("{}/5", score), issues])
+            Some(vec![id, format!("{}/5", score), issues, details])
         })
         .collect()
 }
@@ -4314,6 +4437,34 @@ mod tests {
         assert!(!rendered.contains("copilot:"));
         assert!(rendered.contains("Largest skill definitions"));
         assert!(rendered.contains("Skill completeness gaps"));
+    }
+
+    #[test]
+    fn definition_completeness_open_payload_keeps_root() {
+        let payload = sample_definition_review_payload();
+        let artifacts = definition_review_artifacts_from_payload(&payload);
+        let completeness = artifacts
+            .iter()
+            .find(|artifact| artifact.title == "Skill completeness gaps")
+            .expect("completeness artifact");
+        assert_eq!(
+            completeness.columns,
+            vec![
+                "Skill".to_string(),
+                "Score".to_string(),
+                "Description".to_string(),
+                "Open".to_string()
+            ]
+        );
+        let details: Value = serde_json::from_str(&completeness.rows[0][3]).expect("open payload");
+        assert_eq!(
+            details.get("definition").and_then(Value::as_str),
+            Some("small-skill")
+        );
+        assert_eq!(
+            details.get("root").and_then(Value::as_str),
+            Some("~/.copilot/skills")
+        );
     }
 
     #[test]

@@ -218,6 +218,17 @@ async fn read_copilot_definition(
     .map_err(|err| err.to_string())?
 }
 
+#[tauri::command]
+async fn open_copilot_definition(
+    kind: String,
+    definition: String,
+    root: Option<String>,
+    scheme: Option<String>,
+) -> Result<(), String> {
+    let path = analytics::resolve_copilot_definition_path(&kind, &definition, root.as_deref())?;
+    open_in_editor(path.to_string_lossy().to_string(), scheme).await
+}
+
 /// Explicit local-only raw reveal for one inspector row. The normal
 /// activity command remains privacy-safe; this only runs after the user
 /// clicks the Inspector reveal action.
@@ -395,6 +406,7 @@ pub fn run() {
             get_analytics_recommendation_facts,
             ask_analytics_chat,
             read_copilot_definition,
+            open_copilot_definition,
             get_raw_tool_call_details,
             install_update,
             open_in_editor,

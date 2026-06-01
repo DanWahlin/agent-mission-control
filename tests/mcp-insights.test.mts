@@ -111,6 +111,16 @@ test('Mission Control Insights MCP server exposes prompt and skill tools', async
         skill.files.some((file) => /Writes maintainable code/.test(file.content))
       )));
 
+      const cappedSkillsAnalysisResult = await client.request('tools/call', {
+        name: 'analyze_copilot_skills',
+        arguments: { max_definitions: 1, max_total_chars: 1000 },
+      });
+      const cappedSkillsAnalysisPayload = JSON.parse(cappedSkillsAnalysisResult.content[0].text);
+      const nestedCompleteness = cappedSkillsAnalysisPayload.artifact_review.completeness
+        .find((item) => item.definition_ref === 'phaser/scenes');
+      assert.ok(nestedCompleteness);
+      assert.equal(nestedCompleteness.id, 'scenes');
+
       const agentsAnalysisResult = await client.request('tools/call', {
         name: 'analyze_copilot_agents',
         arguments: { max_total_chars: 1000 },

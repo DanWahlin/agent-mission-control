@@ -464,9 +464,10 @@ function compactDefinitionReview(review) {
     })),
     context_cost: review.context_cost.slice(0, 5).map(({ id, root, source_chars }) => ({ id, root, source_chars })),
     description_lengths: review.description_lengths.slice(0, 5).map(({ id, root, description_chars }) => ({ id, root, description_chars })),
-    completeness: review.completeness.map(({ id, root, completeness_score, issues }) => ({
+    completeness: review.completeness.map(({ id, root, definition_ref, completeness_score, issues }) => ({
       id,
       root,
+      definition_ref,
       completeness_score,
       issues,
     })).filter((item) => item.issues.length > 0),
@@ -526,7 +527,7 @@ function buildDefinitionReview(kind, entries, definitions, duplicateIdGroups, ma
       .slice()
       .sort((a, b) => a.completeness_score - b.completeness_score || b.source_chars - a.source_chars)
       .slice(0, 16)
-      .map(({ id, root, completeness_score, checks, issues }) => ({ id, root, completeness_score, checks, issues })),
+      .map(({ id, root, definition_ref, completeness_score, checks, issues }) => ({ id, root, definition_ref, completeness_score, checks, issues })),
     overlap_pairs: overlapPairs,
     actions,
   };
