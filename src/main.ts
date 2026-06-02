@@ -52,18 +52,18 @@ if (!game) {
   setTimeout(tryBoot, 200);
 }
 
-// Live resize: relayout the canvas without restarting the scene. The
-// mission scene's `computeLayout()` is responsive — it samples W/H
-// every render — so a simple `scale.resize()` is enough.
-let resizeDebounce: number | null = null;
+// Live resize: keep the canvas bounds tracking the window on the next
+// animation frame. The scene debounces its heavier map/panel relayout.
+let resizeFrame: number | null = null;
 window.addEventListener('resize', () => {
-  if (resizeDebounce) clearTimeout(resizeDebounce);
-  resizeDebounce = window.setTimeout(() => {
+  if (resizeFrame != null) return;
+  resizeFrame = window.requestAnimationFrame(() => {
+    resizeFrame = null;
     if (!game) {
       tryBoot();
       return;
     }
     refreshDimensions();
     try { game.scale.resize(W, H); } catch { /* ignore */ }
-  }, 100) as unknown as number;
+  });
 });

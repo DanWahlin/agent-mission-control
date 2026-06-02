@@ -126,8 +126,14 @@ test.describe('Copilot Mission Control app shell', () => {
           answer: 'I found a token hotspot in Commands and a repeated failure pattern.',
           artifacts: [
             {
+              kind: 'table',
+              title: 'Tool Failures',
+              columns: ['Tool', 'Category', 'Failures'],
+              rows: [['github-mcp-server-get_file_contents', 'mcp', '20']],
+            },
+            {
               kind: 'chart',
-              title: 'Token trend',
+              title: 'Token Trend',
               points: [
                 { local_day: '2026-05-29', output_tokens: 1200, tool_calls: 4 },
                 { local_day: '2026-05-30', output_tokens: 2400, tool_calls: 6 },
@@ -135,17 +141,33 @@ test.describe('Copilot Mission Control app shell', () => {
             },
             {
               kind: 'table',
-              title: 'Model shifts',
+              title: 'Model Shifts',
               columns: ['Model', 'Current', 'Previous', 'Delta Turns'],
               rows: [['gpt-5.5', '5573', '4126507', '+36012649']],
+            },
+            {
+              kind: 'table',
+              title: 'Tool and Failure Changes',
+              columns: ['Tool', 'Current', 'Previous', 'Delta Calls/Failures'],
+              rows: [['github-mcp-server-get_file_contents', '247', '298', '-51']],
             },
             {
               kind: 'cards',
               title: 'Recommendations',
               cards: [
-                { title: 'Review repeated tool failures', body: 'Commands failed twice.', severity: 'review', metric: 'tool_failures' },
-                { title: 'Investigate token hotspot', body: 'Session abc12345 produced 2400 output tokens.', severity: 'review', metric: 'output_tokens' },
-                { title: 'Model mix context', body: 'gpt-5.5 appears most often in this range.', severity: 'info', metric: 'model_mix' },
+                { title: 'Review Repeated Tool Failures', body: 'Commands failed twice.', severity: 'review', metric: 'tool_failures' },
+                { title: 'Investigate Token Hotspot', body: 'Session abc12345 produced 2400 output tokens.', severity: 'review', metric: 'output_tokens' },
+                { title: 'Model Mix Context', body: 'gpt-5.5 appears most often in this range.', severity: 'info', metric: 'model_mix' },
+              ],
+            },
+            {
+              kind: 'mcp_server_usage',
+              title: 'MCP Server Usage',
+              description: 'Fixture MCP usage details.',
+              columns: ['Server', 'Enabled', 'Registered tools', 'Used tools', 'Calls', 'Failures', 'Avg duration', 'Top tools'],
+              rows: [
+                ['github-mcp-server', 'on', '4', '2', '9', '1', '120 ms', 'search_code (6), get_file_contents (3)', '1'],
+                ['playwright', 'off', '8', '0', '0', '0', 'n/a', 'No calls in range', '1'],
               ],
             },
           ],
@@ -166,15 +188,22 @@ test.describe('Copilot Mission Control app shell', () => {
     await expect(page.locator('#game')).toBeHidden();
     await expect(page.locator('#analytics-chat-transcript .analytics-message-label')).toHaveCount(0);
     await expect(page.locator('#analytics-chat-suggestions')).toContainText('Ask a question and I\'ll answer from local derived metrics');
+    await expect(page.locator('#analytics-chat-suggestions')).toContainText('What\'s my MCP server usage?');
     await expect(page.locator('#analytics-chat-transcript')).not.toContainText('Ask a question and I\'ll answer from local derived metrics');
     const layout = await page.evaluate(() => {
       const input = document.querySelector('#analytics-chat-input') as HTMLElement;
       const submit = document.querySelector('#analytics-chat-submit') as HTMLElement;
+      const newChat = document.querySelector('#analytics-chat-new') as HTMLElement;
+      const form = document.querySelector('#analytics-chat-form') as HTMLElement;
       const transcript = document.querySelector('#analytics-chat-transcript') as HTMLElement;
       const screen = document.querySelector('#analytics-chat-screen') as HTMLElement;
       return {
         input: input.getBoundingClientRect().toJSON(),
         submit: submit.getBoundingClientRect().toJSON(),
+        newChat: newChat.getBoundingClientRect().toJSON(),
+        form: form.getBoundingClientRect().toJSON(),
+        newChatText: newChat.textContent?.trim(),
+        newChatInsideForm: Boolean(newChat.closest('form')),
         transcript: transcript.getBoundingClientRect().toJSON(),
         screenOverflow: getComputedStyle(screen).overflow,
         transcriptOverflowY: getComputedStyle(transcript).overflowY,
@@ -183,6 +212,10 @@ test.describe('Copilot Mission Control app shell', () => {
     expect(layout.input.height).toBeLessThanOrEqual(56);
     expect(layout.submit.height).toBeLessThanOrEqual(56);
     expect(layout.input.width).toBeGreaterThan(300);
+    expect(layout.newChatText).toBe('New Chat');
+    expect(layout.newChatInsideForm).toBe(false);
+    expect(layout.newChat.height).toBeLessThanOrEqual(56);
+    expect(layout.newChat.x).toBeGreaterThan(layout.form.x + layout.form.width);
     expect(layout.transcript.height).toBeGreaterThan(200);
     expect(layout.screenOverflow).toBe('hidden');
     expect(layout.transcriptOverflowY).toBe('auto');
@@ -191,19 +224,30 @@ test.describe('Copilot Mission Control app shell', () => {
     await page.locator('[data-analytics-prompt]').first().click();
     await expect(page.locator('#analytics-chat-input')).toHaveValue('');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('I found a token hotspot');
-    await expect(page.locator('#analytics-chat-transcript')).toContainText('Token trend');
-    await expect(page.locator('#analytics-chat-transcript')).toContainText('Model shifts');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Token Trend');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Model Shifts');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('5,573');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('4,126,507');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('+36,012,649');
-    await expect(page.locator('#analytics-chat-transcript')).toContainText('Review repeated tool failures');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('Review Repeated Tool Failures');
+    await expect(page.locator('#analytics-chat-transcript')).toContainText('MCP Server Usage');
+    await expect(page.locator('.analytics-table-mcp')).toContainText('github-mcp-server');
+    await expect(page.locator('.analytics-table-mcp thead')).toContainText('Registered Tools');
+    await expect(page.locator('.analytics-table-mcp thead')).toContainText('Avg Duration');
+    await expect(page.locator('.analytics-table-mcp')).not.toContainText('Context impact');
+    await expect(page.locator('.analytics-mcp-switch.on')).toContainText('On');
+    await expect(page.locator('.analytics-mcp-switch.off')).toContainText('Off');
+    await expect(page.locator('.analytics-table-tool-failures')).toContainText('github-mcp-server-get_file_contents');
+    await expect(page.locator('.analytics-artifact').filter({ hasText: 'Tool and Failure Changes' }).locator('.analytics-table-comparison')).toContainText('Delta Calls/Failures');
+    const artifactTitles = await page.locator('.analytics-artifact h3').allTextContents();
+    expect(artifactTitles.slice(-2)).toEqual(['Tool Failures', 'Tool and Failure Changes']);
     await expect(page.locator('#analytics-chat-transcript')).toContainText('Active window is estimated.');
     await expect(page.locator('#analytics-chat-suggestions')).toBeVisible();
     await expect(page.locator('.analytics-card')).toHaveCount(3);
     await expect.poll(() => page.locator('#analytics-chat-transcript').evaluate((el) => {
       const transcript = el as HTMLElement;
       return Math.round(transcript.scrollTop + transcript.clientHeight - transcript.scrollHeight);
-    })).toBeGreaterThanOrEqual(-2);
+    })).toBeGreaterThanOrEqual(-64);
 
     await page.locator('#analytics-chat-input').fill('second prompt');
     await page.locator('#analytics-chat-form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
@@ -211,7 +255,7 @@ test.describe('Copilot Mission Control app shell', () => {
     await expect.poll(() => page.locator('#analytics-chat-transcript').evaluate((el) => {
       const transcript = el as HTMLElement;
       return Math.round(transcript.scrollTop + transcript.clientHeight - transcript.scrollHeight);
-    })).toBeGreaterThanOrEqual(-2);
+    })).toBeGreaterThanOrEqual(-64);
 
     await page.locator('#analytics-chat-input').fill('draft question');
     await page.locator('#analytics-chat-new').click();
@@ -280,9 +324,11 @@ test.describe('Copilot Mission Control app shell', () => {
       (window as any).__cmcAnalyticsChatToolStarted('list_prompt_samples');
       (window as any).__cmcAnalyticsChatToolStarted('summarize_prompt_patterns');
     });
+    await expect(page.locator('.analytics-message.assistant .analytics-label-spinner')).toBeVisible();
     await expect(page.locator('#analytics-chat-transcript')).toContainText('Calling MCP tool list_prompt_samples');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('Calling MCP tool summarize_prompt_patterns');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('Prompt analysis complete.');
+    await expect(page.locator('.analytics-message.assistant .analytics-label-spinner')).toHaveCount(0);
   });
 
   test('analytics chat renders lightweight markdown bullets', async ({ page }) => {

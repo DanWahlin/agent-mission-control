@@ -137,6 +137,9 @@ fn ensure_within_root(candidate: &Path, root: &DefinitionRoot) -> Result<PathBuf
 }
 
 fn project_root_for_mcp() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("CMC_PROJECT_ROOT").map(PathBuf::from) {
+        return Some(root);
+    }
     let cwd = std::env::current_dir().ok()?;
     if cwd.file_name().and_then(|name| name.to_str()) == Some("src-tauri") {
         return cwd.parent().map(Path::to_path_buf);

@@ -83,6 +83,10 @@ const TOOLS = [
         type: 'string',
         description: 'Skill id returned by list_copilot_skills, or a safe path under the project or ~/.copilot. Prefer ids over paths.',
       },
+      root: {
+        type: 'string',
+        description: 'Optional root label returned by list_copilot_skills when duplicate ids exist.',
+      },
       max_chars: integerSchema('Maximum characters to return, 1-120000. Use 4000-8000 for normal review; increase only when the user asks for deeper inspection of one skill.', DEFAULT_CONTENT_CHARS, 1, 120000),
     }, ['skill']),
   },
@@ -104,6 +108,10 @@ const TOOLS = [
         type: 'string',
         description: 'Agent id returned by list_copilot_agents, or a safe path under the project or ~/.copilot. Prefer ids over paths.',
       },
+      root: {
+        type: 'string',
+        description: 'Optional root label returned by list_copilot_agents when duplicate ids exist.',
+      },
       max_chars: integerSchema('Maximum characters to return, 1-120000. Use 4000-8000 for normal review; increase only when the user asks for deeper inspection of one agent.', DEFAULT_CONTENT_CHARS, 1, 120000),
     }, ['agent']),
   },
@@ -111,6 +119,13 @@ const TOOLS = [
     name: 'analyze_copilot_agents',
     description: 'Use first for broad Copilot agent review prompts, including "Review my Copilot agents", "audit my agents", "improve my agents", "find duplicate agents", "compare my agents", or "check agent coverage". Bulk-loads bounded agent definition content from the project and ~/.copilot so the model can analyze coverage, duplication, routing, and quality without reading agents one by one.',
     inputSchema: bulkDefinitionSchema('agents'),
+  },
+  {
+    name: 'analyze_mcp_servers',
+    description: 'Use first for broad MCP usage and MCP server review prompts, including "What is my MCP server usage?", "review my MCP servers", "which MCP tools are enabled", "MCP context impact", or "audit my MCP setup". Reads the local MCP registry and returns enabled/disabled server inventory plus bounded tool names, descriptions, and token estimates when available.',
+    inputSchema: objectSchema({
+      max_tools_per_server: integerSchema('Maximum tools to include per MCP server, 1-100. Use 25 by default for broad review.', 25, 1, 100),
+    }),
   },
 ];
 
@@ -204,15 +219,17 @@ async function callTool(name, args) {
     case 'list_copilot_skills':
       return textResult({ skills: listDefinitions('skills') });
     case 'read_skill_definition':
-      return textResult({ skill: readDefinition('skills', args.skill, args.max_chars) });
+      return textResult({ skill: readDefinition('skills', args.skill, args.max_chars, args.root) });
     case 'analyze_copilot_skills':
       return textResult(analyzeDefinitions('skills', args));
     case 'list_copilot_agents':
       return textResult({ agents: listDefinitions('agents') });
     case 'read_agent_definition':
-      return textResult({ agent: readDefinition('agents', args.agent, args.max_chars) });
+      return textResult({ agent: readDefinition('agents', args.agent, args.max_chars, args.root) });
     case 'analyze_copilot_agents':
       return textResult(analyzeDefinitions('agents', args));
+    case 'analyze_mcp_servers':
+      return textResult(analyzeMcpServers(args));
     default:
       return errorResult(`Unknown tool: ${name}`);
   }
@@ -370,12 +387,14 @@ function listDefinitions(kind) {
   return entries.filter(Boolean).sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function readDefinition(kind, idOrPath, maxCharsArg) {
+function readDefinition(kind, idOrPath, maxCharsArg, rootArg) {
   const id = String(idOrPath || '').trim();
   if (!id) throw new Error(`${kind === 'skills' ? 'skill' : 'agent'} is required.`);
   const maxChars = requiredInt(maxCharsArg, DEFAULT_CONTENT_CHARS, 1, 120000, 'max_chars');
+  const requestedRoot = String(rootArg || '').trim();
   const entries = listDefinitions(kind);
-  const match = entries.find((entry) => entry.id === id || entry.name === id || entry.relative_path === id)
+  const candidates = requestedRoot ? entries.filter((entry) => entry.root === requestedRoot) : entries;
+  const match = candidates.find((entry) => entry.id === id || entry.name === id || entry.relative_path === id)
     || resolveDefinitionPath(kind, id);
   if (!match) throw new Error(`No ${kind.slice(0, -1)} definition found for: ${id}`);
   const absolute = match.absolute_path || safeResolveAllowed(id);
@@ -445,6 +464,119 @@ function analyzeDefinitions(kind, args) {
     review,
     definitions,
   };
+}
+
+function analyzeMcpServers(args) {
+  const maxToolsPerServer = requiredInt(args.max_tools_per_server, 25, 1, 100, 'max_tools_per_server');
+  const registryPath = path.join(COPILOT_ROOT, 'm-mcp-servers.json');
+  if (!fs.existsSync(registryPath)) {
+    return {
+      kind: 'mcp_servers',
+      summary: {
+        registry_found: false,
+        configured_servers: 0,
+        enabled_servers: 0,
+        disabled_servers: 0,
+        registered_tools: 0,
+      },
+      servers: [],
+      recommendations: [{
+        title: 'No MCP registry found',
+        body: 'No local MCP registry was found, so MCP server inventory and enabled state could not be analyzed.',
+        severity: 'warning',
+        metric: 'mcp_registry',
+      }],
+    };
+  }
+
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  const servers = Object.entries(registry.servers || {})
+    .map(([name, config]) => mcpServerSummary(name, config, maxToolsPerServer))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const registeredTools = servers.reduce((sum, server) => sum + server.registered_tool_count, 0);
+  const enabledServers = servers.filter((server) => server.enabled).length;
+  return {
+    kind: 'mcp_servers',
+    summary: {
+      registry_found: true,
+      configured_servers: servers.length,
+      enabled_servers: enabledServers,
+      disabled_servers: Math.max(0, servers.length - enabledServers),
+      registered_tools: registeredTools,
+      max_tools_per_server: maxToolsPerServer,
+      tool_schema_token_cost_available: servers.some((server) => server.tools.some((tool) => tool.tokens > 0)),
+    },
+    servers,
+    recommendations: mcpServerRecommendations(servers),
+  };
+}
+
+function mcpServerSummary(name, rawConfig, maxToolsPerServer) {
+  const config = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+  const allTools = mcpToolsFromConfig(config);
+  return {
+    name: safeIdentifier(name, 'mcp-server'),
+    type: safeIdentifier(config.type || config.transport || (config.url ? 'http' : config.command ? 'local' : config.builtin ? 'builtin' : 'unknown'), 'unknown'),
+    enabled: mcpConfigEnabled(config),
+    status: safeIdentifier(config.status || config.state || '', ''),
+    url_host: safeUrlHost(config.url || config.endpoint || ''),
+    builtin: Boolean(config.builtin),
+    registered_tool_count: allTools.length,
+    included_tool_count: Math.min(allTools.length, maxToolsPerServer),
+    tools_truncated: allTools.length > maxToolsPerServer,
+    tools: allTools.slice(0, maxToolsPerServer),
+  };
+}
+
+function mcpToolsFromConfig(config) {
+  const tools = Array.isArray(config.tools) ? config.tools : [];
+  return tools.map((tool) => {
+    if (typeof tool === 'string') {
+      return { name: safeIdentifier(tool, 'tool'), description: '', tokens: 0, enabled: true };
+    }
+    const value = tool && typeof tool === 'object' ? tool : {};
+    return {
+      name: safeIdentifier(value.name || value.tool || value.toolName || 'tool', 'tool'),
+      description: truncate(String(value.description || value.summary || ''), 500),
+      tokens: Number.isFinite(Number(value.tokens || value.token_count || value.context_tokens))
+        ? Math.max(0, Number(value.tokens || value.token_count || value.context_tokens))
+        : 0,
+      enabled: value.enabled !== false && value.disabled !== true,
+    };
+  }).filter((tool) => tool.name);
+}
+
+function mcpConfigEnabled(config) {
+  if (config.disabled === true || config.enabled === false) return false;
+  if (config.config && (config.config.disabled === true || config.config.enabled === false)) return false;
+  const status = String(config.status || config.state || '').toLowerCase();
+  return !['disabled', 'off', 'inactive'].includes(status);
+}
+
+function mcpServerRecommendations(servers) {
+  const recommendations = [];
+  const disabled = servers.filter((server) => !server.enabled);
+  if (disabled.length) recommendations.push({
+    title: `Review ${disabled.length} disabled MCP server${disabled.length === 1 ? '' : 's'}`,
+    body: `${disabled.slice(0, 3).map((server) => server.name).join(', ')} ${disabled.length === 1 ? 'is' : 'are'} disabled. Keep disabled if unused; enable only when you need those tools.`,
+    severity: 'info',
+    metric: 'mcp_disabled',
+  });
+  const large = servers.filter((server) => server.registered_tool_count >= 20).sort((a, b) => b.registered_tool_count - a.registered_tool_count);
+  if (large.length) recommendations.push({
+    title: `Watch ${large.length} large MCP server${large.length === 1 ? '' : 's'}`,
+    body: `${large[0].name} exposes ${large[0].registered_tool_count} tools. Large tool inventories can add selection/context overhead even when exact token costs are unavailable.`,
+    severity: 'warning',
+    metric: 'mcp_tool_inventory',
+  });
+  const empty = servers.filter((server) => server.registered_tool_count === 0);
+  if (empty.length) recommendations.push({
+    title: `Check ${empty.length} empty MCP server${empty.length === 1 ? '' : 's'}`,
+    body: `${empty.slice(0, 3).map((server) => server.name).join(', ')} registered no tools in the local registry.`,
+    severity: 'warning',
+    metric: 'mcp_empty',
+  });
+  return recommendations.slice(0, 5);
 }
 
 function compactDefinitionReview(review) {
@@ -962,6 +1094,25 @@ function rootLabelForPath(file) {
 function displayRoot(value) {
   if (value.startsWith(HOME)) return `~${value.slice(HOME.length)}`;
   return value;
+}
+
+function safeIdentifier(value, fallback) {
+  const safe = String(value || '')
+    .trim()
+    .replace(/[^\w.:-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120);
+  return safe || fallback;
+}
+
+function safeUrlHost(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw).host;
+  } catch (_err) {
+    return '';
+  }
 }
 
 function requiredInt(value, defaultValue, min, max, name) {

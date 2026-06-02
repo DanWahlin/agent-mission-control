@@ -56,6 +56,25 @@ test('Mission Control Insights MCP server exposes prompt and skill tools', async
       path.join(home, '.copilot', 'agents', 'reviewer', 'agent.yaml'),
       'name: reviewer\ndescription: Reviews code for correctness.\n',
     );
+    writeFileSync(
+      path.join(home, '.copilot', 'm-mcp-servers.json'),
+      JSON.stringify({
+        servers: {
+          'github-mcp-server': {
+            type: 'http',
+            url: 'https://api.enterprise.githubcopilot.com/mcp/readonly',
+            tools: [
+              { name: 'search_code', description: 'Search code across GitHub repositories.', tokens: 308 },
+              { name: 'get_file_contents', description: 'Read repository file contents.', tokens: 166 },
+            ],
+          },
+          playwright: {
+            disabled: true,
+            tools: ['browser_navigate'],
+          },
+        },
+      }, null, 2),
+    );
 
     const client = await startServer({ HOME: home, CMC_PROJECT_ROOT: project });
     try {
@@ -71,6 +90,7 @@ test('Mission Control Insights MCP server exposes prompt and skill tools', async
       assert.ok(list.tools.some((tool) => tool.name === 'list_prompt_samples'));
       assert.ok(list.tools.some((tool) => tool.name === 'analyze_copilot_skills'));
       assert.ok(list.tools.some((tool) => tool.name === 'analyze_copilot_agents'));
+      assert.ok(list.tools.some((tool) => tool.name === 'analyze_mcp_servers'));
       assert.ok(list.tools.every((tool) => tool.inputSchema && tool.inputSchema.type === 'object'));
 
       const promptResult = await client.request('tools/call', {
@@ -130,6 +150,64 @@ test('Mission Control Insights MCP server exposes prompt and skill tools', async
       assert.equal(agentsAnalysisPayload.summary.discovered_definitions, 1);
       assert.equal(agentsAnalysisPayload.summary.included_definitions, 1);
       assert.match(agentsAnalysisPayload.definitions[0].files[0].content, /Reviews code for correctness/);
+
+      const mcpAnalysisResult = await client.request('tools/call', {
+        name: 'analyze_mcp_servers',
+        arguments: { max_tools_per_server: 10 },
+      });
+      const mcpAnalysisPayload = JSON.parse(mcpAnalysisResult.content[0].text);
+      assert.equal(mcpAnalysisPayload.kind, 'mcp_servers');
+      assert.equal(mcpAnalysisPayload.summary.configured_servers, 2);
+      assert.equal(mcpAnalysisPayload.summary.enabled_servers, 1);
+      const githubServer = mcpAnalysisPayload.servers.find((server) => server.name === 'github-mcp-server');
+      assert.ok(githubServer);
+      assert.equal(githubServer.url_host, 'api.enterprise.githubcopilot.com');
+      assert.ok(githubServer.tools.some((tool) => tool.name === 'search_code' && tool.tokens === 308));
+    } finally {
+      client.stop();
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Mission Control Insights reads duplicate definition ids from the requested root', async () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'cmc-mcp-root-'));
+  const home = path.join(temp, 'home');
+  const project = path.join(temp, 'project');
+  try {
+    mkdirSync(path.join(home, '.copilot', 'skills', 'dupe'), { recursive: true });
+    mkdirSync(path.join(project, '.copilot', 'skills', 'dupe'), { recursive: true });
+    writeFileSync(
+      path.join(home, '.copilot', 'skills', 'dupe', 'SKILL.md'),
+      '# User Dupe\n\nUser-root definition.\n',
+    );
+    writeFileSync(
+      path.join(project, '.copilot', 'skills', 'dupe', 'SKILL.md'),
+      '# Project Dupe\n\nProject-root definition.\n',
+    );
+
+    const client = await startServer({ HOME: home, CMC_PROJECT_ROOT: project });
+    try {
+      await client.request('initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '0.0.0' },
+      });
+
+      const userResult = await client.request('tools/call', {
+        name: 'read_skill_definition',
+        arguments: { skill: 'dupe', root: '~/.copilot/skills' },
+      });
+      const projectResult = await client.request('tools/call', {
+        name: 'read_skill_definition',
+        arguments: { skill: 'dupe', root: 'project:.copilot/skills' },
+      });
+      const userPayload = JSON.parse(userResult.content[0].text);
+      const projectPayload = JSON.parse(projectResult.content[0].text);
+
+      assert.match(userPayload.skill.files[0].content, /User-root definition/);
+      assert.match(projectPayload.skill.files[0].content, /Project-root definition/);
     } finally {
       client.stop();
     }

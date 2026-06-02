@@ -865,6 +865,7 @@
     replay: '',
     history: '',
   };
+  var RECENT_ACTIVITY_VISIBLE_ROWS = 10;
   var appRoute = routeFromHash();
   var historyFetchFrame = 0;
   var historyFetchTimer = 0;
@@ -881,6 +882,7 @@
     'Where are my token hotspots?',
     'Which tools failed the most?',
     'Compare my recent model mix.',
+    'What\'s my MCP server usage?',
     'How can I improve my prompts?',
     'Review my Copilot skills.',
     'Review my Copilot agents.',
@@ -1093,6 +1095,9 @@
       return;
     }
     analyticsChatTranscript.innerHTML = analyticsChatMessages.map(renderAnalyticsMessage).join('');
+    analyticsChatMessages.forEach(function (message) {
+      if (message) message.entering = false;
+    });
     scrollAnalyticsTranscriptToLatest();
   }
 
@@ -1112,8 +1117,15 @@
   }
 
   function renderAnalyticsMessage(message) {
-    var html = '<div class="analytics-message ' + escapeHtml(message.role || 'assistant') + '">'
-      + '<div class="analytics-message-label">' + escapeHtml(message.role === 'user' ? 'You' : 'Assistant') + '</div>'
+    var isAssistant = message.role !== 'user';
+    var label = message.role === 'user' ? 'You' : 'Assistant';
+    if (isAssistant && message.loading) {
+      label += '<span class="analytics-label-spinner" aria-label="Assistant is thinking"></span>';
+    }
+    var classes = ['analytics-message', message.role || 'assistant'];
+    if (message.entering) classes.push('entering');
+    var html = '<div class="' + classes.map(escapeHtml).join(' ') + '">'
+      + '<div class="analytics-message-label">' + label + '</div>'
       + '<div class="analytics-message-body">' + renderLightMarkdown(message.text || '') + '</div>';
     if (message.toolCalls && message.toolCalls.length) {
       html += '<div class="analytics-tool-calls">' + message.toolCalls.map(function (toolName) {
@@ -1162,7 +1174,7 @@
       return html || '<p></p>';
     }
     if (message.artifacts && message.artifacts.length) {
-      html += '<div class="analytics-artifacts">' + message.artifacts.map(renderAnalyticsArtifact).join('') + '</div>';
+      html += '<div class="analytics-artifacts">' + orderedAnalyticsArtifacts(message.artifacts).map(renderAnalyticsArtifact).join('') + '</div>';
     }
     if (message.caveats && message.caveats.length) {
       html += '<div class="analytics-caveats">' + message.caveats.map(function (caveat) {
@@ -1177,18 +1189,36 @@
     var kind = artifact && artifact.kind;
     var body = '';
     if (kind === 'table' || kind === 'wide_table') body = renderAnalyticsTable(artifact);
+    else if (kind === 'mcp_server_usage') body = renderAnalyticsMcpUsage(artifact);
     else if (kind === 'definition_inventory') body = renderAnalyticsDefinitionInventory(artifact);
     else if (kind === 'chart') body = renderAnalyticsBars(artifact.points || []);
     else if (kind === 'bars') body = renderAnalyticsValueBars(artifact);
     else if (kind === 'cards') body = renderAnalyticsCards(artifact.cards || []);
     else body = '<div class="analytics-caveats">No structured data for this artifact.</div>';
     var className = kind === 'cards' ? 'analytics-artifact analytics-artifact-cards'
-      : kind === 'wide_table' || kind === 'definition_inventory' ? 'analytics-artifact analytics-artifact-wide'
+      : kind === 'wide_table' || kind === 'definition_inventory' || kind === 'mcp_server_usage' ? 'analytics-artifact analytics-artifact-wide'
       : 'analytics-artifact';
     var description = artifact && artifact.description
       ? '<p class="analytics-artifact-copy">' + escapeHtml(artifact.description) + '</p>'
       : '';
     return '<section class="' + className + '"><h3>' + escapeHtml((artifact && artifact.title) || 'Artifact') + '</h3>' + description + body + '</section>';
+  }
+
+  function orderedAnalyticsArtifacts(artifacts) {
+    return (artifacts || [])
+      .map(function (artifact, index) {
+        return { artifact: artifact, index: index, failure: isFailureArtifact(artifact) };
+      })
+      .sort(function (left, right) {
+        if (left.failure !== right.failure) return left.failure ? 1 : -1;
+        return left.index - right.index;
+      })
+      .map(function (entry) { return entry.artifact; });
+  }
+
+  function isFailureArtifact(artifact) {
+    var title = String((artifact && artifact.title) || '').toLowerCase();
+    return title.indexOf('failure') >= 0 || title.indexOf('failures') >= 0;
   }
 
   function renderAnalyticsTable(artifact) {
@@ -1199,6 +1229,8 @@
     var tableClass = 'analytics-table';
     var scrollClass = 'analytics-table-scroll';
     if (title.indexOf('overlap candidates') >= 0) tableClass += ' analytics-table-overlap';
+    if (title.indexOf('model shifts') >= 0 || title.indexOf('tool and failure changes') >= 0) tableClass += ' analytics-table-comparison';
+    if (title === 'tool failures') tableClass += ' analytics-table-tool-failures';
     var isReadinessTable = title.indexOf('completeness gaps') >= 0 || title.indexOf('readiness checks') >= 0;
     if (isReadinessTable) {
       tableClass += ' analytics-table-completeness';
@@ -1206,7 +1238,7 @@
     }
 
     return '<div class="' + scrollClass + '"><table class="' + tableClass + '"><thead><tr>' + columns.map(function (col) {
-      return '<th>' + escapeHtml(col) + '</th>';
+      return '<th>' + escapeHtml(formatAnalyticsColumnHeading(col)) + '</th>';
     }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
       return '<tr>' + (row || []).map(function (cell, index) {
         if (isReadinessTable && (columns[index] === 'Details' || columns[index] === 'Open')) {
@@ -1234,6 +1266,68 @@
           + '<td><button class="analytics-detail-button" type="button" data-analytics-definition="' + escapeHtml(encoded) + '">View</button></td>'
           + '</tr>';
       }).join('') + '</tbody></table></div>';
+  }
+
+  function renderAnalyticsMcpUsage(artifact) {
+    var columns = artifact.columns || [];
+    var rows = artifact.rows || [];
+    if (!rows.length) return '<div class="analytics-caveats">No MCP servers or tool usage found for this range.</div>';
+    return '<div class="analytics-table-scroll analytics-table-scroll-mcp"><table class="analytics-table analytics-table-mcp"><thead><tr>' + columns.map(function (col) {
+      return '<th>' + escapeHtml(formatAnalyticsColumnHeading(col)) + '</th>';
+    }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
+      var cells = (row || []).slice(0, columns.length);
+      var toggleable = (row || [])[columns.length] !== '0';
+      return '<tr>' + cells.map(function (cell, index) {
+        if (index === 1) return '<td>' + renderMcpEnabledSwitch(cell, cells[0], toggleable) + '</td>';
+        return '<td>' + escapeHtml(formatAnalyticsTableCell(cell)) + '</td>';
+      }).join('') + '</tr>';
+    }).join('') + '</tbody></table></div>';
+  }
+
+  function renderMcpEnabledSwitch(value, server, toggleable) {
+    var state = String(value || '').toLowerCase();
+    if (state !== 'on' && state !== 'off') state = 'off';
+    var checked = state === 'on';
+    var disabled = toggleable ? '' : ' disabled aria-disabled="true" title="This MCP server was observed in history but is not present in the local registry."';
+    return '<button class="analytics-mcp-switch ' + (checked ? 'on' : 'off') + '" type="button" role="switch" aria-checked="' + (checked ? 'true' : 'false') + '" data-analytics-mcp-server="' + escapeHtml(server || '') + '" data-analytics-mcp-enabled="' + (checked ? 'true' : 'false') + '"' + disabled + '>'
+      + '<span></span><strong>' + (checked ? 'On' : 'Off') + '</strong></button>';
+  }
+
+  function updateMcpSwitchButton(button, enabled) {
+    button.classList.toggle('on', enabled);
+    button.classList.toggle('off', !enabled);
+    button.setAttribute('aria-checked', enabled ? 'true' : 'false');
+    button.setAttribute('data-analytics-mcp-enabled', enabled ? 'true' : 'false');
+    var label = button.querySelector('strong');
+    if (label) label.textContent = enabled ? 'On' : 'Off';
+  }
+
+  function setMcpServerEnabled(button) {
+    var server = button.getAttribute('data-analytics-mcp-server') || '';
+    var nextEnabled = button.getAttribute('data-analytics-mcp-enabled') !== 'true';
+    var invoke = tauriInvoke();
+    if (!invoke || !server) {
+      updateMcpSwitchButton(button, nextEnabled);
+      return;
+    }
+    button.disabled = true;
+    button.classList.add('loading');
+    invoke('set_mcp_server_enabled', { server: server, enabled: nextEnabled }).then(function () {
+      updateMcpSwitchButton(button, nextEnabled);
+      button.title = nextEnabled ? 'MCP server enabled' : 'MCP server disabled';
+    }).catch(function (err) {
+      window.console.warn('Unable to update MCP server state', err);
+      button.title = err && err.message ? err.message : String(err || 'Unable to update MCP server state');
+    }).finally(function () {
+      button.disabled = false;
+      button.classList.remove('loading');
+    });
+  }
+
+  function formatAnalyticsColumnHeading(value) {
+    return String(value == null ? '' : value).replace(/(^|[\s/()-])([a-z])/g, function (_match, prefix, letter) {
+      return prefix + letter.toUpperCase();
+    });
   }
 
   function parseDefinitionDetails(value) {
@@ -1297,6 +1391,7 @@
     invoke('read_copilot_definition', {
       kind: details.kind || 'skills',
       definition: details.definition || details.name || '',
+      root: details.root || null,
     }).then(function (payload) {
       target.textContent = formatDefinitionSource(payload, details.kind || 'skills');
       target.scrollTop = 0;
@@ -1410,12 +1505,14 @@
     if (!question || analyticsChatLoading) return;
     var requestSeq = ++analyticsChatRequestSeq;
     analyticsChatLoading = true;
-    analyticsChatMessages.push({ role: 'user', text: question });
+    analyticsChatMessages.push({ role: 'user', text: question, entering: true });
     analyticsChatMessages.push({
       role: 'assistant',
       text: analyticsStatusCache && analyticsStatusCache.ingestion_running
         ? 'Analyzing Copilot history… I can answer from the data indexed so far.'
         : 'Checking local analytics…',
+      loading: true,
+      entering: true,
     });
     renderAnalyticsChat();
     if (analyticsChatInput && analyticsChatInput.value.trim() === question) {
@@ -1835,6 +1932,17 @@
           return '<div class="cmc-feed-row"><span class="cmc-dot" style="--dot:' + color + '"></span><span>' + escapeHtml(row.label) + '</span><span class="cmc-muted">' + escapeHtml(row.age) + '</span></div>';
         }).join('') + '</div>'
       : '<div class="cmc-label">' + escapeHtml((view.feed && view.feed.empty) || '') + '</div>';
+  }
+
+  function recentFeedPanelHeight(view) {
+    var rowCount = ((view.feed && view.feed.rows) || []).length;
+    if (!rowCount) return 110;
+    var visibleRows = Math.min(rowCount, RECENT_ACTIVITY_VISIBLE_ROWS);
+    var panelChromeH = 64;
+    var bodyPaddingH = 20;
+    var rowH = 26;
+    var rowGap = 8;
+    return panelChromeH + bodyPaddingH + (visibleRows * rowH) + (Math.max(0, visibleRows - 1) * rowGap);
   }
 
   function renderQuarterData(q) {
@@ -2469,7 +2577,6 @@
   function historyKpis(view, history, scoped) {
     var activity = view && view.activity || {};
     var sessions = history.recent_sessions || [];
-    var lastActivity = history.last_activity_at ? historyAgeLabel(history.last_activity_at) : 'none observed';
     var bucketEvents = (history.activity_24h || []).reduce(function (sum, bucket) { return sum + Number(bucket.event_count || 0); }, 0);
     var eventTotal = historyMetricTotal(history, 'event_count', scoped ? bucketEvents : activity.totalEvents);
     var toolTotal = historyMetricTotal(history, 'tool_count', scoped ? undefined : activity.totalToolCalls);
@@ -2479,7 +2586,6 @@
       { label: 'Events', value: eventTotal },
       { label: 'Tool Calls', value: toolTotal },
       { label: 'Models Used', value: historyUniqueModelCount(history) },
-      { label: 'Last Activity', value: lastActivity },
       { label: 'Input Tokens', value: tokenTotals.input, token: true },
       { label: 'Output Tokens', value: tokenTotals.output, token: true },
     ];
@@ -2760,12 +2866,15 @@
             session.last_tool ? 'tool ' + session.last_tool : '',
           ].filter(Boolean);
           var statusClass = cssToken(session.status || (session.is_active ? 'working' : 'idle'));
+          var stats = [
+            exactNumber(session.event_count || 0) + ' events',
+          ];
           return '<div class="history-session-row">'
             + '<span class="history-dossier-id">' + escapeHtml(shortSessionId(session.id)) + '</span>'
             + '<div class="history-session-main"><div class="history-row-title" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</div>'
             + '<div class="history-row-sub">' + escapeHtml(subtitleParts.join(' · ')) + '</div></div>'
             + '<span class="history-status ' + escapeHtml(statusClass) + '">' + escapeHtml(session.status || (session.is_active ? 'active' : 'idle')) + '</span>'
-            + '<div class="history-row-meta history-session-age">' + escapeHtml(historyAgeLabel(session.updated_at)) + ' <span aria-hidden="true">·</span> <span class="history-session-stats">' + escapeHtml(exactNumber(session.event_count || 0) + ' events') + '</span></div>'
+            + '<div class="history-row-meta history-session-age">' + escapeHtml(historyAgeLabel(session.updated_at)) + ' <span aria-hidden="true">·</span> <span class="history-session-stats">' + escapeHtml(stats.join(' · ')) + '</span></div>'
             + '</div>';
         }).join('') + '</div>'
       : '<div class="history-empty">No scanned sessions are available yet.</div>';
@@ -2822,7 +2931,6 @@
   function historyLoadingMarkup() {
     return '<div class="history-loading-stage" role="status" aria-live="polite">'
       + '<div class="history-loading-dialog">'
-      + '<div class="history-loading-spinner" aria-hidden="true"></div>'
       + '<div class="history-loading-title">Scanning Copilot CLI history</div>'
       + '<div class="history-loading-copy">Building local session, event, tool, model, and token summaries.</div>'
       + '<div class="history-loading-bar" aria-hidden="true"><span></span></div>'
@@ -2918,17 +3026,18 @@
     var replayTop = Number.isFinite(l.replayY) && l.replayH > 0 ? l.replayY : l.bottomY;
     var columnBottom = Math.max(l.topY || 0, replayTop - columnGap);
     var columnH = Math.max(0, columnBottom - (l.topY || 0));
-    var feedMinH = l.compact ? 130 : 160;
-    var maxSessionH = Math.max(l.compact ? 160 : 180, columnH - feedMinH - columnGap);
+    var feedTargetH = recentFeedPanelHeight(view);
+    var maxSessionH = Math.max(l.compact ? 160 : 180, columnH - feedTargetH - columnGap);
     if (domSession) {
       domSession.classList.remove('hidden', 'constrained');
     }
     setPanelRect(domSession, { x: l.leftX, y: l.topY, w: l.panelW });
     renderSession(view);
     var naturalSessionH = naturalPanelHeight(domSession, l.compact ? 140 : 160);
-    var sessionMainH = Math.max(0, Math.min(naturalSessionH, maxSessionH));
+    var sessionExtraH = l.compact ? 34 : 68;
+    var sessionMainH = Math.max(0, Math.min(naturalSessionH + sessionExtraH, maxSessionH));
     var feedY = (l.topY || 0) + sessionMainH + columnGap;
-    var feedH = Math.max(80, columnBottom - feedY);
+    var feedH = Math.max(80, Math.min(feedTargetH, columnBottom - feedY));
     setPanelRect(domSession, { x: l.leftX, y: l.topY, w: l.panelW, h: sessionMainH });
     if (domSession) domSession.classList.toggle('constrained', naturalSessionH > sessionMainH + 1);
     setPanelRect(domFeed, { x: l.leftX, y: feedY, w: l.panelW, h: feedH });
@@ -3126,6 +3235,11 @@
         } catch (_err) {
           openAnalyticsDefinitionInEditor({});
         }
+        return;
+      }
+      var mcpToggle = event.target && event.target.closest && event.target.closest('[data-analytics-mcp-server]');
+      if (mcpToggle) {
+        setMcpServerEnabled(mcpToggle);
         return;
       }
       var button = event.target && event.target.closest && event.target.closest('[data-analytics-prompt]');

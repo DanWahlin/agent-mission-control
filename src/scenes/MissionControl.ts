@@ -425,6 +425,7 @@ export class MissionControlScene extends Phaser.Scene {
   private lastLiveDashboardPublishAt = 0;
   private deferredThemeRenderEvent: any = null;
   private deferredThemeRenderKind: 'map' | 'full' = 'map';
+  private resizeRenderEvent: any = null;
   private pushRefreshEvent: any = null;
   private pendingPushRefresh = false;
   private lastPushRefreshAt = 0;
@@ -468,7 +469,10 @@ export class MissionControlScene extends Phaser.Scene {
     this.redrawBackdrop();
     // Re-paint the backdrop when Phaser resizes (driven by the
     // window `resize` listener in main.ts -> scale.resize(W, H)).
-    this.scale.on('resize', () => this.redrawBackdrop());
+    this.scale.on('resize', () => {
+      this.redrawBackdrop();
+      this.scheduleResizeRender();
+    });
     // Clean up scene-owned resources on shutdown so a future
     // reload/HMR doesn't leak handlers.
     this.events.once('shutdown', () => this.shutdown());
@@ -678,6 +682,18 @@ export class MissionControlScene extends Phaser.Scene {
     });
   }
 
+  private scheduleResizeRender() {
+    if (this.resizeRenderEvent) this.resizeRenderEvent.remove(false);
+    this.resizeRenderEvent = this.time.delayedCall(40, () => {
+      this.resizeRenderEvent = null;
+      if (!this.scene?.isActive?.()) return;
+      this.layout = this.computeLayout();
+      this.selectedSession = this.pickSelectedSession();
+      this.quarters = this.buildQuarters();
+      this.renderActivity();
+    });
+  }
+
   private schedulePushRefresh() {
     if (this.pendingPushRefresh) return;
     this.pendingPushRefresh = true;
@@ -732,6 +748,10 @@ export class MissionControlScene extends Phaser.Scene {
     if (this.deferredThemeRenderEvent) {
       this.deferredThemeRenderEvent.remove(false);
       this.deferredThemeRenderEvent = null;
+    }
+    if (this.resizeRenderEvent) {
+      this.resizeRenderEvent.remove(false);
+      this.resizeRenderEvent = null;
     }
     for (const evt of this.startupRetryEvents) {
       evt?.remove?.(false);
@@ -2176,6 +2196,7 @@ function createEmptyActivity(): CopilotActivity {
     active_sessions: 0,
     total_events: 0,
     total_tool_calls: 0,
+    total_input_tokens: 0,
     total_output_tokens: 0,
     sessions: [],
     tools: [],

@@ -3890,10 +3890,7 @@ fn sum_token_components(value: &serde_json::Value, paths: &[String]) -> u64 {
         .sum()
 }
 
-fn model_metrics_token_totals(
-    value: &serde_json::Value,
-    rule: &ModelMetricsTokenSchema,
-) -> (u64, u64) {
+fn model_metrics_totals(value: &serde_json::Value, rule: &ModelMetricsTokenSchema) -> (u64, u64) {
     let Some(metrics) =
         value_at_path(value, &rule.metrics_path).and_then(|value| value.as_object())
     else {
@@ -3970,7 +3967,7 @@ fn apply_token_event(
         let (model_input, model_output) = rule
             .model_metrics
             .as_ref()
-            .map(|model_rule| model_metrics_token_totals(value, model_rule))
+            .map(|model_rule| model_metrics_totals(value, model_rule))
             .unwrap_or((0, 0));
         input = input.max(model_input);
         output = output.max(model_output);
@@ -5967,7 +5964,7 @@ mod tests {
             let mut f = std::fs::File::create(&path).expect("create temp jsonl");
             writeln!(
                 f,
-                r#"{{"type":"session.shutdown","timestamp":"2026-01-01T00:01:00Z","data":{{"modelMetrics":{{"claude-opus-4.6":{{"usage":{{"inputTokens":31477746,"cacheReadTokens":30035719,"cacheWriteTokens":0,"outputTokens":58213}}}}}}}}}}"#
+                r#"{{"type":"session.shutdown","timestamp":"2026-01-01T00:01:00Z","data":{{"modelMetrics":{{"claude-opus-4.6":{{"usage":{{"inputTokens":31477746,"cacheReadTokens":30035719,"cacheWriteTokens":0,"outputTokens":58213}},"requests":{{"cost":1341}}}}}}}}}}"#
             )
             .unwrap();
         }
@@ -6002,7 +5999,7 @@ mod tests {
     #[test]
     fn shutdown_model_metrics_sum_multiple_models_without_cache_read() {
         let input = concat!(
-            r#"{"type":"session.shutdown","data":{"modelMetrics":{"gpt-5.5":{"usage":{"inputTokens":1952371,"cacheReadTokens":1817600,"cacheWriteTokens":0,"outputTokens":12265}},"claude-haiku-4.5":{"usage":{"inputTokens":913294,"cacheReadTokens":819040,"cacheWriteTokens":88379,"outputTokens":9429}}}}}"#,
+            r#"{"type":"session.shutdown","data":{"modelMetrics":{"gpt-5.5":{"usage":{"inputTokens":1952371,"cacheReadTokens":1817600,"cacheWriteTokens":0,"outputTokens":12265},"requests":{"cost":7.5}},"claude-haiku-4.5":{"usage":{"inputTokens":913294,"cacheReadTokens":819040,"cacheWriteTokens":88379,"outputTokens":9429},"requests":{"cost":2}}}}}"#,
             "\n"
         );
         let mut summary = AgentSessionSummary::default();

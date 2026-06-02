@@ -209,13 +209,26 @@ async fn ask_analytics_chat(
 }
 
 #[tauri::command]
+async fn set_mcp_server_enabled(
+    server: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        analytics::set_mcp_server_enabled(&server, enabled)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
 async fn read_copilot_definition(
     app: AppHandle,
     kind: String,
     definition: String,
+    root: Option<String>,
 ) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        analytics::read_copilot_definition(&app, &kind, &definition)
+        analytics::read_copilot_definition(&app, &kind, &definition, root.as_deref())
     })
     .await
     .map_err(|err| err.to_string())?
@@ -463,6 +476,7 @@ pub fn run() {
             get_analytics_usage_summary,
             get_analytics_recommendation_facts,
             ask_analytics_chat,
+            set_mcp_server_enabled,
             read_copilot_definition,
             open_copilot_definition,
             evaluate_skill_definition,

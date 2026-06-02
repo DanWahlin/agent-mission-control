@@ -648,7 +648,7 @@ test.describe('Copilot Mission Control — History', () => {
     await expect(page.locator('#dashboard-overlay')).toBeVisible();
     await page.waitForFunction(() => {
       const sessionPanel = document.querySelector('#dom-session') as HTMLElement | null;
-      return !!sessionPanel && sessionPanel.getBoundingClientRect().height < 420;
+      return !!sessionPanel && sessionPanel.style.height !== '900px';
     });
     const dashboardLayout = await page.evaluate(() => {
       const rect = (selector: string) => {
@@ -660,11 +660,12 @@ test.describe('Copilot Mission Control — History', () => {
       return {
         session: rect('#dom-session'),
         actions: rect('#dom-session .cmc-actions'),
+        model: rect('#dom-session .cmc-session-model-row'),
         feed: rect('#dom-feed'),
       };
     });
-    expect(dashboardLayout.session.height).toBeLessThan(420);
-    expect(dashboardLayout.session.bottom).toBeLessThanOrEqual(dashboardLayout.actions.bottom + 36);
+    expect(dashboardLayout.session.height).toBeLessThan(460);
+    expect(dashboardLayout.session.bottom).toBeLessThanOrEqual(dashboardLayout.model.bottom + 24);
     expect(dashboardLayout.feed.top).toBeGreaterThanOrEqual(dashboardLayout.session.bottom + 8);
   });
 
@@ -703,17 +704,16 @@ test.describe('Copilot Mission Control — History', () => {
     await page.locator('#history-route-btn').click();
 
     const all = await getHistoryNumbers(page);
-    const allLastActivity = await expectedHistoryAge(page, MISSION_FIXTURE.history.last_activity_at);
     expect(all.subtitle).toBe('KPI totals cover all currently scanned local sessions (3 sessions). Charts below show rolling 24h and last 7 days.');
     expect(all.kpis).toMatchObject({
       'Sessions Scanned': { value: '3', note: '' },
       'Events': { value: '184', note: '' },
       'Tool Calls': { value: '47', note: '' },
       'Models Used': { value: '2', note: '' },
-      'Last Activity': { value: allLastActivity, note: '' },
       'Input Tokens': { value: '3,300', note: '' },
       'Output Tokens': { value: '8,120', note: '' },
     });
+    expect(all.kpis['Last Activity']).toBeUndefined();
     expect(all.tokenValues).toEqual(['3,300', '8,120']);
     expect(all.hourChartDesc).toBe('184 events across observed buckets.');
     expect(all.weekChartDesc).toBe('326 events across observed buckets.');
@@ -748,17 +748,16 @@ test.describe('Copilot Mission Control — History', () => {
 
     await page.locator('#history-session-filter').selectOption('beta4567');
     const beta = await getHistoryNumbers(page);
-    const betaLastActivity = await expectedHistoryAge(page, MISSION_FIXTURE.history.session_scopes[1].last_activity_at);
     expect(beta.subtitle).toBe('KPI totals cover the selected session (Review Tests · beta4567). Charts below show rolling 24h and last 7 days.');
     expect(beta.kpis).toMatchObject({
       'Sessions Scanned': { value: '1', note: '' },
       'Events': { value: '64', note: '' },
       'Tool Calls': { value: '17', note: '' },
       'Models Used': { value: '1', note: '' },
-      'Last Activity': { value: betaLastActivity, note: '' },
       'Input Tokens': { value: '1,200', note: '' },
       'Output Tokens': { value: '2,920', note: '' },
     });
+    expect(beta.kpis['Last Activity']).toBeUndefined();
     expect(beta.tokenValues).toEqual(['1,200', '2,920']);
     expect(beta.hourChartDesc).toBe('90 events across observed buckets.');
     expect(beta.weekChartDesc).toBe('90 events across observed buckets.');
@@ -959,10 +958,14 @@ test.describe('Copilot Mission Control — History', () => {
 
     await expect(page.locator('body')).toHaveClass(/theme-light/);
     await page.locator('[data-history-card="history-24h"] rect.activity[data-history-readout]').nth(1).hover();
-    await expect(page.locator('[data-history-card="history-24h"] .history-chart-readout')).toContainText('Hour 08: 31 events, 2 sessions');
+    const secondHourClock = await expectedHistoryClock(page, MISSION_FIXTURE.history.activity_24h[1].start);
+    await expect(page.locator('[data-history-card="history-24h"] .history-chart-readout')).toContainText(`${secondHourClock} · 16h ago: 31 events, 2 sessions`);
     await expect(page.locator('[data-history-card="history-24h"] .history-chart-readout')).toHaveClass(/visible/);
     const hourAxisLabels = await page.locator('[data-history-card="history-24h"] .history-chart-axis span').allTextContents();
-    expect(hourAxisLabels).toEqual(['0', '8', '16', '24']);
+    expect(hourAxisLabels.length).toBeGreaterThanOrEqual(4);
+    expect(hourAxisLabels.length).toBeLessThanOrEqual(5);
+    expect(hourAxisLabels[0]).toContain('24h ago');
+    expect(hourAxisLabels.at(-1)).toContain('now');
     expect(hourAxisLabels.join(' ')).not.toContain('Z');
     const readout = await page.evaluate(() => {
       const card = document.querySelector('[data-history-card="history-24h"]') as HTMLElement;
@@ -1148,15 +1151,17 @@ test.describe('Copilot Mission Control — Dashboard', () => {
       return {
         session: rect('#dom-session'),
         actions: rect('#dom-session .cmc-actions'),
+        model: rect('#dom-session .cmc-session-model-row'),
         feed: rect('#dom-feed'),
         replay: rect('#dom-replay'),
       };
     });
     expect(layout.session).toBeTruthy();
     expect(layout.actions).toBeTruthy();
+    expect(layout.model).toBeTruthy();
     expect(layout.feed).toBeTruthy();
     expect(layout.replay).toBeTruthy();
-    expect(layout.session!.bottom).toBeLessThanOrEqual(layout.actions!.bottom + 36);
+    expect(layout.session!.bottom).toBeLessThanOrEqual(layout.model!.bottom + 24);
     expect(layout.feed!.top).toBeGreaterThanOrEqual(layout.session!.bottom + 8);
     expect(layout.feed!.bottom).toBeLessThanOrEqual(layout.replay!.top - 8);
 

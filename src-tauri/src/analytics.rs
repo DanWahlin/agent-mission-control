@@ -193,6 +193,43 @@ pub struct AnalyticsArtifact {
     pub cards: Vec<AnalyticsRecommendation>,
 }
 
+#[derive(Default)]
+struct McpServerInventory {
+    name: String,
+    enabled: bool,
+    tools: BTreeSet<String>,
+}
+
+#[derive(Default, Clone)]
+struct McpToolUsage {
+    tool: String,
+    calls: u64,
+    successes: u64,
+    failures: u64,
+    duration_ms: u64,
+}
+
+#[derive(Default)]
+struct McpServerUsage {
+    name: String,
+    configured: bool,
+    enabled: bool,
+    registered_tools: u64,
+    tools: BTreeMap<String, McpToolUsage>,
+}
+
+#[derive(Default)]
+struct McpUsageReport {
+    total_calls: u64,
+    total_failures: u64,
+    enabled_servers: u64,
+    configured_servers: u64,
+    used_servers: u64,
+    registered_tools: u64,
+    artifacts: Vec<AnalyticsArtifact>,
+    caveats: Vec<String>,
+}
+
 #[derive(serde::Serialize, Default)]
 pub struct AnalyticsChatResponse {
     pub id: String,
@@ -283,8 +320,19 @@ pub async fn analytics_chat(
             compare_previous: true,
         },
     )?;
-    let dynamic_answer = synthesize_chat_answer_with_copilot(app, &prompt, &summary).await;
-    let mut response = chat_response_from_summary(prompt, summary.clone());
+    let mut response = chat_response_from_summary(prompt.clone(), summary.clone());
+    let definition_gap_prompt = is_definition_gap_prompt(&response.prompt);
+    let mcp_usage_prompt = is_mcp_usage_prompt(&response.prompt);
+    let mcp_report = if mcp_usage_prompt {
+        let mut conn = open_connection(app)?;
+        ensure_schema(app, &mut conn)?;
+        Some(mcp_usage_report(&conn, summary.range_days)?)
+    } else {
+        None
+    };
+
+    let dynamic_answer =
+        synthesize_chat_answer_with_copilot(app, &prompt, &summary, definition_gap_prompt).await;
     match dynamic_answer {
         Ok(answer) => {
             response.answer = answer.answer;
@@ -297,7 +345,16 @@ pub async fn analytics_chat(
                     "Question is outside Copilot Mission Control analytics scope.".to_string(),
                 );
             } else {
-                let mut artifacts = artifacts_for_keys(&summary, &answer.artifacts);
+                let mut artifacts = if definition_gap_prompt {
+                    Vec::new()
+                } else {
+                    artifacts_for_keys(&summary, &answer.artifacts)
+                };
+                if let Some(report) = &mcp_report {
+                    extend_unique_artifacts(&mut artifacts, report.artifacts.clone());
+                    response.caveats =
+                        merge_caveats(response.caveats.clone(), report.caveats.clone());
+                }
                 artifacts.extend(answer.definition_review_artifacts);
                 extend_unique_artifacts(
                     &mut artifacts,
@@ -310,13 +367,25 @@ pub async fn analytics_chat(
             response.mode = "deterministic_fallback".to_string();
             let reason = format!("Copilot SDK answer generation was unavailable: {}", err);
             response.mode_reason = Some(reason.clone());
-            if requires_insights_tools(&response.prompt) {
-                response.answer = format!(
-                    "I'm unable to provide that information because it requires local prompt, skill, or agent inspection and the Copilot SDK/MCP tool flow is unavailable right now. {}",
-                    reason
-                );
-                response.artifacts.clear();
-                response.caveats.clear();
+            if let Some(report) = mcp_report {
+                response.answer = mcp_usage_answer(summary.range_days, &report);
+                response.artifacts = report.artifacts;
+                response.caveats = merge_caveats(report.caveats, vec![reason]);
+            } else if requires_insights_tools(&response.prompt) {
+                let local_artifacts =
+                    local_definition_review_artifacts_for_prompt(app, &response.prompt);
+                if local_artifacts.is_empty() {
+                    response.answer = format!(
+                        "I'm unable to provide that information because it requires local prompt, skill, or agent inspection and the Copilot SDK/MCP tool flow is unavailable right now. {}",
+                        reason
+                    );
+                    response.artifacts.clear();
+                    response.caveats.clear();
+                } else {
+                    response.answer = "I found local skill and agent readiness checks below. The Copilot SDK answer timed out, so this response is showing deterministic local analysis instead.".to_string();
+                    response.artifacts = local_artifacts;
+                    response.caveats = vec![reason];
+                }
             } else {
                 response.caveats.push(
                     format!(
@@ -334,6 +403,7 @@ pub fn read_copilot_definition(
     app: &AppHandle,
     kind: &str,
     definition: &str,
+    root: Option<&str>,
 ) -> Result<Value, String> {
     let (tool_name, argument_name) = match kind {
         "agents" | "agent" => ("read_agent_definition", "agent"),
@@ -345,6 +415,9 @@ pub fn read_copilot_definition(
         argument_name.to_string(),
         Value::String(definition.to_string()),
     );
+    if let Some(root) = root.map(str::trim).filter(|value| !value.is_empty()) {
+        arguments.insert("root".to_string(), Value::String(root.to_string()));
+    }
     arguments.insert("max_chars".to_string(), Value::from(120000));
     call_insights_mcp_tool_with_args(app, tool_name, Value::Object(arguments))
 }
@@ -368,9 +441,518 @@ fn requires_insights_tools(prompt: &str) -> bool {
         "agents",
         "sub-agent",
         "subagent",
+        "mcp",
+        "mcp server",
+        "mcp servers",
     ]
     .iter()
     .any(|needle| lower.contains(needle))
+}
+
+fn is_definition_gap_prompt(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    let mentions_definitions = [
+        "skill",
+        "skills",
+        "agent",
+        "agents",
+        "sub-agent",
+        "subagent",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    let asks_for_gaps = [
+        "gap",
+        "gaps",
+        "missing",
+        "coverage",
+        "readiness",
+        "audit",
+        "review",
+        "improve",
+        "weak",
+        "weakness",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    mentions_definitions && asks_for_gaps
+}
+
+fn definition_gap_focus_instructions(definition_gap_prompt: bool) -> &'static str {
+    if definition_gap_prompt {
+        "Skill/agent gap focus: this prompt must be answered only from skill and agent concepts. Use analyze_copilot_skills and/or analyze_copilot_agents, then discuss definition coverage, routing clarity, activation boundaries, instructions, validation criteria, handoffs, duplication, overlap, and missing conceptual roles. Do not recommend generic tool-failure, web/docs retrieval, patch/editing, shell, token-control, model-usage, or usage-metric fixes unless the recommendation is explicitly framed as a missing or weak skill/agent concept."
+    } else {
+        "No special skill/agent-only focus is active for this question."
+    }
+}
+
+fn is_mcp_usage_prompt(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    lower.contains("mcp")
+        && [
+            "usage", "server", "servers", "tool", "tools", "enabled", "disabled", "context",
+            "token", "tokens",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+fn mcp_usage_report(conn: &Connection, range_days: u32) -> Result<McpUsageReport, String> {
+    let today = local_day(unix_ms_now());
+    let since_day = local_day_shift(&today, -((range_days as i64) - 1));
+    let inventory = load_mcp_server_inventory();
+    let mut tool_to_server = BTreeMap::<String, String>::new();
+    let mut servers = BTreeMap::<String, McpServerUsage>::new();
+
+    for server in inventory {
+        let name = safe_label(&server.name, "mcp-server");
+        for tool in &server.tools {
+            tool_to_server
+                .entry(tool.to_ascii_lowercase())
+                .or_insert_with(|| name.clone());
+        }
+        servers.insert(
+            name.clone(),
+            McpServerUsage {
+                name,
+                configured: true,
+                enabled: server.enabled,
+                registered_tools: server.tools.len() as u64,
+                ..Default::default()
+            },
+        );
+    }
+
+    for usage in mcp_tool_usage(conn, &since_day, &tool_to_server)? {
+        let Some(server_name) = tool_to_server
+            .get(&usage.tool.to_ascii_lowercase())
+            .cloned()
+            .or_else(|| infer_mcp_server_from_tool(&usage.tool, servers.keys(), &tool_to_server))
+        else {
+            continue;
+        };
+        let entry = servers
+            .entry(server_name.clone())
+            .or_insert_with(|| McpServerUsage {
+                name: server_name,
+                configured: false,
+                enabled: true,
+                registered_tools: 0,
+                ..Default::default()
+            });
+        entry
+            .tools
+            .entry(usage.tool.clone())
+            .and_modify(|existing| {
+                existing.calls = existing.calls.saturating_add(usage.calls);
+                existing.successes = existing.successes.saturating_add(usage.successes);
+                existing.failures = existing.failures.saturating_add(usage.failures);
+                existing.duration_ms = existing.duration_ms.saturating_add(usage.duration_ms);
+            })
+            .or_insert(usage);
+    }
+
+    let mut rows = Vec::new();
+    let mut total_calls = 0_u64;
+    let mut total_failures = 0_u64;
+    let mut enabled_servers = 0_u64;
+    let mut configured_servers = 0_u64;
+    let mut used_servers = 0_u64;
+    let mut registered_tools = 0_u64;
+
+    for usage in servers.values() {
+        if usage.configured {
+            configured_servers += 1;
+            registered_tools = registered_tools.saturating_add(usage.registered_tools);
+            if usage.enabled {
+                enabled_servers += 1;
+            }
+        }
+        let calls: u64 = usage.tools.values().map(|tool| tool.calls).sum();
+        let failures: u64 = usage.tools.values().map(|tool| tool.failures).sum();
+        let successes: u64 = usage.tools.values().map(|tool| tool.successes).sum();
+        let duration_ms: u64 = usage.tools.values().map(|tool| tool.duration_ms).sum();
+        if calls > 0 {
+            used_servers += 1;
+        }
+        total_calls = total_calls.saturating_add(calls);
+        total_failures = total_failures.saturating_add(failures);
+        let completed = successes.saturating_add(failures);
+        rows.push(vec![
+            usage.name.clone(),
+            if usage.configured {
+                if usage.enabled { "on" } else { "off" }.to_string()
+            } else {
+                "on".to_string()
+            },
+            usage.registered_tools.to_string(),
+            usage.tools.len().to_string(),
+            calls.to_string(),
+            failures.to_string(),
+            if completed > 0 {
+                format!("{} ms", duration_ms / completed)
+            } else {
+                "n/a".to_string()
+            },
+            top_mcp_tools(&usage.tools),
+            if usage.configured { "1" } else { "0" }.to_string(),
+        ]);
+    }
+
+    let mut artifacts = Vec::new();
+    artifacts.push(AnalyticsArtifact {
+        kind: "cards".to_string(),
+        title: "MCP Usage Summary".to_string(),
+        cards: vec![
+            AnalyticsRecommendation {
+                title: "MCP calls".to_string(),
+                body: format!(
+                    "{} MCP tool call{} across {} server{} in the last {} day{}.",
+                    total_calls,
+                    plural(total_calls),
+                    used_servers,
+                    plural(used_servers),
+                    range_days,
+                    if range_days == 1 { "" } else { "s" }
+                ),
+                severity: "info".to_string(),
+                metric: "mcp_calls".to_string(),
+            },
+            AnalyticsRecommendation {
+                title: "Enabled servers".to_string(),
+                body: format!(
+                    "{} of {} configured MCP server{} appear enabled.",
+                    enabled_servers,
+                    configured_servers,
+                    plural(configured_servers)
+                ),
+                severity: "info".to_string(),
+                metric: "mcp_enabled_servers".to_string(),
+            },
+            AnalyticsRecommendation {
+                title: "Context pressure".to_string(),
+                body: format!(
+                    "{} registered MCP tool{} can add tool-schema context when enabled; exact token cost is not emitted by Copilot CLI.",
+                    registered_tools,
+                    plural(registered_tools)
+                ),
+                severity: "review".to_string(),
+                metric: "mcp_context_pressure".to_string(),
+            },
+        ],
+        ..Default::default()
+    });
+    artifacts.push(AnalyticsArtifact {
+        kind: "mcp_server_usage".to_string(),
+        title: "MCP Server Usage".to_string(),
+        description: "Enabled is read from the local MCP server registry. Registered tools and observed calls are shown because exact MCP schema/result token costs are not exposed in Copilot CLI analytics.".to_string(),
+        columns: vec![
+            "Server".to_string(),
+            "Enabled".to_string(),
+            "Registered tools".to_string(),
+            "Used tools".to_string(),
+            "Calls".to_string(),
+            "Failures".to_string(),
+            "Avg duration".to_string(),
+            "Top tools".to_string(),
+        ],
+        rows,
+        ..Default::default()
+    });
+
+    let mut caveats = vec![
+        "Exact MCP token/context cost is unavailable from Copilot CLI events; Mission Control reports registered tool count and observed MCP calls as the closest local proxies.".to_string(),
+    ];
+    if configured_servers == 0 {
+        caveats.push(
+            "No local MCP server registry was found, so the table only includes MCP tools observed in history."
+                .to_string(),
+        );
+    }
+
+    Ok(McpUsageReport {
+        total_calls,
+        total_failures,
+        enabled_servers,
+        configured_servers,
+        used_servers,
+        registered_tools,
+        artifacts,
+        caveats,
+    })
+}
+
+fn mcp_tool_usage(
+    conn: &Connection,
+    since_day: &str,
+    tool_to_server: &BTreeMap<String, String>,
+) -> Result<Vec<McpToolUsage>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT tool_name,
+                   tool_category,
+                   COALESCE(SUM(call_count), 0),
+                   COALESCE(SUM(success_count), 0),
+                   COALESCE(SUM(failure_count), 0),
+                   COALESCE(SUM(total_duration_ms), 0)
+            FROM tool_rollups
+            WHERE local_day >= ?1
+            GROUP BY tool_name, tool_category
+            ORDER BY SUM(call_count) DESC, tool_name ASC
+            "#,
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![since_day], |row| {
+            let tool: String = row.get(0)?;
+            let category: String = row.get(1)?;
+            Ok((
+                tool,
+                category,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })
+        .map_err(|err| err.to_string())?;
+    let mut usage = Vec::new();
+    for row in rows {
+        let (tool, category, calls, successes, failures, duration_ms) =
+            row.map_err(|err| err.to_string())?;
+        let is_mcp = category == "mcp" || tool_to_server.contains_key(&tool.to_ascii_lowercase());
+        if !is_mcp {
+            continue;
+        }
+        usage.push(McpToolUsage {
+            tool,
+            calls: calls.max(0) as u64,
+            successes: successes.max(0) as u64,
+            failures: failures.max(0) as u64,
+            duration_ms: duration_ms.max(0) as u64,
+        });
+    }
+    Ok(usage)
+}
+
+fn load_mcp_server_inventory() -> Vec<McpServerInventory> {
+    let Some(path) = mcp_registry_path() else {
+        return Vec::new();
+    };
+    let Ok(raw) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return Vec::new();
+    };
+    mcp_server_inventory_from_value(&value)
+}
+
+fn mcp_registry_path() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+        .map(|home| home.join(".copilot").join("m-mcp-servers.json"))
+}
+
+pub fn set_mcp_server_enabled(server: &str, enabled: bool) -> Result<Value, String> {
+    let safe_server = safe_label(server, "");
+    if safe_server.is_empty() {
+        return Err("MCP server name is required.".to_string());
+    }
+    let path = mcp_registry_path().ok_or_else(|| "Unable to locate home directory.".to_string())?;
+    let raw = fs::read_to_string(&path).map_err(|err| err.to_string())?;
+    let mut value = serde_json::from_str::<Value>(&raw).map_err(|err| err.to_string())?;
+    let servers = value
+        .get_mut("servers")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "MCP registry does not contain a servers object.".to_string())?;
+    let server_key = if servers.contains_key(&safe_server) {
+        safe_server.clone()
+    } else if servers.contains_key(server) {
+        server.to_string()
+    } else {
+        return Err(format!(
+            "MCP server '{}' was not found in the local registry.",
+            safe_server
+        ));
+    };
+    let entry = servers.get_mut(&server_key).ok_or_else(|| {
+        format!(
+            "MCP server '{}' was not found in the local registry.",
+            safe_server
+        )
+    })?;
+    let object = entry.as_object_mut().ok_or_else(|| {
+        format!(
+            "MCP server '{}' has an unsupported registry shape.",
+            safe_server
+        )
+    })?;
+    object.insert("disabled".to_string(), Value::Bool(!enabled));
+    object.insert("enabled".to_string(), Value::Bool(enabled));
+    let pretty = serde_json::to_string_pretty(&value).map_err(|err| err.to_string())?;
+    fs::write(&path, format!("{}\n", pretty)).map_err(|err| err.to_string())?;
+    Ok(serde_json::json!({
+        "server": safe_server,
+        "enabled": enabled
+    }))
+}
+
+fn mcp_server_inventory_from_value(value: &Value) -> Vec<McpServerInventory> {
+    let Some(servers) = value_at_path(value, "servers").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut inventory = Vec::new();
+    for (name, info) in servers {
+        let tools = mcp_tool_names_from_value(info);
+        inventory.push(McpServerInventory {
+            name: safe_label(name, "mcp-server"),
+            enabled: mcp_server_is_enabled(info),
+            tools,
+        });
+    }
+    inventory.sort_by(|a, b| a.name.cmp(&b.name));
+    inventory
+}
+
+fn mcp_tool_names_from_value(value: &Value) -> BTreeSet<String> {
+    let mut tools = BTreeSet::new();
+    let Some(items) = value.get("tools").and_then(Value::as_array) else {
+        return tools;
+    };
+    for item in items {
+        let name = item.as_str().map(str::to_string).or_else(|| {
+            item.get("name")
+                .or_else(|| item.get("tool"))
+                .or_else(|| item.get("toolName"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        if let Some(name) = name {
+            let safe = safe_label(&name, "");
+            if !safe.is_empty() {
+                tools.insert(safe);
+            }
+        }
+    }
+    tools
+}
+
+fn mcp_server_is_enabled(value: &Value) -> bool {
+    if bool_at_path(value, "disabled").unwrap_or(false)
+        || bool_at_path(value, "config.disabled").unwrap_or(false)
+    {
+        return false;
+    }
+    if matches!(bool_at_path(value, "enabled"), Some(false))
+        || matches!(bool_at_path(value, "config.enabled"), Some(false))
+    {
+        return false;
+    }
+    if let Some(status) = string_at_path(value, "status")
+        .or_else(|| string_at_path(value, "state"))
+        .or_else(|| string_at_path(value, "config.status"))
+    {
+        let normalized = status.to_ascii_lowercase();
+        if matches!(normalized.as_str(), "disabled" | "off" | "inactive") {
+            return false;
+        }
+    }
+    true
+}
+
+fn infer_mcp_server_from_tool<'a, I>(
+    tool: &str,
+    configured_servers: I,
+    tool_to_server: &BTreeMap<String, String>,
+) -> Option<String>
+where
+    I: IntoIterator<Item = &'a String>,
+{
+    let lower = tool.to_ascii_lowercase();
+    if let Some(server) = tool_to_server.get(&lower) {
+        return Some(server.clone());
+    }
+    for server in configured_servers {
+        let server_lower = server.to_ascii_lowercase();
+        if lower.starts_with(&server_lower)
+            || (server_lower == "playwright" && lower.starts_with("browser_"))
+            || (server_lower == "filesystem"
+                && (lower.contains("file")
+                    || lower.contains("directory")
+                    || lower.contains("path")
+                    || lower.contains("tree")))
+        {
+            return Some(server.clone());
+        }
+    }
+    for prefix in [
+        "github-mcp-server",
+        "kit-dev-mcp",
+        "context7",
+        "microsoft-learn",
+        "azure",
+        "devbox",
+        "workiq",
+    ] {
+        if lower.starts_with(prefix) {
+            return Some(prefix.to_string());
+        }
+    }
+    None
+}
+
+fn top_mcp_tools(tools: &BTreeMap<String, McpToolUsage>) -> String {
+    let mut ranked: Vec<_> = tools.values().collect();
+    ranked.sort_by(|a, b| b.calls.cmp(&a.calls).then_with(|| a.tool.cmp(&b.tool)));
+    if ranked.is_empty() {
+        return "No calls in range".to_string();
+    }
+    ranked
+        .into_iter()
+        .take(3)
+        .map(|tool| format!("{} ({})", tool.tool, tool.calls))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn mcp_usage_answer(range_days: u32, report: &McpUsageReport) -> String {
+    if report.configured_servers == 0 && report.total_calls == 0 {
+        return format!(
+            "I did not find configured MCP servers or observed MCP tool usage in the last {} day{}.",
+            range_days,
+            if range_days == 1 { "" } else { "s" }
+        );
+    }
+    format!(
+        "I found {} MCP tool call{} across {} used server{} in the last {} day{}, including {} failure{}. {} of {} configured MCP server{} appear enabled, with {} registered tool{} exposed. Exact MCP schema/result token cost is not emitted by Copilot CLI, so the table uses registered tool count and observed calls as context-impact proxies.",
+        report.total_calls,
+        plural(report.total_calls),
+        report.used_servers,
+        plural(report.used_servers),
+        range_days,
+        if range_days == 1 { "" } else { "s" },
+        report.total_failures,
+        plural(report.total_failures),
+        report.enabled_servers,
+        report.configured_servers,
+        plural(report.configured_servers),
+        report.registered_tools,
+        plural(report.registered_tools)
+    )
+}
+
+fn merge_caveats(primary: Vec<String>, secondary: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut merged = Vec::new();
+    for caveat in primary.into_iter().chain(secondary) {
+        if seen.insert(caveat.clone()) {
+            merged.push(caveat);
+        }
+    }
+    merged
 }
 
 fn open_connection(app: &AppHandle) -> Result<Connection, String> {
@@ -2097,6 +2679,7 @@ async fn synthesize_chat_answer_with_copilot(
     app: &AppHandle,
     prompt: &str,
     summary: &AnalyticsUsageSummary,
+    definition_gap_prompt: bool,
 ) -> Result<SdkAnalyticsAnswer, String> {
     use github_copilot_sdk::types::{MessageOptions, SessionConfig, SystemMessageConfig};
     use github_copilot_sdk::{Client, ClientOptions};
@@ -2111,11 +2694,12 @@ async fn synthesize_chat_answer_with_copilot(
         .await
         .map_err(|err| err.to_string())?;
     let sdk_event_state = Arc::new(Mutex::new(AnalyticsSdkEventState::default()));
+    let definition_focus = definition_gap_focus_instructions(definition_gap_prompt);
     let system_message = SystemMessageConfig::new()
         .with_mode("append")
         .with_content(format!(
-            "{marker}\nYou are the Copilot Mission Control Analytics assistant.\n\nAllowed scope: answer questions about Copilot CLI usage analytics and improvement opportunities based on this app's indexed analytics plus the Mission Control Insights MCP tools. Indexed JSON covers sessions, turns, token usage, model mix, tool usage, failures, trends, comparisons, recommendations, and indexing status. MCP tools can inspect bounded local prompt samples, skills, and agent definitions when the user asks about prompts, skills, agents, or improvement analysis.\n\nNot allowed: weather, temperature, general knowledge, coding help unrelated to these local analytics, external facts, live web data, personal advice, arbitrary SQL, or details not present in the supplied JSON or MCP tool results. Do not reveal raw file paths. Do not quote raw prompt text unless the user explicitly asks to inspect prompts; prefer summaries and improvement recommendations.\n\nIf the user asks anything outside the allowed scope, set in_scope=false and answer exactly: \"I can only answer questions about indexed Copilot CLI usage, prompts, skills, agents, and analytics.\"\n\nIf the question is in scope but the supplied JSON and available tools do not include the requested detail, set in_scope=true and say the indexed analytics do not include that detail.\n\nUse only Mission Control Insights MCP tools when tools are needed. Do not call built-in filesystem, shell, view, edit, search, planning, or status tools. For prompt-pattern, prompt-improvement, skill-review, agent-review, or missing-skill/agent questions, call the relevant Mission Control Insights MCP tool before answering. Do not answer those questions from aggregate metrics alone. For broad skill audits such as \"Review my Copilot skills\", call analyze_copilot_skills first and answer from that result. For broad agent audits such as \"Review my Copilot agents\", call analyze_copilot_agents first and answer from that result. Use list_* and read_* only for targeted follow-up on specific named definitions.\n\nFormat answer text for readability using lightweight Markdown: short paragraphs, blank lines between paragraphs, and '-' bullet lists when listing steps, patterns, recommendations, or examples. Keep answers concise.\n\nChoose only the supporting UI artifacts that directly answer metric questions. Definition-review charts are attached automatically when analyze_copilot_skills or analyze_copilot_agents runs. Other artifact keys you may request: changes, token_trend, token_hotspots, model_mix, model_shifts, tool_failures, tool_changes, recommendations. Examples: top models -> [\"model_mix\"]; token hotspots -> [\"token_hotspots\"]; what changed -> [\"changes\",\"model_shifts\",\"tool_changes\"]; top failed tools -> [\"tool_failures\"]; prompt improvements -> [].\n\nReturn strict JSON only with this shape: {{\"in_scope\": boolean, \"answer\": string, \"artifacts\": [string]}}. The answer string may contain lightweight Markdown. Do not include code fences, extra keys, SQL, or preambles outside the JSON.",
-            marker = MISSION_CONTROL_ANALYTICS_MARKER
+            "{marker}\nYou are the Copilot Mission Control Analytics assistant.\n\nAllowed scope: answer questions about Copilot CLI usage analytics and improvement opportunities based on this app's indexed analytics plus the Mission Control Insights MCP tools. Indexed JSON covers sessions, turns, token usage, model mix, tool usage, failures, trends, comparisons, recommendations, and indexing status. MCP tools can inspect bounded local prompt samples, skills, agent definitions, and MCP server inventory when the user asks about prompts, skills, agents, MCP servers, or improvement analysis.\n\nNot allowed: weather, temperature, general knowledge, coding help unrelated to these local analytics, external facts, live web data, personal advice, arbitrary SQL, or details not present in the supplied JSON or MCP tool results. Do not reveal raw file paths. Do not quote raw prompt text unless the user explicitly asks to inspect prompts; prefer summaries and improvement recommendations.\n\nIf the user asks anything outside the allowed scope, set in_scope=false and answer exactly: \"I can only answer questions about indexed Copilot CLI usage, prompts, skills, agents, MCP servers, and analytics.\"\n\nIf the question is in scope but the supplied JSON and available tools do not include the requested detail, set in_scope=true and say the indexed analytics do not include that detail.\n\nUse only Mission Control Insights MCP tools when tools are needed. Do not call built-in filesystem, shell, view, edit, search, planning, or status tools. For prompt-pattern, prompt-improvement, skill-review, agent-review, MCP-review, or missing-skill/agent questions, call the relevant Mission Control Insights MCP tool before answering. Do not answer those questions from aggregate metrics alone. For broad skill audits such as \"Review my Copilot skills\", call analyze_copilot_skills first and answer from that result. For broad agent audits such as \"Review my Copilot agents\", call analyze_copilot_agents first and answer from that result. For broad MCP usage or MCP server audits such as \"What's my MCP server usage?\", call analyze_mcp_servers first and answer from that result plus indexed usage metrics. Use list_* and read_* only for targeted follow-up on specific named definitions.\n\n{definition_focus}\n\nFormat answer text for readability using lightweight Markdown: short paragraphs, blank lines between paragraphs, and '-' bullet lists when listing steps, patterns, recommendations, or examples. Keep answers concise.\n\nChoose only the supporting UI artifacts that directly answer metric questions. Definition-review charts are attached automatically when analyze_copilot_skills or analyze_copilot_agents runs. MCP server usage tables are attached automatically when analyze_mcp_servers runs or the question asks about MCP usage. Other artifact keys you may request: changes, token_trend, token_hotspots, model_mix, model_shifts, tool_failures, tool_changes, recommendations. Examples: top models -> [\"model_mix\"]; token hotspots -> [\"token_hotspots\"]; what changed -> [\"changes\",\"model_shifts\",\"tool_changes\"]; top failed tools -> [\"tool_failures\"]; prompt improvements -> []. For skill/agent/MCP gap prompts, return [] for artifacts because specialized artifacts are attached outside the SDK response.\n\nReturn strict JSON only with this shape: {{\"in_scope\": boolean, \"answer\": string, \"artifacts\": [string]}}. The answer string may contain lightweight Markdown. Do not include code fences, extra keys, SQL, or preambles outside the JSON.",
+            marker = MISSION_CONTROL_ANALYTICS_MARKER,
         ));
     let mut config = SessionConfig::default()
         .with_handler(Arc::new(AnalyticsSdkHandler {
@@ -2142,8 +2726,8 @@ async fn synthesize_chat_answer_with_copilot(
         }
     };
     let message = format!(
-        "{marker}\nUser question: {prompt}\n\nIndexed analytics JSON:\n{summary_json}\n\nMission Control Insights MCP tools are available in this session. Use them when the user asks about prompts, skills, agents, or improvements.\n\nReturn strict JSON only: {{\"in_scope\": boolean, \"answer\": string, \"artifacts\": [string]}}. The answer string may contain lightweight Markdown for paragraphs and bullet lists.",
-        marker = MISSION_CONTROL_ANALYTICS_MARKER
+        "{marker}\nUser question: {prompt}\n\nIndexed analytics JSON:\n{summary_json}\n\nMission Control Insights MCP tools are available in this session. Use them when the user asks about prompts, skills, agents, MCP servers, or improvements.\n\n{definition_focus}\n\nReturn strict JSON only: {{\"in_scope\": boolean, \"answer\": string, \"artifacts\": [string]}}. The answer string may contain lightweight Markdown for paragraphs and bullet lists.",
+        marker = MISSION_CONTROL_ANALYTICS_MARKER,
     );
     let result = session
         .send_and_wait(MessageOptions::new(message).with_wait_timeout(Duration::from_secs(75)))
@@ -2425,11 +3009,17 @@ fn mission_control_insights_mcp_servers(
 
 fn mission_control_insights_tools_for_prompt(prompt: &str) -> Vec<String> {
     let lower = prompt.to_ascii_lowercase();
+    if is_mcp_usage_prompt(prompt) {
+        return vec!["analyze_mcp_servers".to_string()];
+    }
     let broad_review = [
         "review",
         "audit",
         "improve",
         "coverage",
+        "gap",
+        "gaps",
+        "missing",
         "duplicate",
         "overlap",
         "compare",
@@ -2465,6 +3055,7 @@ fn all_mission_control_insights_tools() -> Vec<String> {
         "list_copilot_agents",
         "read_agent_definition",
         "analyze_copilot_agents",
+        "analyze_mcp_servers",
         "health",
     ]
     .iter()
@@ -2473,6 +3064,9 @@ fn all_mission_control_insights_tools() -> Vec<String> {
 }
 
 fn project_root_for_mcp() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("CMC_PROJECT_ROOT").map(PathBuf::from) {
+        return Some(root);
+    }
     let cwd = std::env::current_dir().ok()?;
     if cwd.file_name().and_then(|name| name.to_str()) == Some("src-tauri") {
         return cwd.parent().map(Path::to_path_buf);
@@ -2765,7 +3359,7 @@ fn artifacts_from_summary(summary: &AnalyticsUsageSummary) -> Vec<AnalyticsArtif
     if let Some(comparison) = &summary.comparison {
         artifacts.push(AnalyticsArtifact {
             kind: "cards".to_string(),
-            title: "Biggest changes this week".to_string(),
+            title: "Biggest Changes This Week".to_string(),
             cards: comparison_cards(comparison),
             ..Default::default()
         });
@@ -2773,16 +3367,16 @@ fn artifacts_from_summary(summary: &AnalyticsUsageSummary) -> Vec<AnalyticsArtif
     artifacts.extend([
         AnalyticsArtifact {
             kind: "chart".to_string(),
-            title: "Token trend".to_string(),
+            title: "Token Trend".to_string(),
             points: summary.daily.clone(),
             ..Default::default()
         },
         AnalyticsArtifact {
             kind: "table".to_string(),
             title: if summary.comparison.is_some() {
-                "Model shifts".to_string()
+                "Model Shifts".to_string()
             } else {
-                "Model mix".to_string()
+                "Model Mix".to_string()
             },
             columns: comparison_columns("Model", "Turns"),
             rows: comparison_rows(
@@ -2797,11 +3391,11 @@ fn artifacts_from_summary(summary: &AnalyticsUsageSummary) -> Vec<AnalyticsArtif
         AnalyticsArtifact {
             kind: "table".to_string(),
             title: if summary.comparison.is_some() {
-                "Tool and failure changes".to_string()
+                "Tool and Failure Changes".to_string()
             } else {
-                "Tool failures".to_string()
+                "Tool Failures".to_string()
             },
-            columns: comparison_columns("Tool", "Calls/failures"),
+            columns: comparison_columns("Tool", "Calls/Failures"),
             rows: comparison_rows(
                 summary
                     .comparison
@@ -2834,7 +3428,7 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
                 if let Some(comparison) = &summary.comparison {
                     artifacts.push(AnalyticsArtifact {
                         kind: "cards".to_string(),
-                        title: "Biggest changes this week".to_string(),
+                        title: "Biggest Changes This Week".to_string(),
                         cards: comparison_cards(comparison),
                         ..Default::default()
                     });
@@ -2842,17 +3436,17 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
             }
             "token_trend" => artifacts.push(AnalyticsArtifact {
                 kind: "chart".to_string(),
-                title: "Token trend".to_string(),
+                title: "Token Trend".to_string(),
                 points: summary.daily.clone(),
                 ..Default::default()
             }),
             "token_hotspots" => artifacts.push(AnalyticsArtifact {
                 kind: "table".to_string(),
-                title: "Session token hotspots".to_string(),
+                title: "Session Token Hotspots".to_string(),
                 columns: vec![
                     "Session".to_string(),
                     "Group".to_string(),
-                    "Output tokens".to_string(),
+                    "Output Tokens".to_string(),
                 ],
                 rows: summary
                     .token_hotspots
@@ -2869,11 +3463,11 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
             }),
             "model_mix" | "models" => artifacts.push(AnalyticsArtifact {
                 kind: "table".to_string(),
-                title: "Model mix".to_string(),
+                title: "Model Mix".to_string(),
                 columns: vec![
                     "Model".to_string(),
                     "Turns".to_string(),
-                    "Output tokens".to_string(),
+                    "Output Tokens".to_string(),
                 ],
                 rows: summary
                     .model_mix
@@ -2892,7 +3486,7 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
                 if let Some(comparison) = &summary.comparison {
                     artifacts.push(AnalyticsArtifact {
                         kind: "table".to_string(),
-                        title: "Model shifts".to_string(),
+                        title: "Model Shifts".to_string(),
                         columns: comparison_columns("Model", "Turns"),
                         rows: comparison_rows(Some(&comparison.model_shifts), &summary.model_mix),
                         ..Default::default()
@@ -2901,7 +3495,7 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
             }
             "tool_failures" => artifacts.push(AnalyticsArtifact {
                 kind: "table".to_string(),
-                title: "Tool failures".to_string(),
+                title: "Tool Failures".to_string(),
                 columns: vec![
                     "Tool".to_string(),
                     "Category".to_string(),
@@ -2924,8 +3518,8 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
                 if let Some(comparison) = &summary.comparison {
                     artifacts.push(AnalyticsArtifact {
                         kind: "table".to_string(),
-                        title: "Tool and failure changes".to_string(),
-                        columns: comparison_columns("Tool", "Calls/failures"),
+                        title: "Tool and Failure Changes".to_string(),
+                        columns: comparison_columns("Tool", "Calls/Failures"),
                         rows: comparison_rows(
                             Some(&comparison.tool_shifts),
                             &summary.tool_failures,
@@ -2973,7 +3567,7 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
     let mut artifacts = Vec::new();
     artifacts.push(AnalyticsArtifact {
         kind: "cards".to_string(),
-        title: format!("{} inventory", label_plural),
+        title: format!("{} Inventory", label_plural),
         cards: definition_inventory_cards(review, label_plural),
         ..Default::default()
     });
@@ -2981,7 +3575,7 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
     if !duplicate_rows.is_empty() {
         artifacts.push(AnalyticsArtifact {
             kind: "wide_table".to_string(),
-            title: format!("Duplicate {} IDs", label.to_ascii_lowercase()),
+            title: format!("Duplicate {} IDs", label),
             columns: vec!["ID".to_string(), "Count".to_string(), "Roots".to_string()],
             rows: duplicate_rows,
             ..Default::default()
@@ -2991,7 +3585,7 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
     if !definition_rows.is_empty() {
         artifacts.push(AnalyticsArtifact {
             kind: "definition_inventory".to_string(),
-            title: format!("All {}", label_plural.to_ascii_lowercase()),
+            title: format!("All {} ({})", label_plural, definition_rows.len()),
             columns: vec![
                 "Name".to_string(),
                 "Summary".to_string(),
@@ -3014,7 +3608,7 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
     if !context_rows.is_empty() {
         artifacts.push(AnalyticsArtifact {
             kind: "bars".to_string(),
-            title: format!("Largest {} definitions", label.to_ascii_lowercase()),
+            title: format!("Largest {} Definitions", label),
             columns: vec![label.to_string(), "Root".to_string(), "Chars".to_string()],
             rows: context_rows,
             ..Default::default()
@@ -3032,7 +3626,7 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
     if !description_rows.is_empty() {
         artifacts.push(AnalyticsArtifact {
             kind: "bars".to_string(),
-            title: format!("Longest {} descriptions", label.to_ascii_lowercase()),
+            title: format!("Longest {} Descriptions", label),
             columns: vec![label.to_string(), "Root".to_string(), "Chars".to_string()],
             rows: description_rows,
             ..Default::default()
@@ -3042,7 +3636,7 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
     if !completeness_rows.is_empty() {
         artifacts.push(AnalyticsArtifact {
             kind: "wide_table".to_string(),
-            title: format!("{} readiness checks", label),
+            title: format!("{} Readiness Checks", label),
             description: if label == "Skill" {
                 "Automated checks for whether a skill explains when to use it, when not to use it, how to run it, and how to validate the result. Use View before making changes.".to_string()
             } else {
@@ -3051,7 +3645,7 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
             columns: vec![
                 label.to_string(),
                 "Readiness".to_string(),
-                "Suggested fixes".to_string(),
+                "Suggested Fixes".to_string(),
                 "Details".to_string(),
             ],
             rows: completeness_rows,
@@ -3062,12 +3656,12 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
     if !overlap_rows.is_empty() {
         artifacts.push(AnalyticsArtifact {
             kind: "wide_table".to_string(),
-            title: format!("{} overlap candidates", label),
+            title: format!("{} Overlap Candidates", label),
             columns: vec![
                 "Definition A".to_string(),
                 "Definition B".to_string(),
                 "Score".to_string(),
-                "Shared terms".to_string(),
+                "Shared Terms".to_string(),
             ],
             rows: overlap_rows,
             ..Default::default()
@@ -3077,7 +3671,7 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
     if !action_cards.is_empty() {
         artifacts.push(AnalyticsArtifact {
             kind: "cards".to_string(),
-            title: format!("Prioritized {} fixes", label.to_ascii_lowercase()),
+            title: format!("Prioritized {} Fixes", label),
             cards: action_cards,
             ..Default::default()
         });
@@ -3200,7 +3794,7 @@ fn definition_inventory_cards(review: &Value, label_plural: &str) -> Vec<Analyti
         .unwrap_or_else(|| "No roots reported".to_string());
     vec![
         AnalyticsRecommendation {
-            title: format!("{} discovered", label_plural),
+            title: format!("{} Discovered", label_plural),
             body: if model_context_skipped > 0 {
                 format!(
                     "{} discovered and {} analyzed for dashboard metrics. {} definition{} were included in model context; {} skipped model context because of content caps.",
@@ -3226,7 +3820,7 @@ fn definition_inventory_cards(review: &Value, label_plural: &str) -> Vec<Analyti
             metric: "inventory".to_string(),
         },
         AnalyticsRecommendation {
-            title: "Source roots".to_string(),
+            title: "Source Roots".to_string(),
             body: roots,
             severity: "info".to_string(),
             metric: "roots".to_string(),
@@ -3810,7 +4404,7 @@ fn recommendations_from_parts(
     let mut cards = Vec::new();
     if let Some(failure) = failures.first() {
         cards.push(AnalyticsRecommendation {
-            title: "Review repeated tool failures".to_string(),
+            title: "Review Repeated Tool Failures".to_string(),
             body: format!(
                 "{} in {} failed {} time{}. Check whether that workflow needs setup, permissions, or a smaller retry loop.",
                 failure.label,
@@ -3824,7 +4418,7 @@ fn recommendations_from_parts(
     }
     if let Some(hotspot) = hotspots.first() {
         cards.push(AnalyticsRecommendation {
-            title: "Investigate token hotspot".to_string(),
+            title: "Investigate Token Hotspot".to_string(),
             body: format!(
                 "{} produced {} output token{}. If this is unexpected, compare the related workflow against a shorter session.",
                 hotspot.label,
@@ -3837,7 +4431,7 @@ fn recommendations_from_parts(
     }
     if let Some(model) = models.first() {
         cards.push(AnalyticsRecommendation {
-            title: "Model mix context".to_string(),
+            title: "Model Mix Context".to_string(),
             body: format!(
                 "{} appears most often in this range with {} observed turn{}. Use this when comparing behavior across date ranges.",
                 model.label,
@@ -3851,7 +4445,7 @@ fn recommendations_from_parts(
     let failures_total: u64 = daily.iter().map(|point| point.failures).sum();
     if cards.is_empty() && !daily.is_empty() {
         cards.push(AnalyticsRecommendation {
-            title: "No major friction found".to_string(),
+            title: "No Major Friction Found".to_string(),
             body: format!(
                 "No repeated failure pattern stands out in this range ({} total failure{}). Keep an eye on changes after workflow or model changes.",
                 failures_total,
@@ -4375,6 +4969,55 @@ mod tests {
     }
 
     #[test]
+    fn mcp_usage_prompt_is_detected() {
+        assert!(is_mcp_usage_prompt("What's my MCP server usage?"));
+        assert!(is_mcp_usage_prompt(
+            "Which MCP tools affect context tokens?"
+        ));
+        assert!(!is_mcp_usage_prompt("Review my Copilot skills."));
+    }
+
+    #[test]
+    fn mcp_usage_prompt_routes_to_mcp_analyzer_tool() {
+        assert_eq!(
+            mission_control_insights_tools_for_prompt("What's my MCP server usage?"),
+            vec!["analyze_mcp_servers".to_string()]
+        );
+    }
+
+    #[test]
+    fn mcp_inventory_parses_enabled_status_and_tools() {
+        let inventory = mcp_server_inventory_from_value(&serde_json::json!({
+            "servers": {
+                "github-mcp-server": {
+                    "enabled": true,
+                    "tools": ["search_code", { "name": "get_file_contents" }]
+                },
+                "playwright": {
+                    "disabled": true,
+                    "tools": ["browser_navigate"]
+                }
+            }
+        }));
+
+        assert_eq!(inventory.len(), 2);
+        let github = inventory
+            .iter()
+            .find(|server| server.name == "github-mcp-server")
+            .expect("github server");
+        assert!(github.enabled);
+        assert_eq!(github.tools.len(), 2);
+        assert!(github.tools.contains("search_code"));
+
+        let playwright = inventory
+            .iter()
+            .find(|server| server.name == "playwright")
+            .expect("playwright server");
+        assert!(!playwright.enabled);
+        assert_eq!(playwright.tools.len(), 1);
+    }
+
+    #[test]
     fn marker_is_removed_from_sdk_answers() {
         assert_eq!(
             strip_mission_control_marker(&format!(
@@ -4488,12 +5131,15 @@ mod tests {
         let artifacts = definition_review_artifacts_from_payload(&payload);
         assert!(artifacts
             .iter()
-            .any(|artifact| artifact.title == "Skills inventory"));
+            .any(|artifact| artifact.title == "Skills Inventory"));
+        assert!(artifacts
+            .iter()
+            .any(|artifact| artifact.title == "All Skills (2)"));
         let rendered = serde_json::to_string(&artifacts).expect("serialize artifacts");
         assert!(!rendered.contains("relative_path"));
         assert!(!rendered.contains("copilot:"));
-        assert!(rendered.contains("Largest skill definitions"));
-        assert!(rendered.contains("Skill readiness checks"));
+        assert!(rendered.contains("Largest Skill Definitions"));
+        assert!(rendered.contains("Skill Readiness Checks"));
     }
 
     #[test]
@@ -4502,14 +5148,14 @@ mod tests {
         let artifacts = definition_review_artifacts_from_payload(&payload);
         let completeness = artifacts
             .iter()
-            .find(|artifact| artifact.title == "Skill readiness checks")
+            .find(|artifact| artifact.title == "Skill Readiness Checks")
             .expect("completeness artifact");
         assert_eq!(
             completeness.columns,
             vec![
                 "Skill".to_string(),
                 "Readiness".to_string(),
-                "Suggested fixes".to_string(),
+                "Suggested Fixes".to_string(),
                 "Details".to_string()
             ]
         );
@@ -4582,7 +5228,7 @@ mod tests {
         let artifacts = definition_review_artifacts_from_payload(&payload);
         let completeness = artifacts
             .iter()
-            .find(|artifact| artifact.title == "Skill readiness checks")
+            .find(|artifact| artifact.title == "Skill Readiness Checks")
             .expect("completeness artifact");
         let score = &completeness.rows[0][1];
         let details: Value = serde_json::from_str(&completeness.rows[0][3]).expect("details");
@@ -4652,7 +5298,7 @@ mod tests {
         let artifacts = definition_review_artifacts_from_payload(&payload);
         let readiness = artifacts
             .iter()
-            .find(|artifact| artifact.title == "Agent readiness checks")
+            .find(|artifact| artifact.title == "Agent Readiness Checks")
             .expect("readiness artifact");
         let score = &readiness.rows[0][1];
         let details: Value = serde_json::from_str(&readiness.rows[0][3]).expect("details");
@@ -4679,6 +5325,24 @@ mod tests {
         assert!(requires_insights_tools("Review my local skills."));
         assert!(requires_insights_tools("Which agents are missing?"));
         assert!(!requires_insights_tools("What are my top models?"));
+    }
+
+    #[test]
+    fn skill_agent_gap_prompts_use_definition_focus() {
+        assert!(is_definition_gap_prompt(
+            "What skill or agent gaps do I have?"
+        ));
+        assert!(is_definition_gap_prompt(
+            "Review my custom agents for weak spots."
+        ));
+        assert!(is_definition_gap_prompt("Do I have missing skills?"));
+        assert!(!is_definition_gap_prompt("Which tools failed most often?"));
+        assert!(!is_definition_gap_prompt("What are my top models?"));
+
+        let instructions = definition_gap_focus_instructions(true);
+        assert!(instructions.contains("only from skill and agent concepts"));
+        assert!(instructions.contains("Do not recommend generic tool-failure"));
+        assert!(instructions.contains("missing or weak skill/agent concept"));
     }
 
     #[test]
@@ -4721,6 +5385,17 @@ mod tests {
         assert_eq!(
             mission_control_insights_tools_for_prompt("Review my Copilot skills."),
             vec!["analyze_copilot_skills".to_string()]
+        );
+    }
+
+    #[test]
+    fn skill_agent_gap_prompt_exposes_bulk_definition_tools() {
+        assert_eq!(
+            mission_control_insights_tools_for_prompt("What skill or agent gaps do I have?"),
+            vec![
+                "analyze_copilot_skills".to_string(),
+                "analyze_copilot_agents".to_string()
+            ]
         );
     }
 
@@ -4782,6 +5457,28 @@ mod tests {
                     "duplicate_id_groups": 0,
                     "roots": [{ "root": "~/.copilot/skills", "count": 2 }]
                 },
+                "definitions": [
+                    {
+                        "id": "large-skill",
+                        "root": "~/.copilot/skills",
+                        "definition_ref": "large-skill",
+                        "summary": "Large skill fixture",
+                        "source_chars": 16000,
+                        "description_chars": 720,
+                        "completeness_score": 4,
+                        "issues": []
+                    },
+                    {
+                        "id": "small-skill",
+                        "root": "~/.copilot/skills",
+                        "definition_ref": "small-skill",
+                        "summary": "Small skill fixture",
+                        "source_chars": 1200,
+                        "description_chars": 0,
+                        "completeness_score": 2,
+                        "issues": ["missing anti-triggers", "missing validation"]
+                    }
+                ],
                 "context_cost": [
                     { "id": "large-skill", "root": "~/.copilot/skills", "source_chars": 16000 },
                     { "id": "small-skill", "root": "~/.copilot/skills", "source_chars": 1200 }
