@@ -16,6 +16,8 @@
 
 mod agent;
 mod analytics;
+mod definition_paths;
+mod skill_evaluator;
 
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
@@ -33,6 +35,7 @@ use analytics::{
     AnalyticsChatRequest, AnalyticsChatResponse, AnalyticsRangeRequest, AnalyticsRecommendation,
     AnalyticsStatus, AnalyticsUsageSummary,
 };
+use skill_evaluator::SkillEvaluation;
 
 // Icons baked into the binary so they survive whether the binary is
 // launched bare (`tauri dev`) or wrapped in an .app bundle (`tauri build`).
@@ -229,6 +232,61 @@ async fn open_copilot_definition(
     open_in_editor(path.to_string_lossy().to_string(), scheme).await
 }
 
+#[tauri::command]
+async fn evaluate_skill_definition(
+    definition: String,
+    root: Option<String>,
+    mode: Option<String>,
+) -> Result<SkillEvaluation, String> {
+    evaluate_definition("skills", definition, root, mode).await
+}
+
+#[tauri::command]
+async fn evaluate_agent_definition(
+    definition: String,
+    root: Option<String>,
+    mode: Option<String>,
+) -> Result<SkillEvaluation, String> {
+    evaluate_definition("agents", definition, root, mode).await
+}
+
+async fn evaluate_definition(
+    kind: &'static str,
+    definition: String,
+    root: Option<String>,
+    mode: Option<String>,
+) -> Result<SkillEvaluation, String> {
+    let parsed_mode = skill_evaluator::EvaluationMode::parse(mode.as_deref())?;
+    let root_for_static = root.clone();
+    let static_result = tauri::async_runtime::spawn_blocking(move || {
+        if kind == "skills" {
+            skill_evaluator::evaluate_skill_definition_static(
+                &definition,
+                root_for_static.as_deref(),
+            )
+        } else {
+            skill_evaluator::evaluate_definition_static(
+                kind,
+                &definition,
+                root_for_static.as_deref(),
+            )
+        }
+    })
+    .await
+    .map_err(|err| err.to_string())??;
+
+    let mut evaluation = static_result.evaluation;
+    if parsed_mode == skill_evaluator::EvaluationMode::Judge {
+        let judge_result = if kind == "agents" {
+            skill_evaluator::judge_agent_with_copilot(&evaluation, &static_result.source).await
+        } else {
+            skill_evaluator::judge_skill_with_copilot(&evaluation, &static_result.source).await
+        };
+        skill_evaluator::merge_judge_result(&mut evaluation, judge_result);
+    }
+    Ok(evaluation)
+}
+
 /// Explicit local-only raw reveal for one inspector row. The normal
 /// activity command remains privacy-safe; this only runs after the user
 /// clicks the Inspector reveal action.
@@ -407,6 +465,8 @@ pub fn run() {
             ask_analytics_chat,
             read_copilot_definition,
             open_copilot_definition,
+            evaluate_skill_definition,
+            evaluate_agent_definition,
             get_raw_tool_call_details,
             install_update,
             open_in_editor,

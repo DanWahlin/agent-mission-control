@@ -151,15 +151,15 @@
   // when no session has emitted a model-bearing event yet.
   // -------------------------------------------------------------------
 
-  var modelEl = $('model-chip');
   var resetBtn = $('reset-btn');
   var lastModel = '';
 
-  window.__cmcUpdateModel = function (model) {
-    if (!modelEl) return;
+  function updateModelChipElement(model, force) {
+    var modelEl = $('model-chip');
     var next = (model == null ? '' : String(model)).trim();
-    if (next === lastModel) return;
+    if (!force && next === lastModel) return;
     lastModel = next;
+    if (!modelEl) return;
     if (next === '') {
       modelEl.classList.add('empty');
       modelEl.textContent = '';
@@ -169,6 +169,10 @@
       modelEl.textContent = next;
       modelEl.title = 'Active model: ' + next;
     }
+  }
+
+  window.__cmcUpdateModel = function (model) {
+    updateModelChipElement(model, false);
   };
 
   if (resetBtn) {
@@ -229,6 +233,12 @@
       String(d.getMinutes()).padStart(2, '0'),
       String(d.getSeconds()).padStart(2, '0'),
     ].join(':');
+  }
+
+  function formatHistoryAxisTime(ms) {
+    var date = new Date(ms);
+    if (!Number.isFinite(ms) || Number.isNaN(date.getTime())) return '';
+    return date.toLocaleTimeString([], { hour: 'numeric' });
   }
 
   function formatDuration(ms) {
@@ -816,6 +826,7 @@
   var analyticsTokenReturnFocus = null;
   var historyContent = $('history-content');
   var historyKpiSummary = $('history-kpi-summary');
+  var historySubtitle = $('history-subtitle');
   var historyLiveStamp = $('history-live-stamp');
   var historySessionFilterSelect = $('history-session-filter');
   var missionRouteBtn = $('mission-route-btn');
@@ -858,6 +869,9 @@
   var historyFetchFrame = 0;
   var historyFetchTimer = 0;
   var historyBarRefreshFrame = 0;
+  var cachedHistoryDashboard = null;
+  var cachedHistoryAtMs = 0;
+  var HISTORY_ROUTE_CACHE_MS = 60 * 1000;
   var analyticsChatMessages = [];
   var analyticsChatLoading = false;
   var analyticsChatRequestSeq = 0;
@@ -908,6 +922,22 @@
     return !!(view && view.history && Number(view.history.generated_at_ms || 0) > 0);
   }
 
+  function cachedHistoryIsFresh() {
+    return dashboardHasLoadedHistory(cachedHistoryDashboard)
+      && Date.now() - cachedHistoryAtMs < HISTORY_ROUTE_CACHE_MS;
+  }
+
+  function rememberHistoryDashboard(view) {
+    if (!dashboardHasLoadedHistory(view)) return;
+    cachedHistoryDashboard = view;
+    cachedHistoryAtMs = Date.now();
+  }
+
+  function historyDashboardForRoute(view) {
+    if (dashboardHasLoadedHistory(view)) return view;
+    return cachedHistoryIsFresh() ? cachedHistoryDashboard : null;
+  }
+
   function cancelScheduledHistoryFetch() {
     if (historyFetchFrame) {
       window.cancelAnimationFrame(historyFetchFrame);
@@ -921,11 +951,13 @@
 
   function scheduleHistoryFetch() {
     if (historyFetchFrame || historyFetchTimer) return;
+    if (cachedHistoryIsFresh()) return;
     historyFetchFrame = window.requestAnimationFrame(function () {
       historyFetchFrame = 0;
       historyFetchTimer = window.setTimeout(function () {
         historyFetchTimer = 0;
         if (appRoute !== 'history') return;
+        if (cachedHistoryIsFresh()) return;
         if (typeof window.__cmcFetchHistory === 'function') window.__cmcFetchHistory();
       }, 0);
     });
@@ -939,11 +971,6 @@
     }
     liveFingerprints.history = '';
     openHistoryFailureKeys.clear();
-    if (historyLiveStamp) historyLiveStamp.textContent = 'Open History to load analytics';
-    if (historyKpiSummary) historyKpiSummary.innerHTML = '';
-    if (historyContent) historyContent.innerHTML = '';
-    if (historyScreen) historyScreen.scrollTop = 0;
-    updateHistorySessionFilter(null);
   }
 
   function analyticsFixture() {
@@ -1158,7 +1185,10 @@
     var className = kind === 'cards' ? 'analytics-artifact analytics-artifact-cards'
       : kind === 'wide_table' || kind === 'definition_inventory' ? 'analytics-artifact analytics-artifact-wide'
       : 'analytics-artifact';
-    return '<section class="' + className + '"><h3>' + escapeHtml((artifact && artifact.title) || 'Artifact') + '</h3>' + body + '</section>';
+    var description = artifact && artifact.description
+      ? '<p class="analytics-artifact-copy">' + escapeHtml(artifact.description) + '</p>'
+      : '';
+    return '<section class="' + className + '"><h3>' + escapeHtml((artifact && artifact.title) || 'Artifact') + '</h3>' + description + body + '</section>';
   }
 
   function renderAnalyticsTable(artifact) {
@@ -1169,7 +1199,8 @@
     var tableClass = 'analytics-table';
     var scrollClass = 'analytics-table-scroll';
     if (title.indexOf('overlap candidates') >= 0) tableClass += ' analytics-table-overlap';
-    if (title.indexOf('completeness gaps') >= 0) {
+    var isReadinessTable = title.indexOf('completeness gaps') >= 0 || title.indexOf('readiness checks') >= 0;
+    if (isReadinessTable) {
       tableClass += ' analytics-table-completeness';
       scrollClass += ' analytics-table-scroll-compact';
     }
@@ -1178,10 +1209,10 @@
       return '<th>' + escapeHtml(col) + '</th>';
     }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
       return '<tr>' + (row || []).map(function (cell, index) {
-        if (title.indexOf('completeness gaps') >= 0 && columns[index] === 'Open') {
+        if (isReadinessTable && (columns[index] === 'Details' || columns[index] === 'Open')) {
           var details = parseDefinitionDetails(cell);
           var encoded = encodeURIComponent(JSON.stringify(details));
-          return '<td><button class="analytics-detail-button" type="button" data-analytics-open-definition="' + escapeHtml(encoded) + '">Open</button></td>';
+          return '<td><button class="analytics-detail-button" type="button" data-analytics-definition="' + escapeHtml(encoded) + '">View</button></td>';
         }
         return '<td>' + escapeHtml(formatAnalyticsTableCell(cell)) + '</td>';
       }).join('') + '</tr>';
@@ -1231,6 +1262,7 @@
     overlay.setAttribute('aria-hidden', 'false');
     var definitionLabel = details.kind === 'agents' ? 'Agent' : 'Skill';
     var definitionTitle = (details.name || 'Definition') + ' ' + definitionLabel;
+    var completenessLabel = details.scoreLabel || (String(details.score || 0) + '/' + String(details.maxScore || 5));
     overlay.innerHTML = '<div class="analytics-definition-dialog" role="dialog" aria-modal="true" aria-labelledby="analytics-definition-title" tabindex="-1">'
       + '<div class="inspector-header"><div><h2 id="analytics-definition-title" class="inspector-title">' + escapeHtml(definitionTitle) + '</h2></div>'
       + '<button class="inspector-close" type="button" data-analytics-definition-close aria-label="Close definition details">×</button></div>'
@@ -1239,7 +1271,8 @@
       + '<dt>Source</dt><dd>' + escapeHtml(details.root || 'unknown') + '</dd>'
       + '<dt>Size</dt><dd>' + escapeHtml(compactNumber(details.size || 0) + ' chars') + '</dd>'
       + '<dt>Description</dt><dd>' + escapeHtml(compactNumber(details.descriptionChars || 0) + ' chars') + '</dd>'
-      + '<dt>Completeness</dt><dd>' + escapeHtml(String(details.score || 0) + '/5') + '</dd>'
+      + '<dt>Readiness score</dt><dd>' + escapeHtml(completenessLabel) + '</dd>'
+      + (details.readiness ? '<dt>Readiness</dt><dd>' + escapeHtml(details.readiness) + '</dd>' : '')
       + '<dt>Issues</dt><dd>' + escapeHtml(details.issues || 'No issues detected.') + '</dd>'
       + '</dl><section class="analytics-definition-source"><h3>Definition</h3><pre data-analytics-definition-source>Loading definition…</pre></section></div>';
     document.body.appendChild(overlay);
@@ -1441,8 +1474,9 @@
     if (!options || options.syncHash !== false) syncRouteHash(appRoute);
     if (appRoute === 'history') {
       if (previous === 'analytics') unloadAnalyticsRoute();
-      if (dashboardHasLoadedHistory(lastDashboard)) {
-        renderHistory(lastDashboard, previous !== 'history');
+      var historyDashboard = historyDashboardForRoute(lastDashboard);
+      if (historyDashboard) {
+        renderHistory(historyDashboard, previous !== 'history');
       } else {
         renderHistory(null, true);
       }
@@ -1759,6 +1793,7 @@
       var hasGitRoot = !!selected.git_root;
       var activity = selected.replay_activity || selectedActivity(selected);
       var heading = selectedSessionHeading(selected);
+      var model = selected.last_model || '';
       selectedHtml = '<div class="cmc-session-summary">'
         + '<div class="cmc-session-heading">'
         + '<div>'
@@ -1776,9 +1811,14 @@
         + '<div class="cmc-actions">'
         + '<button class="cmc-button accent ' + (hasGitRoot ? '' : 'disabled') + '" aria-label="Open selected session in editor" ' + (hasGitRoot ? 'data-cmc-action="editor"' : 'disabled aria-disabled="true"') + '>↗ Open in Editor</button>'
         + '<button class="cmc-button ' + (tcalls > 0 ? '' : 'disabled') + '" aria-label="Open inspector for selected session" ' + (tcalls > 0 ? 'data-cmc-action="inspector"' : 'disabled aria-disabled="true"') + '>Inspector</button>'
+        + '</div>'
+        + '<div class="cmc-session-model-row">'
+        + '<span class="cmc-model-label">Model</span>'
+        + '<span id="model-chip" class="' + (model ? '' : 'empty') + '" title="Active model for the selected session">' + escapeHtml(model) + '</span>'
         + '</div>';
     }
     body.innerHTML = alertsHtml + picker + selectedHtml;
+    if (selected) updateModelChipElement(selected.last_model || '', true);
     restoreSessionMenuIfNeeded(body, keepMenuOpen);
   }
 
@@ -2200,6 +2240,28 @@
     return scope || history;
   }
 
+  function defaultHistorySubtitle() {
+    return 'KPI totals cover all currently scanned local sessions. Charts below show rolling 24h and last 7 days.';
+  }
+
+  function historySubtitleLabel(view, history, scoped) {
+    if (!history) return defaultHistorySubtitle();
+    if (scoped) {
+      var scopeName = historySessionLabel({
+        session_id: history.session_id,
+        label: history.label || (history.recent_sessions && history.recent_sessions[0] && history.recent_sessions[0].title) || '',
+      });
+      return 'KPI totals cover the selected session' + (scopeName ? ' (' + scopeName + ')' : '') + '. Charts below show rolling 24h and last 7 days.';
+    }
+    var activity = view && view.activity || {};
+    var scannedSessions = Number(activity.scannedSessions);
+    var sessionCount = Number.isFinite(scannedSessions) && scannedSessions > 0
+      ? scannedSessions
+      : (history.recent_sessions || []).length || historySessionScopes(history).length;
+    var sessionText = sessionCount > 0 ? ' (' + exactNumber(sessionCount) + ' ' + (sessionCount === 1 ? 'session' : 'sessions') + ')' : '';
+    return 'KPI totals cover all currently scanned local sessions' + sessionText + '. Charts below show rolling 24h and last 7 days.';
+  }
+
   function historySessionLabel(scope) {
     var label = String(scope && scope.label || '').trim();
     var id = shortSessionId(scope && scope.session_id);
@@ -2480,25 +2542,37 @@
     if (readout) readout.classList.remove('visible');
   }
 
-  function historyHourAxisLabels(count) {
+  function historyHourAxisLabels(count, generatedAtMs) {
     var labels = new Map();
     if (count <= 0) return labels;
-    [0, 4, 8, 12, 16, 20, 24].forEach(function (hour) {
-      var index = count === 24
-        ? (hour === 24 ? count - 1 : Math.min(hour, count - 1))
-        : Math.round((hour / 24) * (count - 1));
-      labels.set(index, String(hour));
+    var nowMs = Number(generatedAtMs || 0);
+    [
+      { age: 24, suffix: '24h ago' },
+      { age: 18, suffix: '18h ago' },
+      { age: 12, suffix: '12h ago' },
+      { age: 6, suffix: '6h ago' },
+      { age: 0, suffix: 'now' },
+    ].forEach(function (tick) {
+      var progress = (24 - tick.age) / 24;
+      var index = Math.round(progress * (count - 1));
+      var tickMs = nowMs > 0 ? nowMs - tick.age * 60 * 60 * 1000 : 0;
+      labels.set(Math.max(0, Math.min(count - 1, index)), {
+        primary: formatHistoryAxisTime(tickMs) || tick.suffix,
+        secondary: tick.suffix,
+      });
     });
     return labels;
   }
 
-  function historyHourReadoutLabel(index, count) {
-    if (count <= 1 || index === count - 1) return 'Hour 24';
-    var hour = count === 24 ? index : Math.round((index / Math.max(1, count - 1)) * 24);
-    return 'Hour ' + String(Math.max(0, Math.min(24, hour))).padStart(2, '0');
+  function historyHourReadoutLabel(index, count, bucket) {
+    var bucketClock = bucket && bucket.start ? formatHistoryAxisTime(Date.parse(bucket.start)) : '';
+    if (count <= 1 || index === count - 1) return (bucketClock ? bucketClock + ' · ' : '') + 'Current hour';
+    var progress = index / Math.max(1, count - 1);
+    var age = Math.max(1, Math.round(24 - progress * 24));
+    return (bucketClock ? bucketClock + ' · ' : '') + age + 'h ago';
   }
 
-  function renderHistoryChart(title, copy, buckets, idPrefix) {
+  function renderHistoryChart(title, copy, buckets, idPrefix, options) {
     var data = Array.isArray(buckets) ? buckets : [];
     if (!data.length || !data.some(function (bucket) { return Number(bucket.event_count || 0) > 0; })) {
       return '<article class="history-card" data-history-card="' + escapeHtml(idPrefix) + '">'
@@ -2521,14 +2595,14 @@
     var gap = data.length > 12 ? 3 : 7;
     var barW = Math.max(3, (plotW - gap * (data.length - 1)) / data.length);
     var useRelativeHours = idPrefix === 'history-24h';
-    var hourAxisLabels = useRelativeHours ? historyHourAxisLabels(data.length) : null;
+    var hourAxisLabels = useRelativeHours ? historyHourAxisLabels(data.length, options && options.generatedAtMs) : null;
     var axisLabels = [];
     var bars = data.map(function (bucket, index) {
       var total = Number(bucket.event_count || 0);
       var x = left + index * (barW + gap);
       var totalH = Math.max(total > 0 ? 2 : 0, (total / max) * plotH);
       var y = top + plotH - totalH;
-      var bucketLabel = useRelativeHours ? historyHourReadoutLabel(index, data.length) : bucket.label;
+      var bucketLabel = useRelativeHours ? historyHourReadoutLabel(index, data.length, bucket) : bucket.label;
       var axisLabel = useRelativeHours ? hourAxisLabels.get(index) : bucket.label;
       var readout = bucketLabel + ': ' + exactNumber(total) + ' events, ' + exactNumber(Number(bucket.active_sessions || 0)) + ' sessions';
       var readoutAttr = ' data-history-readout="' + escapeHtml(readout) + '" tabindex="0" aria-label="' + escapeHtml(readout) + '"';
@@ -2546,7 +2620,10 @@
       return acc;
     }, { events: 0 });
     var axisHtml = axisLabels.map(function (item) {
-      return '<span style="left:' + item.left.toFixed(3) + '%">' + escapeHtml(item.label) + '</span>';
+      var label = item.label && typeof item.label === 'object'
+        ? '<strong>' + escapeHtml(item.label.primary) + '</strong><em>' + escapeHtml(item.label.secondary) + '</em>'
+        : escapeHtml(item.label);
+      return '<span style="left:' + item.left.toFixed(3) + '%">' + label + '</span>';
     }).join('');
 
     return '<article class="history-card" data-history-card="' + escapeHtml(idPrefix) + '">'
@@ -2742,31 +2819,57 @@
       + '</article>';
   }
 
+  function historyLoadingMarkup() {
+    return '<div class="history-loading-stage" role="status" aria-live="polite">'
+      + '<div class="history-loading-dialog">'
+      + '<div class="history-loading-spinner" aria-hidden="true"></div>'
+      + '<div class="history-loading-title">Scanning Copilot CLI history</div>'
+      + '<div class="history-loading-copy">Building local session, event, tool, model, and token summaries.</div>'
+      + '<div class="history-loading-bar" aria-hidden="true"><span></span></div>'
+      + '</div>'
+      + '</div>';
+  }
+
   function renderHistory(view, force) {
     if (!historyContent) return;
+    if (!dashboardHasLoadedHistory(view) && cachedHistoryIsFresh()) {
+      view = cachedHistoryDashboard;
+    }
     var fingerprint = historyFingerprint(view);
     if (!force && fingerprint === liveFingerprints.history) return;
     liveFingerprints.history = fingerprint;
 
     if (!view) {
+      if (historySubtitle) historySubtitle.textContent = defaultHistorySubtitle();
       if (historyLiveStamp) historyLiveStamp.textContent = 'Waiting for activity scan...';
       if (historyKpiSummary) historyKpiSummary.innerHTML = '';
-      historyContent.innerHTML = '<div class="history-empty">Loading scanned Copilot history...</div>';
+      historyContent.innerHTML = historyLoadingMarkup();
       return;
     }
 
     var history = view.history;
     if (!history) {
+      if (historySubtitle) historySubtitle.textContent = defaultHistorySubtitle();
       if (historyLiveStamp) historyLiveStamp.textContent = 'History unavailable in this scan';
       if (historyKpiSummary) historyKpiSummary.innerHTML = '';
       historyContent.innerHTML = '<div class="history-empty">History data is not available from the current activity scan yet. Mission Control will update this route when the backend provides aggregate history.</div>';
       updateHistorySessionFilter(null);
       return;
     }
+    if (Number(history.generated_at_ms || 0) <= 0) {
+      if (historySubtitle) historySubtitle.textContent = defaultHistorySubtitle();
+      if (historyLiveStamp) historyLiveStamp.textContent = 'Loading full history scan...';
+      if (historyKpiSummary) historyKpiSummary.innerHTML = '';
+      historyContent.innerHTML = historyLoadingMarkup();
+      updateHistorySessionFilter(null);
+      return;
+    }
+    rememberHistoryDashboard(view);
 
     updateHistorySessionFilter(history);
     var scoped = historySessionFilter !== 'all';
     history = selectedHistorySummary(history);
+    if (historySubtitle) historySubtitle.textContent = historySubtitleLabel(view, history, scoped);
     if (historyLiveStamp) historyLiveStamp.textContent = generatedAtLabel(history);
     if (historyKpiSummary) historyKpiSummary.innerHTML = historyKpis(view, history, scoped);
     if (!historyHasData(history)) {
@@ -2781,7 +2884,7 @@
       + renderSessionDistribution(history.recent_sessions)
       + '</div>'
       + '<div class="history-column history-chart-region">'
-      + renderHistoryChart('Activity, rolling 24 hours', 'Hourly observed events across the rolling 24-hour window', history.activity_24h, 'history-24h')
+      + renderHistoryChart('Activity, rolling 24 hours', 'Hourly buckets across the last 24 hours in your local time zone; right edge is now.', history.activity_24h, 'history-24h', { generatedAtMs: history.generated_at_ms })
       + renderHistoryChart('Activity, last 7 days', 'Daily activity over the last 7 days', history.activity_7d, 'history-7d')
       + '</div>'
       + '<div class="history-column history-breakdown-region">'

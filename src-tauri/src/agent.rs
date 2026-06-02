@@ -1330,10 +1330,37 @@ fn is_mission_control_analytics_session(events_path: &Path) -> bool {
         return false;
     };
     let reader = BufReader::new(file);
-    reader.lines().map_while(Result::ok).any(|line| {
-        line.contains(MISSION_CONTROL_ANALYTICS_MARKER)
-            || line.contains("copilot-mission-control-analytics")
-    })
+    reader
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| line_marks_mission_control_analytics_session(&line))
+}
+
+fn line_marks_mission_control_analytics_session(line: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+    let event_type = value
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if event_type == "system.message" {
+        return value
+            .pointer("/data/content")
+            .and_then(|value| value.as_str())
+            .is_some_and(|content| {
+                content.contains(MISSION_CONTROL_ANALYTICS_MARKER)
+                    || content.contains("Copilot Mission Control Analytics assistant")
+            });
+    }
+    if event_type == "session.start" {
+        return value
+            .pointer("/data/clientName")
+            .or_else(|| value.pointer("/data/client_name"))
+            .and_then(|value| value.as_str())
+            .is_some_and(|client| client == "copilot-mission-control-analytics");
+    }
+    false
 }
 
 fn activity_cache() -> &'static RwLock<AgentActivity> {
@@ -2245,6 +2272,10 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
         .collect::<Vec<(PathBuf, SystemTime)>>();
 
     session_dirs.sort_by(|a, b| b.1.cmp(&a.1));
+    session_dirs.retain(|(session_path, _)| {
+        let events_path = first_existing_child(session_path, &schema.session.events_files);
+        !is_mission_control_analytics_session(&events_path)
+    });
     // Cap per-provider scan effort but leave visible session truncation to the merger.
     session_dirs.truncate(MAX_SCANNED_SESSIONS);
     scan.scanned_sessions = session_dirs.len();
@@ -2256,6 +2287,7 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
         &schema.schema_version,
         &mcp_allowlist,
         &configured_hook_types,
+        include_history,
     );
     let token_prefix_cache_context = copilot_token_prefix_cache_context(&schema);
     let mut active_session_paths = HashSet::new();
@@ -2272,9 +2304,6 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
             .to_string();
         let workspace_path = first_existing_child(&session_path, &schema.session.workspace_files);
         let events_path = first_existing_child(&session_path, &schema.session.events_files);
-        if is_mission_control_analytics_session(&events_path) {
-            continue;
-        }
         active_session_paths.insert(session_path.clone());
         active_events_paths.insert(events_path.clone());
         let workspace = parse_workspace(&workspace_path, &schema);
@@ -2325,7 +2354,7 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
                 session_recent_events = cached.recent_events;
                 cached.schema_stats
             } else {
-                let stats = summarize_events(
+                let stats = summarize_events_with_mode(
                     provider,
                     &events_path,
                     &session_id,
@@ -2336,6 +2365,7 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
                     &configured_hook_types,
                     &schema,
                     &token_prefix_cache_context,
+                    include_history,
                 );
                 store_copilot_session_scan(
                     key.clone(),
@@ -2349,7 +2379,7 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
                 stats
             }
         } else {
-            summarize_events(
+            summarize_events_with_mode(
                 provider,
                 &events_path,
                 &session_id,
@@ -2360,6 +2390,7 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
                 &configured_hook_types,
                 &schema,
                 &token_prefix_cache_context,
+                include_history,
             )
         };
         for ((name, category), count) in session_tool_counts {
@@ -2458,9 +2489,16 @@ fn copilot_session_cache_context(
     schema_version: &str,
     mcp_allowlist: &HashSet<String>,
     configured_hook_types: &HashSet<String>,
+    include_history: bool,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(schema_version.as_bytes());
+    hasher.update([0]);
+    hasher.update(if include_history {
+        "full-history"
+    } else {
+        "tail-dashboard"
+    });
     hasher.update([0]);
 
     let mut allowed_tools = mcp_allowlist.iter().collect::<Vec<_>>();
@@ -3023,6 +3061,7 @@ fn ensure_turn<'a>(
     turn
 }
 
+#[cfg(test)]
 fn summarize_events(
     provider: &'static str,
     path: &Path,
@@ -3034,6 +3073,34 @@ fn summarize_events(
     configured_hook_types: &HashSet<String>,
     schema: &ProviderSchema,
     token_prefix_cache_context: &str,
+) -> SessionSchemaStats {
+    summarize_events_with_mode(
+        provider,
+        path,
+        session_id,
+        summary,
+        tool_counts,
+        recent_events,
+        mcp_allowlist,
+        configured_hook_types,
+        schema,
+        token_prefix_cache_context,
+        false,
+    )
+}
+
+fn summarize_events_with_mode(
+    provider: &'static str,
+    path: &Path,
+    session_id: &str,
+    summary: &mut AgentSessionSummary,
+    tool_counts: &mut BTreeMap<(String, String), usize>,
+    recent_events: &mut Vec<AgentEventSummary>,
+    mcp_allowlist: &HashSet<String>,
+    configured_hook_types: &HashSet<String>,
+    schema: &ProviderSchema,
+    token_prefix_cache_context: &str,
+    include_full_history: bool,
 ) -> SessionSchemaStats {
     let mut schema_stats = SessionSchemaStats::default();
     let Ok(mut file) = fs::File::open(path) else {
@@ -3060,7 +3127,7 @@ fn summarize_events(
     // substring-filter lines before JSON-parsing, so only the ~1 in
     // 4 MB of lines that actually contain a token event get parsed.
     let mut read_offset = 0;
-    if file_len > MAX_EVENT_TAIL_BYTES {
+    if !include_full_history && file_len > MAX_EVENT_TAIL_BYTES {
         let skipped_len = file_len - MAX_EVENT_TAIL_BYTES;
         fold_skipped_token_events_from_path(
             path,
@@ -3081,6 +3148,7 @@ fn summarize_events(
     let mut turn_order: Vec<String> = Vec::new();
     let mut turns: BTreeMap<String, TurnBuilder> = BTreeMap::new();
     let mut active_turn_id: Option<String> = None;
+    let mut last_completed_tool_turn_id: Option<String> = None;
     let mut current_model = summary.last_model.clone();
     let mut reader = BufReader::new(file);
     let mut line = String::new();
@@ -3149,6 +3217,17 @@ fn summarize_events(
                 .as_deref()
                 .map(|id| safe_ref_id("hook", id))
                 .unwrap_or_default();
+            let hook_turn_id = raw_event_turn_id(&value, schema)
+                .map(|id| safe_ref_id("turn", &id))
+                .or_else(|| active_turn_id.clone())
+                .or_else(|| {
+                    if is_post_tool_use_hook(&hook_name) {
+                        last_completed_tool_turn_id.clone()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
             record_last_event(summary, &timestamp, event_type, "hooks");
 
             summary.hooks_count += 1;
@@ -3176,7 +3255,7 @@ fn summarize_events(
                     model: current_model.clone(),
                     call_id: call_id.clone(),
                     event_ref: event_ref.clone(),
-                    turn_id: active_turn_id.clone().unwrap_or_default(),
+                    turn_id: hook_turn_id.clone(),
                     target: hook_name.clone(),
                     details: build_safe_hook_details(provider, &hook_name),
                     duration_ms: None,
@@ -3191,7 +3270,7 @@ fn summarize_events(
                     tool: hook_name,
                     call_id,
                     event_ref,
-                    turn_id: active_turn_id.clone().unwrap_or_default(),
+                    turn_id: hook_turn_id,
                 },
             );
         } else if is_hook_complete {
@@ -3398,6 +3477,7 @@ fn summarize_events(
                     entry.completed_at = timestamp.clone();
                 }
                 if !start.turn_id.is_empty() {
+                    last_completed_tool_turn_id = Some(start.turn_id.clone());
                     if let Some(turn) = turns.get_mut(&start.turn_id) {
                         if !success {
                             turn.failure_count += 1;
@@ -4230,6 +4310,10 @@ fn safe_hook_name(value: &serde_json::Value, schema: &ProviderSchema) -> String 
         .unwrap_or_else(|| "hook".to_string())
 }
 
+fn is_post_tool_use_hook(hook_name: &str) -> bool {
+    hook_name.eq_ignore_ascii_case("postToolUse")
+}
+
 fn build_safe_hook_details(provider: &str, hook_name: &str) -> Vec<SafeDetail> {
     vec![
         safe_detail("Type", "Hook"),
@@ -4592,6 +4676,33 @@ mod tests {
     }
 
     #[test]
+    fn analytics_session_marker_only_matches_session_identity_events() {
+        let system_marker = format!(
+            r#"{{"type":"system.message","data":{{"content":"{}"}}}}"#,
+            MISSION_CONTROL_ANALYTICS_MARKER
+        );
+        let client_marker =
+            r#"{"type":"session.start","data":{"clientName":"copilot-mission-control-analytics"}}"#;
+        let tool_output_marker = format!(
+            r#"{{"type":"tool.execution_complete","data":{{"result":"{}"}}}}"#,
+            MISSION_CONTROL_ANALYTICS_MARKER
+        );
+        let assistant_content_marker = format!(
+            r#"{{"type":"assistant.message","data":{{"content":"{}"}}}}"#,
+            MISSION_CONTROL_ANALYTICS_MARKER
+        );
+
+        assert!(line_marks_mission_control_analytics_session(&system_marker));
+        assert!(line_marks_mission_control_analytics_session(client_marker));
+        assert!(!line_marks_mission_control_analytics_session(
+            &tool_output_marker
+        ));
+        assert!(!line_marks_mission_control_analytics_session(
+            &assistant_content_marker
+        ));
+    }
+
+    #[test]
     fn provider_schema_rejects_unsafe_surfaced_paths() {
         let raw = BUNDLED_COPILOT_SCHEMA.replace(
             r#""target_paths": ["skill"]"#,
@@ -4842,6 +4953,83 @@ mod tests {
             .iter()
             .all(|b| b.event_count == 0));
         assert!(activity.history.recent_failures.is_empty());
+    }
+
+    #[test]
+    fn post_tool_use_hook_inherits_completed_tool_turn() {
+        use std::io::Write;
+
+        let schema = test_schema();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cmc_hook_turn_attribution_{}_{}.jsonl",
+            std::process::id(),
+            unix_ms(SystemTime::now())
+        ));
+        let mut file = std::fs::File::create(&path).expect("create hook turn test events");
+        writeln!(
+            file,
+            r#"{{"type":"assistant.turn_start","timestamp":"2026-05-21T07:13:58.000Z","data":{{"turnId":"turn-alpha","model":"gpt-5.5"}}}}"#
+        )
+        .expect("write turn start");
+        writeln!(
+            file,
+            r#"{{"type":"tool.execution_start","timestamp":"2026-05-21T07:14:00.000Z","data":{{"toolName":"bash","toolCallId":"call-bash","turnId":"turn-alpha","arguments":{{"command":"SECRET_COMMAND"}}}}}}"#
+        )
+        .expect("write tool start");
+        writeln!(
+            file,
+            r#"{{"type":"tool.execution_complete","timestamp":"2026-05-21T07:14:01.000Z","data":{{"toolCallId":"call-bash","success":true,"output":"SECRET_OUTPUT"}}}}"#
+        )
+        .expect("write tool complete");
+        writeln!(
+            file,
+            r#"{{"type":"hook.start","timestamp":"2026-05-21T07:14:01.100Z","data":{{"hookInvocationId":"hook-post-tool","hookType":"postToolUse","input":{{"cwd":"/Users/dan/private","toolName":"bash","toolArgs":"SECRET_COMMAND"}}}}}}"#
+        )
+        .expect("write hook start");
+        writeln!(
+            file,
+            r#"{{"type":"hook.end","timestamp":"2026-05-21T07:14:01.300Z","data":{{"hookInvocationId":"hook-post-tool","hookType":"postToolUse","success":true,"output":"SECRET_HOOK_OUTPUT"}}}}"#
+        )
+        .expect("write hook end");
+        drop(file);
+
+        let mut summary = AgentSessionSummary::default();
+        let mut tool_counts = BTreeMap::new();
+        let mut recent_events = Vec::new();
+        let configured_hook_types = HashSet::from(["posttooluse".to_string()]);
+        summarize_events(
+            "copilot",
+            &path,
+            "hook-session-123456789",
+            &mut summary,
+            &mut tool_counts,
+            &mut recent_events,
+            &HashSet::new(),
+            &configured_hook_types,
+            &schema,
+            "test",
+        );
+
+        let tool = summary
+            .recent_tool_calls
+            .iter()
+            .find(|call| call.tool == "bash")
+            .expect("tool call");
+        let hook = summary
+            .recent_tool_calls
+            .iter()
+            .find(|call| call.tool == "postToolUse")
+            .expect("hook call");
+
+        assert!(!tool.turn_id.is_empty());
+        assert_eq!(hook.turn_id, tool.turn_id);
+        assert_eq!(hook.duration_ms, Some(200));
+        let rendered = serde_json::to_string(&summary).expect("serialize summary");
+        assert!(!rendered.contains("SECRET"));
+        assert!(!rendered.contains("/Users/dan/private"));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -6074,6 +6262,77 @@ mod tests {
             summary.input_tokens
         );
         assert_eq!(summary.output_tokens, 3_000);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn history_mode_scans_events_before_tail_window() {
+        use std::io::Write;
+        let mut path = std::env::temp_dir();
+        path.push("cmc_test_full_history_scan.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let f = std::fs::File::create(&path).expect("create temp jsonl");
+            let mut bw = std::io::BufWriter::new(f);
+            writeln!(
+                bw,
+                r#"{{"type":"tool.execution_start","timestamp":"2026-05-28T01:00:00.000Z","data":{{"toolName":"view","toolCallId":"old-call"}}}}"#
+            )
+            .unwrap();
+            let filler = "not json\n";
+            let filler_repeats = (MAX_EVENT_TAIL_BYTES as usize / filler.len()) + 1024;
+            for _ in 0..filler_repeats {
+                bw.write_all(filler.as_bytes()).unwrap();
+            }
+            writeln!(
+                bw,
+                r#"{{"type":"tool.execution_start","timestamp":"2026-05-28T02:00:00.000Z","data":{{"toolName":"bash","toolCallId":"new-call"}}}}"#
+            )
+            .unwrap();
+        }
+
+        let schema = test_schema();
+        let allowlist = HashSet::new();
+        let configured_hook_types = HashSet::new();
+        let mut tail_summary = AgentSessionSummary::default();
+        let mut tail_tool_counts = BTreeMap::new();
+        let mut tail_events = Vec::new();
+        summarize_events(
+            "test",
+            &path,
+            "test-session",
+            &mut tail_summary,
+            &mut tail_tool_counts,
+            &mut tail_events,
+            &allowlist,
+            &configured_hook_types,
+            &schema,
+            "test",
+        );
+
+        let mut history_summary = AgentSessionSummary::default();
+        let mut history_tool_counts = BTreeMap::new();
+        let mut history_events = Vec::new();
+        summarize_events_with_mode(
+            "test",
+            &path,
+            "test-session",
+            &mut history_summary,
+            &mut history_tool_counts,
+            &mut history_events,
+            &allowlist,
+            &configured_hook_types,
+            &schema,
+            "test",
+            true,
+        );
+
+        assert_eq!(tail_summary.event_count, 1);
+        assert_eq!(tail_events.len(), 1);
+        assert_eq!(history_summary.event_count, 2);
+        assert_eq!(history_events.len(), 2);
 
         let _ = std::fs::remove_file(&path);
     }

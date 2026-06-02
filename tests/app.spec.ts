@@ -336,16 +336,20 @@ test.describe('Copilot Mission Control app shell', () => {
     await expect(page.locator('#analytics-token-notice')).toHaveClass(/visible/);
   });
 
-  test('history dashboard unloads when returning to home', async ({ page }) => {
+  test('history dashboard stays cached when returning to home', async ({ page }) => {
     await page.locator('#history-route-btn').click();
     await expect.poll(() => page.locator('#history-content').evaluate((el) => el.innerHTML.length)).toBeGreaterThan(0);
     await expect(page.locator('body')).toHaveClass(/history-route/);
+    const renderedHistory = await page.locator('#history-content').evaluate((el) => el.innerHTML);
+    const renderedKpis = await page.locator('#history-kpi-summary').evaluate((el) => el.innerHTML);
 
     await page.locator('#mission-route-btn').click();
     await expect(page.locator('body')).not.toHaveClass(/history-route/);
-    await expect.poll(() => page.locator('#history-content').evaluate((el) => el.innerHTML)).toBe('');
-    await expect.poll(() => page.locator('#history-kpi-summary').evaluate((el) => el.innerHTML)).toBe('');
-    await expect(page.locator('#history-session-filter')).toBeDisabled();
+    await expect.poll(() => page.locator('#history-content').evaluate((el) => el.innerHTML)).toBe(renderedHistory);
+    await expect.poll(() => page.locator('#history-kpi-summary').evaluate((el) => el.innerHTML)).toBe(renderedKpis);
+
+    await page.locator('#history-route-btn').click();
+    await expect(page.locator('#history-content')).not.toContainText('Scanning Copilot CLI history');
   });
 
   test('theme toggle persists to localStorage and flips body class', async ({ page }) => {

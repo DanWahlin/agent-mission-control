@@ -16,6 +16,8 @@
     "test": "npm run build:frontend && npx playwright test",
     "test:headed": "npm run build:frontend && npx playwright test --headed",
     "test:mcp": "node --test tests/mcp-insights.test.mts",
+    "test:skill-evaluator": "cd src-tauri && cargo test skill_evaluator --quiet",
+    "test:skill-evaluator:copilot-sdk": "cd src-tauri && CMC_RUN_COPILOT_SDK_TESTS=1 cargo test copilot_sdk_judge_integration_returns_result -- --ignored",
     "mcp:insights": "node mcp/mission-control-insights.ts",
     "release": "node scripts/release.ts",
     "test:updater": "node scripts/test-updater.ts"

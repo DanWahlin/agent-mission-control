@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,6 +18,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
+
+use crate::definition_paths::resolve_definition_path;
 
 use crate::agent::{
     collect_agent_activity_with_history, AgentActivity, AgentEventSummary, AgentSessionSummary,
@@ -179,6 +181,8 @@ pub struct AnalyticsChangeItem {
 pub struct AnalyticsArtifact {
     pub kind: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     #[serde(default)]
     pub columns: Vec<String>,
     #[serde(default)]
@@ -350,41 +354,7 @@ pub fn resolve_copilot_definition_path(
     definition: &str,
     root: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let kind = match kind {
-        "agents" | "agent" => "agents",
-        "skills" | "skill" => "skills",
-        _ => return Err(format!("Unsupported definition kind: {}", kind)),
-    };
-    let relative = safe_definition_relative_path(definition)?;
-    let requested_root = root
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "unknown");
-    let mut matched_requested_root = requested_root.is_none();
-    for root in definition_roots(kind) {
-        if let Some(requested_root) = requested_root {
-            if root.label != requested_root {
-                continue;
-            }
-            matched_requested_root = true;
-        }
-        let candidate = root.path.join(&relative);
-        if candidate.is_dir() {
-            if let Some(file) = primary_definition_file(&candidate, kind) {
-                return Ok(file);
-            }
-        } else if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    if let Some(requested_root) = requested_root {
-        if !matched_requested_root {
-            return Err(format!(
-                "Unsupported {} definition root: {}",
-                kind, requested_root
-            ));
-        }
-    }
-    Err(format!("No {} definition found for: {}", kind, definition))
+    resolve_definition_path(kind, definition, root)
 }
 
 fn requires_insights_tools(prompt: &str) -> bool {
@@ -987,13 +957,38 @@ fn file_contains_mission_control_marker(path: &Path) -> Result<bool, String> {
     let reader = BufReader::new(file);
     for line in reader.lines() {
         let line = line.map_err(|err| err.to_string())?;
-        if line.contains(MISSION_CONTROL_ANALYTICS_MARKER)
-            || line.contains("copilot-mission-control-analytics")
-        {
+        if line_marks_mission_control_analytics_session(&line) {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+fn line_marks_mission_control_analytics_session(line: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    let event_type = value
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if event_type == "system.message" {
+        return value
+            .pointer("/data/content")
+            .and_then(|value| value.as_str())
+            .is_some_and(|content| {
+                content.contains(MISSION_CONTROL_ANALYTICS_MARKER)
+                    || content.contains("Copilot Mission Control Analytics assistant")
+            });
+    }
+    if event_type == "session.start" {
+        return value
+            .pointer("/data/clientName")
+            .or_else(|| value.pointer("/data/client_name"))
+            .and_then(|value| value.as_str())
+            .is_some_and(|client| client == "copilot-mission-control-analytics");
+    }
+    false
 }
 
 fn apply_local_event(
@@ -2485,79 +2480,6 @@ fn project_root_for_mcp() -> Option<PathBuf> {
     Some(cwd)
 }
 
-struct DefinitionRoot {
-    label: String,
-    path: PathBuf,
-}
-
-fn definition_roots(kind: &str) -> Vec<DefinitionRoot> {
-    let project_candidates: &[&str] = if kind == "agents" {
-        &[
-            ".copilot/agents",
-            ".github/copilot/agents",
-            ".github/agents",
-        ]
-    } else {
-        &[".copilot/skills", ".github/copilot/skills"]
-    };
-    let user_candidates: &[&str] = if kind == "agents" {
-        &["agents", "installed-plugins", "marketplace-cache"]
-    } else {
-        &["skills", "installed-plugins", "marketplace-cache"]
-    };
-    let mut roots = Vec::new();
-    if let Some(project_root) = project_root_for_mcp() {
-        roots.extend(project_candidates.iter().map(|candidate| DefinitionRoot {
-            label: format!("project:{}", candidate),
-            path: project_root.join(candidate),
-        }));
-    }
-    if let Some(home) = user_home_dir() {
-        roots.extend(user_candidates.iter().map(|candidate| DefinitionRoot {
-            label: format!("~/.copilot/{}", candidate),
-            path: home.join(".copilot").join(candidate),
-        }));
-    }
-    roots
-}
-
-fn user_home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
-}
-
-fn safe_definition_relative_path(value: &str) -> Result<PathBuf, String> {
-    let path = Path::new(value);
-    if path.is_absolute() {
-        return Err("Definition reference must be relative".to_string());
-    }
-    let mut clean = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => clean.push(part),
-            Component::CurDir => {}
-            _ => return Err("Definition reference contains unsafe path components".to_string()),
-        }
-    }
-    if clean.as_os_str().is_empty() {
-        return Err("Definition reference is empty".to_string());
-    }
-    Ok(clean)
-}
-
-fn primary_definition_file(dir: &Path, kind: &str) -> Option<PathBuf> {
-    let names: &[&str] = if kind == "agents" {
-        &["AGENT.md", "agent.yaml", "agent.yml", "AGENTS.md"]
-    } else {
-        &["SKILL.md", "skill.yaml", "skill.yml"]
-    };
-    names
-        .iter()
-        .map(|name| dir.join(name))
-        .find(|path| path.is_file())
-}
-
 struct AnalyticsSdkHandler {
     app: AppHandle,
     state: Arc<Mutex<AnalyticsSdkEventState>>,
@@ -3120,12 +3042,17 @@ fn definition_review_artifacts_from_payload(payload: &Value) -> Vec<AnalyticsArt
     if !completeness_rows.is_empty() {
         artifacts.push(AnalyticsArtifact {
             kind: "wide_table".to_string(),
-            title: format!("{} completeness gaps", label),
+            title: format!("{} readiness checks", label),
+            description: if label == "Skill" {
+                "Automated checks for whether a skill explains when to use it, when not to use it, how to run it, and how to validate the result. Use View before making changes.".to_string()
+            } else {
+                "Automated checks for whether an agent explains when to use it, when not to use it, how to run it, and how to validate the result. Use View before making changes.".to_string()
+            },
             columns: vec![
                 label.to_string(),
-                "Score".to_string(),
-                "Description".to_string(),
-                "Open".to_string(),
+                "Readiness".to_string(),
+                "Suggested fixes".to_string(),
+                "Details".to_string(),
             ],
             rows: completeness_rows,
             ..Default::default()
@@ -3213,6 +3140,18 @@ fn definition_inventory_rows(review: &Value, kind: &str) -> Vec<Vec<String>> {
                         .join(", ")
                 })
                 .unwrap_or_default();
+            let static_eval = static_definition_evaluation_for_item(item, kind);
+            let (score, max_score, score_label, readiness) = static_eval
+                .as_ref()
+                .map(|eval| {
+                    (
+                        eval.score,
+                        eval.max_score,
+                        eval.score_label.clone(),
+                        eval.readiness.clone(),
+                    )
+                })
+                .unwrap_or_else(|| fallback_definition_score(item));
             let details = serde_json::json!({
                 "name": name,
                 "definition": json_string(item, "definition_ref").unwrap_or_else(|| name.clone()),
@@ -3222,7 +3161,10 @@ fn definition_inventory_rows(review: &Value, kind: &str) -> Vec<Vec<String>> {
                 "root": json_string(item, "root").unwrap_or_else(|| "unknown".to_string()),
                 "size": json_u64(item, "source_chars"),
                 "descriptionChars": json_u64(item, "description_chars"),
-                "score": json_u64(item, "completeness_score"),
+                "score": score,
+                "maxScore": max_score,
+                "scoreLabel": score_label,
+                "readiness": readiness,
                 "issues": issues,
             })
             .to_string();
@@ -3307,6 +3249,11 @@ fn definition_review_rows(items: &[Value], value_key: &str, limit: usize) -> Vec
 }
 
 fn definition_completeness_rows(review: &Value, label: &str) -> Vec<Vec<String>> {
+    let static_rows = static_definition_completeness_rows(review, label);
+    if !static_rows.is_empty() {
+        return static_rows;
+    }
+
     review
         .get("completeness")
         .and_then(Value::as_array)
@@ -3321,6 +3268,9 @@ fn definition_completeness_rows(review: &Value, label: &str) -> Vec<Vec<String>>
                 "definition": json_string(item, "definition_ref").unwrap_or_else(|| id.clone()),
                 "kind": if label == "Agent" { "agents" } else { "skills" },
                 "root": json_string(item, "root").unwrap_or_else(|| "unknown".to_string()),
+                "score": score,
+                "maxScore": 5,
+                "scoreLabel": format!("{}/5", score),
             })
             .to_string();
             let issues = item
@@ -3339,6 +3289,113 @@ fn definition_completeness_rows(review: &Value, label: &str) -> Vec<Vec<String>>
             Some(vec![id, format!("{}/5", score), issues, details])
         })
         .collect()
+}
+
+#[derive(Debug)]
+struct StaticDefinitionRow {
+    id: String,
+    root: String,
+    definition_ref: String,
+    kind: &'static str,
+    score: u64,
+    max_score: u64,
+    score_label: String,
+    readiness: String,
+    issues: Vec<String>,
+}
+
+fn static_definition_completeness_rows(review: &Value, label: &str) -> Vec<Vec<String>> {
+    let kind = if label == "Agent" { "agents" } else { "skills" };
+    let mut rows = review
+        .get("definitions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|item| static_definition_evaluation_for_item(item, kind))
+        .filter(|row| row.score < row.max_score || !row.issues.is_empty())
+        .collect::<Vec<_>>();
+
+    rows.sort_by(|a, b| {
+        let left = (a.score as f64) / (a.max_score.max(1) as f64);
+        let right = (b.score as f64) / (b.max_score.max(1) as f64);
+        left.partial_cmp(&right)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    rows.into_iter()
+        .take(16)
+        .map(|row| {
+            let details = serde_json::json!({
+                "name": row.id,
+                "definition": row.definition_ref,
+                "kind": row.kind,
+                "root": row.root,
+                "score": row.score,
+                "maxScore": row.max_score,
+                "scoreLabel": row.score_label,
+                "readiness": row.readiness,
+                "issues": row.issues.join(", "),
+            })
+            .to_string();
+            let issues = if row.issues.is_empty() {
+                format!("{} readiness", row.readiness)
+            } else {
+                row.issues
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            vec![row.id, row.score_label, issues, details]
+        })
+        .collect()
+}
+
+fn static_definition_evaluation_for_item(item: &Value, kind: &str) -> Option<StaticDefinitionRow> {
+    let kind = crate::definition_paths::normalize_definition_kind(kind).ok()?;
+    let id = json_string(item, "id")?;
+    let definition_ref = json_string(item, "definition_ref").unwrap_or_else(|| id.clone());
+    let root = json_string(item, "root").unwrap_or_else(|| "unknown".to_string());
+    let root_arg = (root != "unknown").then_some(root.as_str());
+    let evaluation =
+        crate::skill_evaluator::evaluate_definition_static(kind, &definition_ref, root_arg)
+            .ok()?
+            .evaluation;
+    let issues = if evaluation.top_actions.is_empty() {
+        evaluation
+            .dimensions
+            .iter()
+            .filter(|dimension| dimension.status != "pass")
+            .map(|dimension| format!("{} needs review", dimension.label))
+            .take(5)
+            .collect()
+    } else {
+        evaluation
+            .top_actions
+            .iter()
+            .map(|action| action.title.clone())
+            .take(5)
+            .collect()
+    };
+    Some(StaticDefinitionRow {
+        id,
+        root,
+        definition_ref,
+        kind,
+        score: evaluation.score as u64,
+        max_score: evaluation.max_score as u64,
+        score_label: format!("{}/{}", evaluation.score, evaluation.max_score),
+        readiness: evaluation.readiness,
+        issues,
+    })
+}
+
+fn fallback_definition_score(item: &Value) -> (u64, u64, String, String) {
+    let score = json_u64(item, "completeness_score");
+    (score, 5, format!("{}/5", score), String::new())
 }
 
 fn definition_overlap_rows(review: &Value, limit: usize) -> Vec<Vec<String>> {
@@ -4436,7 +4493,7 @@ mod tests {
         assert!(!rendered.contains("relative_path"));
         assert!(!rendered.contains("copilot:"));
         assert!(rendered.contains("Largest skill definitions"));
-        assert!(rendered.contains("Skill completeness gaps"));
+        assert!(rendered.contains("Skill readiness checks"));
     }
 
     #[test]
@@ -4445,17 +4502,20 @@ mod tests {
         let artifacts = definition_review_artifacts_from_payload(&payload);
         let completeness = artifacts
             .iter()
-            .find(|artifact| artifact.title == "Skill completeness gaps")
+            .find(|artifact| artifact.title == "Skill readiness checks")
             .expect("completeness artifact");
         assert_eq!(
             completeness.columns,
             vec![
                 "Skill".to_string(),
-                "Score".to_string(),
-                "Description".to_string(),
-                "Open".to_string()
+                "Readiness".to_string(),
+                "Suggested fixes".to_string(),
+                "Details".to_string()
             ]
         );
+        assert!(completeness
+            .description
+            .contains("Automated checks for whether a skill explains when to use it"));
         let details: Value = serde_json::from_str(&completeness.rows[0][3]).expect("open payload");
         assert_eq!(
             details.get("definition").and_then(Value::as_str),
@@ -4465,6 +4525,150 @@ mod tests {
             details.get("root").and_then(Value::as_str),
             Some("~/.copilot/skills")
         );
+    }
+
+    #[test]
+    fn skill_completeness_artifact_uses_static_evaluator_score() {
+        let project_root = std::env::current_dir()
+            .expect("cwd")
+            .parent()
+            .expect("project root")
+            .to_path_buf();
+        let skill_dir = project_root
+            .join(".copilot")
+            .join("skills")
+            .join(format!("cmc-static-eval-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&skill_dir);
+        std::fs::create_dir_all(&skill_dir).expect("create temp skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "# Static Eval Test\n\nA deliberately thin skill used to verify static evaluation scoring in artifacts.\n",
+        )
+        .expect("write temp skill");
+
+        let id = skill_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("skill id")
+            .to_string();
+        let payload = serde_json::json!({
+            "kind": "skills",
+            "review": {
+                "inventory": {
+                    "discovered_definitions": 1,
+                    "analyzed_definitions": 1,
+                    "skipped_definitions": 0,
+                    "duplicate_id_groups": 0,
+                    "roots": [{ "root": "project:.copilot/skills", "count": 1 }]
+                },
+                "definitions": [{
+                    "id": id,
+                    "root": "project:.copilot/skills",
+                    "definition_ref": id,
+                    "summary": "Static eval test",
+                    "source_chars": 96,
+                    "description_chars": 0,
+                    "completeness_score": 5,
+                    "issues": []
+                }],
+                "completeness": [],
+                "context_cost": [],
+                "description_lengths": [],
+                "overlap_pairs": [],
+                "actions": []
+            }
+        });
+
+        let artifacts = definition_review_artifacts_from_payload(&payload);
+        let completeness = artifacts
+            .iter()
+            .find(|artifact| artifact.title == "Skill readiness checks")
+            .expect("completeness artifact");
+        let score = &completeness.rows[0][1];
+        let details: Value = serde_json::from_str(&completeness.rows[0][3]).expect("details");
+
+        assert!(score.ends_with("/100"));
+        assert_eq!(
+            details.get("scoreLabel").and_then(Value::as_str),
+            Some(score.as_str())
+        );
+        assert_eq!(details.get("maxScore").and_then(Value::as_u64), Some(100));
+
+        let _ = std::fs::remove_dir_all(&skill_dir);
+    }
+
+    #[test]
+    fn agent_readiness_artifact_uses_static_evaluator_score() {
+        let project_root = std::env::current_dir()
+            .expect("cwd")
+            .parent()
+            .expect("project root")
+            .to_path_buf();
+        let agent_dir = project_root
+            .join(".copilot")
+            .join("agents")
+            .join(format!("cmc-static-agent-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&agent_dir);
+        std::fs::create_dir_all(&agent_dir).expect("create temp agent dir");
+        std::fs::write(
+            agent_dir.join("AGENT.md"),
+            "# Static Agent Test\n\nA deliberately thin agent used to verify static evaluation scoring in artifacts.\n",
+        )
+        .expect("write temp agent");
+
+        let id = agent_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("agent id")
+            .to_string();
+        let payload = serde_json::json!({
+            "kind": "agents",
+            "review": {
+                "inventory": {
+                    "discovered_definitions": 1,
+                    "analyzed_definitions": 1,
+                    "skipped_definitions": 0,
+                    "duplicate_id_groups": 0,
+                    "roots": [{ "root": "project:.copilot/agents", "count": 1 }]
+                },
+                "definitions": [{
+                    "id": id,
+                    "root": "project:.copilot/agents",
+                    "definition_ref": id,
+                    "summary": "Static agent test",
+                    "source_chars": 96,
+                    "description_chars": 0,
+                    "completeness_score": 5,
+                    "issues": []
+                }],
+                "completeness": [],
+                "context_cost": [],
+                "description_lengths": [],
+                "overlap_pairs": [],
+                "actions": []
+            }
+        });
+
+        let artifacts = definition_review_artifacts_from_payload(&payload);
+        let readiness = artifacts
+            .iter()
+            .find(|artifact| artifact.title == "Agent readiness checks")
+            .expect("readiness artifact");
+        let score = &readiness.rows[0][1];
+        let details: Value = serde_json::from_str(&readiness.rows[0][3]).expect("details");
+
+        assert!(readiness
+            .description
+            .contains("Automated checks for whether an agent explains when to use it"));
+        assert!(score.ends_with("/100"));
+        assert_eq!(details.get("kind").and_then(Value::as_str), Some("agents"));
+        assert_eq!(
+            details.get("scoreLabel").and_then(Value::as_str),
+            Some(score.as_str())
+        );
+        assert_eq!(details.get("maxScore").and_then(Value::as_u64), Some(100));
+
+        let _ = std::fs::remove_dir_all(&agent_dir);
     }
 
     #[test]

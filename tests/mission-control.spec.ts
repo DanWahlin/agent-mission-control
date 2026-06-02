@@ -179,6 +179,7 @@ async function getHistoryNumbers(page: Page) {
     });
     const rowText = (selector: string) => Array.from(document.querySelectorAll(selector)).map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
     return {
+      subtitle: text('#history-subtitle'),
       kpis,
       tokenValues: Array.from(document.querySelectorAll('.history-token-kpi .history-kpi-value')).map((el) => (el.textContent || '').trim()),
       hourChartDesc: text('[data-history-card="history-24h"] desc'),
@@ -202,6 +203,12 @@ async function expectedHistoryAge(page: Page, iso: string) {
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     return `${Math.floor(seconds / 3600)}h ago`;
   }, iso);
+}
+
+async function expectedHistoryClock(page: Page, iso: string) {
+  return page.evaluate((timestamp) => (
+    new Date(timestamp).toLocaleTimeString([], { hour: 'numeric' })
+  ), iso);
 }
 
 async function selectSession(page: Page, id: string) {
@@ -697,6 +704,7 @@ test.describe('Copilot Mission Control — History', () => {
 
     const all = await getHistoryNumbers(page);
     const allLastActivity = await expectedHistoryAge(page, MISSION_FIXTURE.history.last_activity_at);
+    expect(all.subtitle).toBe('KPI totals cover all currently scanned local sessions (3 sessions). Charts below show rolling 24h and last 7 days.');
     expect(all.kpis).toMatchObject({
       'Sessions Scanned': { value: '3', note: '' },
       'Events': { value: '184', note: '' },
@@ -709,11 +717,12 @@ test.describe('Copilot Mission Control — History', () => {
     expect(all.tokenValues).toEqual(['3,300', '8,120']);
     expect(all.hourChartDesc).toBe('184 events across observed buckets.');
     expect(all.weekChartDesc).toBe('326 events across observed buckets.');
+    const allHourClocks = await Promise.all(MISSION_FIXTURE.history.activity_24h.map((bucket) => expectedHistoryClock(page, bucket.start)));
     expect(all.hourReadouts).toEqual([
-      'Hour 00: 12 events, 1 sessions',
-      'Hour 08: 31 events, 2 sessions',
-      'Hour 16: 54 events, 2 sessions',
-      'Hour 24: 87 events, 3 sessions',
+      `${allHourClocks[0]} · 24h ago: 12 events, 1 sessions`,
+      `${allHourClocks[1]} · 16h ago: 31 events, 2 sessions`,
+      `${allHourClocks[2]} · 8h ago: 54 events, 2 sessions`,
+      `${allHourClocks[3]} · Current hour: 87 events, 3 sessions`,
     ]);
     expect(all.weekReadouts).toEqual([
       'Mon: 42 events, 1 sessions',
@@ -740,6 +749,7 @@ test.describe('Copilot Mission Control — History', () => {
     await page.locator('#history-session-filter').selectOption('beta4567');
     const beta = await getHistoryNumbers(page);
     const betaLastActivity = await expectedHistoryAge(page, MISSION_FIXTURE.history.session_scopes[1].last_activity_at);
+    expect(beta.subtitle).toBe('KPI totals cover the selected session (Review Tests · beta4567). Charts below show rolling 24h and last 7 days.');
     expect(beta.kpis).toMatchObject({
       'Sessions Scanned': { value: '1', note: '' },
       'Events': { value: '64', note: '' },
@@ -752,10 +762,11 @@ test.describe('Copilot Mission Control — History', () => {
     expect(beta.tokenValues).toEqual(['1,200', '2,920']);
     expect(beta.hourChartDesc).toBe('90 events across observed buckets.');
     expect(beta.weekChartDesc).toBe('90 events across observed buckets.');
+    const betaHourClocks = await Promise.all(MISSION_FIXTURE.history.session_scopes[1].activity_24h.map((bucket) => expectedHistoryClock(page, bucket.start)));
     expect(beta.hourReadouts).toEqual([
-      'Hour 00: 19 events, 1 sessions',
-      'Hour 12: 30 events, 1 sessions',
-      'Hour 24: 41 events, 1 sessions',
+      `${betaHourClocks[0]} · 24h ago: 19 events, 1 sessions`,
+      `${betaHourClocks[1]} · 12h ago: 30 events, 1 sessions`,
+      `${betaHourClocks[2]} · Current hour: 41 events, 1 sessions`,
     ]);
     expect(beta.weekReadouts).toEqual([
       'Tue: 45 events, 1 sessions',
@@ -916,6 +927,30 @@ test.describe('Copilot Mission Control — History', () => {
     await page.locator('#history-route-btn').click();
     await expect(page.locator('#history-content')).toContainText('No observed Copilot events are available yet');
     await expect(page.locator('.history-header')).toContainText('Sessions Scanned');
+  });
+
+  test('History loading state does not flash empty copy before full scan arrives', async ({ page }) => {
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      fixture.history = {
+        generated_at_ms: 0,
+        failure_count: 0,
+        activity_24h: [],
+        activity_7d: [],
+        model_mix: [],
+        category_mix: [],
+        top_tools: [],
+        recent_sessions: [],
+        recent_failures: [],
+      };
+      window.__cmcOnAgentActivityChanged?.();
+    });
+
+    await page.locator('#history-route-btn').click();
+    await expect(page.locator('#history-content')).toContainText('Scanning Copilot CLI history');
+    await expect(page.locator('.history-loading-dialog')).toBeVisible();
+    await expect(page.locator('.history-loading-bar')).toBeVisible();
+    await expect(page.locator('#history-content')).not.toContainText('No observed Copilot events are available yet');
   });
 
   test('History chart colors resolve in light theme', async ({ page }) => {
@@ -1913,7 +1948,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   });
 
-  test('navbar model chip mirrors the selected session and updates on session switch', async ({ page }) => {
+  test('selected session model chip mirrors the session and updates on switch', async ({ page }) => {
     // Inject a fixture where each session reports a different model
     // so we can verify the chip swaps when the selection changes.
     const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
@@ -1927,21 +1962,23 @@ test.describe('Copilot Mission Control — Dashboard', () => {
 
     // beta4567 is the default-selected session (review attention) →
     // chip should show its model and not be hidden.
-    await expect(page.locator('#model-chip')).toHaveText('claude-sonnet-4.6');
-    await expect(page.locator('#model-chip')).not.toHaveClass(/empty/);
+    await expect(page.locator('#topbar #model-chip')).toHaveCount(0);
+    await expect(page.locator('#dom-session #model-chip')).toHaveText('claude-sonnet-4.6');
+    await expect(page.locator('#dom-session #model-chip')).not.toHaveClass(/empty/);
 
     // Select alpha123 → chip should switch to its model.
     await selectSession(page, 'alpha123');
 
-    await expect(page.locator('#model-chip')).toHaveText('gpt-5.5');
+    await expect(page.locator('#dom-session #model-chip')).toHaveText('gpt-5.5');
   });
 
-  test('navbar model chip stays hidden when no session reports a model', async ({ page }) => {
+  test('selected session model chip stays hidden when no session reports a model', async ({ page }) => {
     // Default fixture has no `last_model` on any session. The chip
     // should render with the `empty` class (display: none) so we
     // never flash a blank pill.
-    await expect(page.locator('#model-chip')).toHaveClass(/empty/);
-    await expect(page.locator('#model-chip')).toHaveText('');
+    await expect(page.locator('#topbar #model-chip')).toHaveCount(0);
+    await expect(page.locator('#dom-session #model-chip')).toHaveClass(/empty/);
+    await expect(page.locator('#dom-session #model-chip')).toHaveText('');
   });
 
   test('hovering a quarter makes it the sticky-inspected quarter and persists across reload', async ({ page }) => {
