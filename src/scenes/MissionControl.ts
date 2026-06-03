@@ -355,6 +355,7 @@ export class MissionControlScene extends Phaser.Scene {
   private pollEvent?: any;
   private startupRetryEvents: any[] = [];
   private loading = false;
+  private initialActivityLoaded = false;
   private pendingHistoryRefresh = false;
   /// True once the scene has finished its bootstrap ingest. The
   /// initial snapshot of `recent_events` is HISTORICAL — those events
@@ -1099,6 +1100,7 @@ export class MissionControlScene extends Phaser.Scene {
       }
       this.lastRefresh = performance.now();
       const appended = this.ingestActivityEvents(this.activity.recent_events);
+      this.initialActivityLoaded = true;
       this.requestRender(force && this.bootstrapCompleted && appended > 0 ? 'live' : 'normal');
     } finally {
       this.loading = false;
@@ -1637,6 +1639,7 @@ export class MissionControlScene extends Phaser.Scene {
     const sessionOptions = this.getSessionPickerOptions();
     const quarter = this.activeInspectedQuarter();
     const result = buildDashboardViewModel({
+      initialActivityLoaded: this.initialActivityLoaded,
       panelsHidden: this.panelsHidden,
       layout,
       viewportWidth: W,

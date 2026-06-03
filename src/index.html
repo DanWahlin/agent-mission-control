@@ -2756,6 +2756,68 @@
     }
     .analytics-table th:nth-child(2),
     .analytics-table td:nth-child(2) { white-space: nowrap; }
+    .analytics-heading-stack {
+      display: inline-flex;
+      flex-direction: column;
+      gap: 1px;
+      line-height: 1.05;
+      white-space: nowrap;
+    }
+    .analytics-table-token-hotspots th:last-child,
+    .analytics-table-token-hotspots td:last-child {
+      min-width: 112px;
+      width: 132px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .analytics-table-token-hotspots th:nth-child(1),
+    .analytics-table-token-hotspots td:nth-child(1) {
+      min-width: 176px;
+      width: auto;
+      overflow-wrap: normal;
+    }
+    .analytics-cell-primary {
+      color: #f8fafc;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+    .analytics-cell-secondary {
+      margin-top: 2px;
+      color: #8ea0cf;
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    body.theme-light .analytics-cell-primary { color: #0f172a; }
+    body.theme-light .analytics-cell-secondary { color: #64748b; }
+    .analytics-table-model-mix,
+    .analytics-table-model-shifts {
+      table-layout: fixed;
+    }
+    .analytics-table-model-mix th:nth-child(1),
+    .analytics-table-model-mix td:nth-child(1) {
+      width: 40%;
+      overflow-wrap: anywhere;
+      word-break: normal;
+    }
+    .analytics-table-model-mix th:nth-child(2),
+    .analytics-table-model-mix td:nth-child(2) {
+      width: 14%;
+      min-width: 72px;
+      text-align: right;
+      white-space: nowrap;
+      overflow-wrap: normal;
+    }
+    .analytics-table-model-mix th:nth-child(3),
+    .analytics-table-model-mix td:nth-child(3),
+    .analytics-table-model-mix th:nth-child(4),
+    .analytics-table-model-mix td:nth-child(4) {
+      width: 23%;
+      min-width: 124px;
+      text-align: right;
+      white-space: nowrap;
+      overflow-wrap: normal;
+    }
     .analytics-table-comparison {
       table-layout: fixed;
     }
@@ -2784,6 +2846,20 @@
       overflow-wrap: normal;
       word-break: keep-all;
       text-align: right;
+    }
+    .analytics-table-model-shifts th:nth-child(1),
+    .analytics-table-model-shifts td:nth-child(1) { width: 52%; }
+    .analytics-table-model-shifts th:nth-child(2),
+    .analytics-table-model-shifts td:nth-child(2),
+    .analytics-table-model-shifts th:nth-child(3),
+    .analytics-table-model-shifts td:nth-child(3) {
+      width: 16%;
+      min-width: 74px;
+    }
+    .analytics-table-model-shifts th:nth-child(4),
+    .analytics-table-model-shifts td:nth-child(4) {
+      width: 16%;
+      min-width: 74px;
     }
     .analytics-table-tool-failures {
       table-layout: fixed;

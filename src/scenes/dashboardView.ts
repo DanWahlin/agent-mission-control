@@ -31,6 +31,7 @@ export interface QuarterViewInput {
 }
 
 export interface DashboardViewInput {
+  initialActivityLoaded: boolean;
   panelsHidden: boolean;
   layout: MissionLayout;
   viewportWidth: number;
@@ -108,6 +109,7 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
   return {
     sessionPickerRows,
     view: {
+      initialActivityLoaded: input.initialActivityLoaded,
       panelsHidden: input.panelsHidden,
       layout: {
         leftX: layout.leftX,

@@ -142,13 +142,13 @@ test.describe('Copilot Mission Control app shell', () => {
             {
               kind: 'table',
               title: 'Model Shifts',
-              columns: ['Model', 'Current', 'Previous', 'Delta Turns'],
+              columns: ['Model', 'Current Turns', 'Previous Turns', 'Delta Turns'],
               rows: [['gpt-5.5', '5573', '4126507', '+36012649']],
             },
             {
               kind: 'table',
               title: 'Tool and Failure Changes',
-              columns: ['Tool', 'Current', 'Previous', 'Delta Calls/Failures'],
+              columns: ['Tool', 'Current Calls/Failures', 'Previous Calls/Failures', 'Delta Calls/Failures'],
               rows: [['github-mcp-server-get_file_contents', '247', '298', '-51']],
             },
             {
@@ -226,6 +226,8 @@ test.describe('Copilot Mission Control app shell', () => {
     await expect(page.locator('#analytics-chat-transcript')).toContainText('I found a token hotspot');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('Token Trend');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('Model Shifts');
+    await expect(page.locator('.analytics-artifact').filter({ hasText: 'Model Shifts' }).locator('thead')).toContainText('Current Turns');
+    await expect(page.locator('.analytics-artifact').filter({ hasText: 'Model Shifts' }).locator('thead')).toContainText('Previous Turns');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('5,573');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('4,126,507');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('+36,012,649');
@@ -492,6 +494,41 @@ test.describe('Copilot Mission Control app shell', () => {
 });
 
 test.describe('Copilot Mission Control loading splash', () => {
+  test('keeps the splash visible until the initial activity scan finishes', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).__cmcSplashMinMs = 0;
+      let resolveActivity: (activity: unknown) => void = () => {};
+      const activityPromise = new Promise((resolve) => { resolveActivity = resolve; });
+      (window as any).__resolveInitialActivity = () => resolveActivity({
+        available: false,
+        source: 'copilot',
+        scanned_sessions: 0,
+        active_sessions: 0,
+        total_events: 0,
+        total_tool_calls: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        sessions: [],
+        tools: [],
+        recent_events: [],
+        alerts: [],
+        generated_at_ms: Date.now(),
+      });
+      (window as any).__TAURI_INTERNALS__ = { invoke: () => activityPromise };
+    });
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await expect(page.locator('body')).not.toHaveClass(/dashboard-ready/);
+    await expect(page.locator('body')).not.toHaveClass(/dashboard-splash-hidden/);
+    await expect(page.locator('#dashboard-loading')).toBeVisible();
+
+    await page.evaluate(() => (window as any).__resolveInitialActivity());
+
+    await expect(page.locator('body')).toHaveClass(/dashboard-ready/);
+    await expect(page.locator('body')).toHaveClass(/dashboard-splash-hidden/);
+  });
+
   test('keeps the splash visible after the dashboard is ready', async ({ page }) => {
     await page.addInitScript(() => { (window as any).__cmcSplashMinMs = 60_000; });
     await page.goto(GAME_URL);
