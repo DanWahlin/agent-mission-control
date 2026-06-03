@@ -12,6 +12,10 @@ Built with [Tauri 2](https://v2.tauri.app/), [Phaser 4](https://phaser.io/), and
 
 ![Copilot Mission Control focus mode](docs/img/focus-mode.gif)
 
+![Copilot Mission Control history](docs/img/history.webp)
+
+![Copilot Mission Control analytics chat](docs/img/chat.webp)
+
 ## What it does
 
 Copilot Mission Control reads the local session state Copilot CLI already writes under `~/.copilot/session-state/` and tracks:
