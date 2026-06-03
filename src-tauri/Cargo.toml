@@ -1,6 +1,6 @@
 [package]
 name = "copilot-mission-control"
-version = "0.1.9"
+version = "0.1.10"
 description = "Copilot Mission Control — a live dashboard for the GitHub Copilot CLI"
 authors = ["Dan Wahlin"]
 edition = "2021"

@@ -1,6 +1,33 @@
 # Changelog
 
 All notable changes to Copilot Mission Control.
+## [0.1.10] - 2026-06-03
+
+### 🚀 Features & Improvements
+
+- Add Mission Analytics Chat insights
+- Add Copilot definition review artifacts
+- Feat: enhance definition review with additional fields and editor integration
+- Add history loading dialog, move model from nabar, add agent evaluation and tests
+- Add MCP usage analytics chat
+
+### 🐛 Bug Fixes
+
+- Update mission control fixtures
+## [0.1.9] - 2026-05-30
+
+### 🚀 Features & Improvements
+
+- Feat: update dashboard and focus mode GIFs for improved visual representation
+
+### 🐛 Bug Fixes
+
+- Fix: align history chart bars
+- Fix: render history bars without inline styles
+
+### ⚙️ CI/CD & Build
+
+- Release v0.1.9
 ## [0.1.8] - 2026-05-29
 
 ### 🚀 Features & Improvements
