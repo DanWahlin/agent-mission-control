@@ -873,6 +873,11 @@
   var cachedHistoryDashboard = null;
   var cachedHistoryAtMs = 0;
   var HISTORY_ROUTE_CACHE_MS = 60 * 1000;
+  var HISTORY_ANALYTICS_RANGE_DAYS = 7;
+  var historyAnalyticsSummary = null;
+  var historyAnalyticsLoadedAtMs = 0;
+  var historyAnalyticsLoading = false;
+  var historyAnalyticsError = '';
   var analyticsChatMessages = [];
   var analyticsChatLoading = false;
   var analyticsChatRequestSeq = 0;
@@ -984,11 +989,13 @@
     if (fixture) {
       if (command === 'get_analytics_status') return Promise.resolve(fixture.status || defaultAnalyticsStatus());
       if (command === 'ask_analytics_chat') return Promise.resolve(fixture.chat || defaultAnalyticsChat(payload && payload.request && payload.request.prompt));
+      if (command === 'get_analytics_usage_summary') return Promise.resolve(fixture.summary || defaultAnalyticsUsageSummary());
     }
     var invoke = tauriInvoke();
     if (!invoke) {
       if (command === 'get_analytics_status') return Promise.resolve(defaultAnalyticsStatus());
       if (command === 'ask_analytics_chat') return Promise.resolve(defaultAnalyticsChat(payload && payload.request && payload.request.prompt));
+      if (command === 'get_analytics_usage_summary') return Promise.resolve(defaultAnalyticsUsageSummary());
     }
     return invoke(command, payload || {});
   }
@@ -1025,6 +1032,20 @@
         },
       ],
       caveats: ['Browser preview uses fixture data unless window.__analyticsChatFixture is provided.'],
+    };
+  }
+
+  function defaultAnalyticsUsageSummary() {
+    return {
+      generated_at_ms: 0,
+      range_days: HISTORY_ANALYTICS_RANGE_DAYS,
+      metrics: [],
+      daily: [],
+      model_mix: [],
+      token_hotspots: [],
+      tool_failures: [],
+      recommendations: [],
+      caveats: ['Open the Tauri app to index local analytics data.'],
     };
   }
 
@@ -1230,7 +1251,10 @@
     var scrollClass = 'analytics-table-scroll';
     if (title.indexOf('overlap candidates') >= 0) tableClass += ' analytics-table-overlap';
     if (title.indexOf('model shifts') >= 0 || title.indexOf('tool and failure changes') >= 0) tableClass += ' analytics-table-comparison';
+    if (title === 'model mix') tableClass += ' analytics-table-model-mix';
+    if (title === 'model shifts') tableClass += ' analytics-table-model-shifts';
     if (title === 'tool failures') tableClass += ' analytics-table-tool-failures';
+    if (title === 'session token hotspots') tableClass += ' analytics-table-token-hotspots';
     var isReadinessTable = title.indexOf('completeness gaps') >= 0 || title.indexOf('readiness checks') >= 0;
     if (isReadinessTable) {
       tableClass += ' analytics-table-completeness';
@@ -1238,7 +1262,7 @@
     }
 
     return '<div class="' + scrollClass + '"><table class="' + tableClass + '"><thead><tr>' + columns.map(function (col) {
-      return '<th>' + escapeHtml(formatAnalyticsColumnHeading(col)) + '</th>';
+      return '<th>' + renderAnalyticsColumnHeading(col, title) + '</th>';
     }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
       return '<tr>' + (row || []).map(function (cell, index) {
         if (isReadinessTable && (columns[index] === 'Details' || columns[index] === 'Open')) {
@@ -1246,9 +1270,20 @@
           var encoded = encodeURIComponent(JSON.stringify(details));
           return '<td><button class="analytics-detail-button" type="button" data-analytics-definition="' + escapeHtml(encoded) + '">View</button></td>';
         }
+        if (title === 'session token hotspots' && index === 0) {
+          return '<td>' + renderAnalyticsPrimaryCell(cell) + '</td>';
+        }
         return '<td>' + escapeHtml(formatAnalyticsTableCell(cell)) + '</td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody></table></div>';
+  }
+
+  function renderAnalyticsPrimaryCell(cell) {
+    var parts = String(cell == null ? '' : cell).split('\n');
+    var primary = parts.shift() || '';
+    var secondary = parts.join(' ').trim();
+    return '<div class="analytics-cell-primary">' + escapeHtml(primary) + '</div>'
+      + (secondary ? '<div class="analytics-cell-secondary">' + escapeHtml(secondary) + '</div>' : '');
   }
 
   function renderAnalyticsDefinitionInventory(artifact) {
@@ -1328,6 +1363,15 @@
     return String(value == null ? '' : value).replace(/(^|[\s/()-])([a-z])/g, function (_match, prefix, letter) {
       return prefix + letter.toUpperCase();
     });
+  }
+
+  function renderAnalyticsColumnHeading(value, artifactTitle) {
+    var heading = formatAnalyticsColumnHeading(value);
+    if (artifactTitle === 'model shifts' && /^(Current|Previous|Delta) Turns$/.test(heading)) {
+      var parts = heading.split(' ');
+      return '<span class="analytics-heading-stack"><span>' + escapeHtml(parts[0]) + '</span><span>' + escapeHtml(parts[1]) + '</span></span>';
+    }
+    return escapeHtml(heading);
   }
 
   function parseDefinitionDetails(value) {
@@ -1483,8 +1527,38 @@
     });
   }
 
+  function historyAnalyticsIsFresh() {
+    return !!historyAnalyticsSummary && Date.now() - historyAnalyticsLoadedAtMs < HISTORY_ROUTE_CACHE_MS;
+  }
+
+  function loadHistoryAnalyticsSummary(force) {
+    if (historyAnalyticsLoading) return;
+    if (!force && historyAnalyticsIsFresh()) return;
+    historyAnalyticsLoading = true;
+    historyAnalyticsError = '';
+    callAnalyticsCommand('get_analytics_usage_summary', {
+      request: { rangeDays: HISTORY_ANALYTICS_RANGE_DAYS, comparePrevious: false },
+    }).then(function (summary) {
+      historyAnalyticsSummary = summary || defaultAnalyticsUsageSummary();
+      historyAnalyticsLoadedAtMs = Date.now();
+    }).catch(function (err) {
+      historyAnalyticsSummary = defaultAnalyticsUsageSummary();
+      historyAnalyticsLoadedAtMs = Date.now();
+      historyAnalyticsError = err && err.message ? err.message : String(err || 'Unable to load indexed analytics');
+    }).then(function () {
+      historyAnalyticsLoading = false;
+      liveFingerprints.history = '';
+      if (appRoute === 'history') renderHistory(lastDashboard, true);
+    });
+  }
+
+  function hasHistoryAnalyticsSummary(summary) {
+    return !!(summary && Array.isArray(summary.metrics) && summary.metrics.length > 0);
+  }
+
   window.__cmcAnalyticsStatusChanged = function () {
     if (appRoute === 'analytics') loadAnalyticsStatus();
+    if (appRoute === 'history') loadHistoryAnalyticsSummary(true);
   };
 
   window.__cmcAnalyticsChatToolStarted = function (toolName) {
@@ -1620,6 +1694,12 @@
   function requestDashboardSplashHide() {
     dashboardSplashHideRequested = true;
     scheduleDashboardSplashHide();
+  }
+
+  function markDashboardReady(view) {
+    if (!view || !view.initialActivityLoaded) return;
+    document.body.classList.add('dashboard-ready');
+    requestDashboardSplashHide();
   }
 
   if (domLoadingImage && !domLoadingImage.complete) {
@@ -2321,6 +2401,14 @@
     if (!history) return view ? 'unavailable' : 'loading';
     return [
       historySessionFilter,
+      historyAnalyticsLoading ? 'analytics-loading' : '',
+      historyAnalyticsError,
+      historyAnalyticsSummary && historyAnalyticsSummary.generated_at_ms || 0,
+      analyticsMetricValue(historyAnalyticsSummary, 'Sessions'),
+      analyticsMetricValue(historyAnalyticsSummary, 'Events'),
+      analyticsMetricValue(historyAnalyticsSummary, 'Tool calls'),
+      analyticsMetricValue(historyAnalyticsSummary, 'Input tokens'),
+      analyticsMetricValue(historyAnalyticsSummary, 'Output tokens'),
       history.generated_at_ms || 0,
       history.event_count || 0,
       history.tool_count || 0,
@@ -2349,7 +2437,7 @@
   }
 
   function defaultHistorySubtitle() {
-    return 'KPI totals cover all currently scanned local sessions. Charts below show rolling 24h and last 7 days.';
+    return 'KPI totals cover indexed local analytics for the last 7 days. Session-filtered views show the selected scanned session.';
   }
 
   function historySubtitleLabel(view, history, scoped) {
@@ -2361,6 +2449,15 @@
       });
       return 'KPI totals cover the selected session' + (scopeName ? ' (' + scopeName + ')' : '') + '. Charts below show rolling 24h and last 7 days.';
     }
+    if (hasHistoryAnalyticsSummary(historyAnalyticsSummary)) {
+      return 'KPI and model totals cover indexed local analytics for the last ' + exactNumber(historyAnalyticsSummary.range_days || HISTORY_ANALYTICS_RANGE_DAYS) + ' days. Session-filtered views show one scanned session.';
+    }
+    if (historyAnalyticsLoading) {
+      return 'Loading indexed local analytics for the last ' + exactNumber(HISTORY_ANALYTICS_RANGE_DAYS) + ' days. Current values use the latest scanned session snapshot.';
+    }
+    if (historyAnalyticsError) {
+      return 'Indexed analytics were unavailable, so KPI totals use the latest scanned session snapshot.';
+    }
     var activity = view && view.activity || {};
     var scannedSessions = Number(activity.scannedSessions);
     var sessionCount = Number.isFinite(scannedSessions) && scannedSessions > 0
@@ -2368,6 +2465,65 @@
       : (history.recent_sessions || []).length || historySessionScopes(history).length;
     var sessionText = sessionCount > 0 ? ' (' + exactNumber(sessionCount) + ' ' + (sessionCount === 1 ? 'session' : 'sessions') + ')' : '';
     return 'KPI totals cover all currently scanned local sessions' + sessionText + '. Charts below show rolling 24h and last 7 days.';
+  }
+
+  function analyticsMetricValue(summary, label) {
+    var metrics = Array.isArray(summary && summary.metrics) ? summary.metrics : [];
+    var metric = metrics.find(function (item) { return item && item.label === label; });
+    if (!metric) return null;
+    var value = Number(metric.value);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function analyticsHistoryBuckets(summary) {
+    var days = Array.isArray(summary && summary.daily) ? summary.daily : [];
+    return days.map(function (point) {
+      var label = String(point.local_day || '').slice(5) || String(point.local_day || '');
+      return {
+        start: point.local_day || '',
+        label: label,
+        event_count: Number(point.events || 0),
+        failure_count: Number(point.failures || 0),
+        active_sessions: Number(point.sessions || 0),
+      };
+    });
+  }
+
+  function analyticsHistoryModelMix(summary) {
+    var rows = Array.isArray(summary && summary.model_mix) ? summary.model_mix : [];
+    var total = rows.reduce(function (sum, item) { return sum + Number(item.secondary_value || 0); }, 0);
+    return rows.map(function (item) {
+      var count = Number(item.secondary_value || 0);
+      return {
+        name: item.label || 'Unknown',
+        count: count,
+        percent: total > 0 ? (count / total) * 100 : 0,
+        last_seen: '',
+      };
+    });
+  }
+
+  function historyWithAnalyticsSummary(history, summary) {
+    if (!history || !summary) return history;
+    var sessions = analyticsMetricValue(summary, 'Sessions');
+    var events = analyticsMetricValue(summary, 'Events');
+    var turns = analyticsMetricValue(summary, 'Turns');
+    var tools = analyticsMetricValue(summary, 'Tool calls');
+    var failures = analyticsMetricValue(summary, 'Failures');
+    var input = analyticsMetricValue(summary, 'Input tokens');
+    var output = analyticsMetricValue(summary, 'Output tokens');
+    return Object.assign({}, history, {
+      generated_at_ms: summary.generated_at_ms || history.generated_at_ms,
+      session_count: sessions != null ? sessions : history.session_count,
+      event_count: events != null ? events : history.event_count,
+      turn_count: turns != null ? turns : history.turn_count,
+      tool_count: tools != null ? tools : history.tool_count,
+      failure_count: failures != null ? failures : history.failure_count,
+      input_tokens: input != null ? input : history.input_tokens,
+      output_tokens: output != null ? output : history.output_tokens,
+      activity_7d: summary.daily && summary.daily.length ? analyticsHistoryBuckets(summary) : history.activity_7d,
+      model_mix: summary.model_mix && summary.model_mix.length ? analyticsHistoryModelMix(summary) : history.model_mix,
+    });
   }
 
   function historySessionLabel(scope) {
@@ -2581,8 +2737,9 @@
     var eventTotal = historyMetricTotal(history, 'event_count', scoped ? bucketEvents : activity.totalEvents);
     var toolTotal = historyMetricTotal(history, 'tool_count', scoped ? undefined : activity.totalToolCalls);
     var tokenTotals = tokenTotalsForHistory(view, history, scoped);
+    var sessionTotal = historyMetricTotal(history, 'session_count', scoped ? sessions.length : activity.scannedSessions);
     var cards = [
-      { label: 'Sessions Scanned', value: scoped ? sessions.length : activity.scannedSessions },
+      { label: scoped || !hasHistoryAnalyticsSummary(historyAnalyticsSummary) ? 'Sessions Scanned' : 'Sessions Indexed', value: sessionTotal },
       { label: 'Events', value: eventTotal },
       { label: 'Tool Calls', value: toolTotal },
       { label: 'Models Used', value: historyUniqueModelCount(history) },
@@ -2607,6 +2764,14 @@
       return {
         input: Number(session && session.input_tokens || 0),
         output: Number(session && session.output_tokens || 0),
+      };
+    }
+    var indexedInput = Number(history && history.input_tokens);
+    var indexedOutput = Number(history && history.output_tokens);
+    if (Number.isFinite(indexedInput) && Number.isFinite(indexedOutput)) {
+      return {
+        input: indexedInput,
+        output: indexedOutput,
       };
     }
     var activity = view && view.activity || {};
@@ -2973,10 +3138,14 @@
       return;
     }
     rememberHistoryDashboard(view);
+    if (historySessionFilter === 'all') loadHistoryAnalyticsSummary(false);
 
     updateHistorySessionFilter(history);
     var scoped = historySessionFilter !== 'all';
     history = selectedHistorySummary(history);
+    if (!scoped && hasHistoryAnalyticsSummary(historyAnalyticsSummary)) {
+      history = historyWithAnalyticsSummary(history, historyAnalyticsSummary);
+    }
     if (historySubtitle) historySubtitle.textContent = historySubtitleLabel(view, history, scoped);
     if (historyLiveStamp) historyLiveStamp.textContent = generatedAtLabel(history);
     if (historyKpiSummary) historyKpiSummary.innerHTML = historyKpis(view, history, scoped);
@@ -3011,8 +3180,7 @@
 
   window.__cmcRenderDashboard = function (view) {
     lastDashboard = view;
-    document.body.classList.add('dashboard-ready');
-    requestDashboardSplashHide();
+    markDashboardReady(view);
     if (appRoute === 'history') {
       renderHistory(view);
       updateLiveFingerprints(view);
@@ -3058,8 +3226,7 @@
 
   window.__cmcRenderLiveDashboard = function (view) {
     lastDashboard = view;
-    document.body.classList.add('dashboard-ready');
-    requestDashboardSplashHide();
+    markDashboardReady(view);
     var nextSession = sessionFingerprint(view);
     var nextFeed = feedFingerprint(view);
     var nextQuarter = quarterFingerprint(view);

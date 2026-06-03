@@ -28,7 +28,7 @@ use crate::agent::{
 
 const ANALYTICS_DB_FILE: &str = "analytics.sqlite3";
 const SCHEMA_VERSION: i64 = 1;
-const ROLLUP_VERSION: i64 = 1;
+const ROLLUP_VERSION: i64 = 2;
 const DEFAULT_RANGE_DAYS: u32 = 7;
 const MAX_RANGE_DAYS: u32 = 180;
 const LOCAL_HISTORY_INGEST_DAYS: u32 = 30;
@@ -111,6 +111,7 @@ pub struct AnalyticsMetricValue {
 pub struct AnalyticsDailyPoint {
     pub local_day: String,
     pub sessions: u64,
+    pub events: u64,
     pub turns: u64,
     pub tool_calls: u64,
     pub failures: u64,
@@ -127,6 +128,8 @@ pub struct AnalyticsRankedItem {
     pub value: u64,
     #[serde(default)]
     pub secondary_value: u64,
+    #[serde(default)]
+    pub tertiary_value: u64,
     #[serde(default)]
     pub partial: bool,
 }
@@ -1172,10 +1175,22 @@ fn ensure_recent_ingestion(app: &AppHandle) -> Result<(), String> {
         .optional()
         .map_err(|err| err.to_string())?
         .flatten();
+    let generation: Option<i64> = conn
+        .query_row(
+            "SELECT MAX(source_generation) FROM ingestion_cursors",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|err| err.to_string())?
+        .flatten();
     let now = unix_ms_now() as i64;
     if last
         .map(|value| now.saturating_sub(value) > INGEST_STALE_MS)
         .unwrap_or(true)
+        || generation
+            .map(|value| value < ROLLUP_VERSION)
+            .unwrap_or(true)
     {
         start_background_ingestion(app.clone());
     }
@@ -1412,6 +1427,14 @@ struct LocalSessionBuilder {
     last_model: String,
     last_status: String,
     pending_tools: HashMap<String, PendingLocalTool>,
+    model_tokens: BTreeMap<String, LocalModelTokenAccumulator>,
+}
+
+#[derive(Default)]
+struct LocalModelTokenAccumulator {
+    assistant_output_tokens: u64,
+    shutdown_input_tokens: u64,
+    shutdown_output_tokens: u64,
 }
 
 struct PendingLocalTool {
@@ -1503,13 +1526,12 @@ fn parse_local_events_file(
     {
         session.last_status = "idle".to_string();
     }
+    let token_day = local_day(session.last_seen_ms);
+    reconcile_local_session_model_tokens(&mut session, rollups, &provider, &token_day);
     let input_known = session.input_tokens > 0
         || session.output_tokens == 0
         || session.last_status == "completed";
-    if let Some(daily) = rollups
-        .daily
-        .get_mut(&(provider.clone(), local_day(session.last_seen_ms)))
-    {
+    if let Some(daily) = rollups.daily.get_mut(&(provider.clone(), token_day)) {
         daily.input_tokens = daily.input_tokens.saturating_add(session.input_tokens);
         daily.output_tokens = daily.output_tokens.saturating_add(session.output_tokens);
         daily.token_data_partial |= !input_known;
@@ -1619,16 +1641,7 @@ fn apply_local_event(
             }
             if let Some(tokens) = u64_at_path(value, "data.outputTokens") {
                 session.output_tokens = session.output_tokens.saturating_add(tokens);
-                add_model_tokens(
-                    rollups,
-                    provider,
-                    day,
-                    &session.session_hash,
-                    &session.last_model,
-                    0,
-                    tokens,
-                    true,
-                );
+                record_session_model_assistant_output(session, tokens);
             }
             ("assistant".to_string(), "activity".to_string(), true)
         }
@@ -1763,16 +1776,7 @@ fn apply_local_event(
             session.input_tokens = session.input_tokens.max(input);
             session.output_tokens = session.output_tokens.max(output);
             for (model, input, output) in by_model {
-                add_model_tokens(
-                    rollups,
-                    provider,
-                    day,
-                    &session.session_hash,
-                    &model,
-                    input,
-                    output,
-                    false,
-                );
+                record_session_model_shutdown_tokens(session, &model, input, output);
             }
             ("session".to_string(), "activity".to_string(), true)
         }
@@ -1782,9 +1786,98 @@ fn apply_local_event(
             );
             ("session".to_string(), "alert".to_string(), false)
         }
+
         "user.message" => ("user".to_string(), "prompt".to_string(), true),
         "assistant.turn_end" => ("turn".to_string(), "waiting".to_string(), true),
         _ => ("event".to_string(), "activity".to_string(), true),
+    }
+}
+
+fn record_session_model_assistant_output(session: &mut LocalSessionBuilder, output_tokens: u64) {
+    if output_tokens == 0 {
+        return;
+    }
+    let model = safe_label(&session.last_model, "Unknown");
+    let acc = session.model_tokens.entry(model).or_default();
+    acc.assistant_output_tokens = acc.assistant_output_tokens.saturating_add(output_tokens);
+}
+
+fn record_session_model_shutdown_tokens(
+    session: &mut LocalSessionBuilder,
+    model: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+) {
+    if input_tokens == 0 && output_tokens == 0 {
+        return;
+    }
+    let model = safe_label(model, "Unknown");
+    let acc = session.model_tokens.entry(model).or_default();
+    acc.shutdown_input_tokens = acc.shutdown_input_tokens.max(input_tokens);
+    acc.shutdown_output_tokens = acc.shutdown_output_tokens.max(output_tokens);
+}
+
+fn reconcile_local_session_model_tokens(
+    session: &mut LocalSessionBuilder,
+    rollups: &mut LocalHistoryRollups,
+    provider: &str,
+    day: &str,
+) {
+    let mut resolved = BTreeMap::<String, (u64, u64, bool)>::new();
+    for (model, acc) in &session.model_tokens {
+        let input = acc.shutdown_input_tokens;
+        let output = acc.shutdown_output_tokens.max(acc.assistant_output_tokens);
+        if model == "Unknown" && input == 0 && output == 0 {
+            continue;
+        }
+        resolved.insert(
+            model.clone(),
+            (
+                input,
+                output,
+                acc.shutdown_input_tokens == 0 && acc.shutdown_output_tokens == 0,
+            ),
+        );
+    }
+
+    let input_sum = resolved
+        .values()
+        .fold(0_u64, |sum, (input, _, _)| sum.saturating_add(*input));
+    let output_sum = resolved
+        .values()
+        .fold(0_u64, |sum, (_, output, _)| sum.saturating_add(*output));
+    let input_target = session.input_tokens.max(input_sum);
+    let output_target = session.output_tokens.max(output_sum);
+    let residual_input = input_target.saturating_sub(input_sum);
+    let residual_output = output_target.saturating_sub(output_sum);
+    if residual_input > 0 || residual_output > 0 {
+        let model = safe_label(&session.last_model, "Unknown");
+        let entry = resolved.entry(model).or_insert((0, 0, false));
+        entry.0 = entry.0.saturating_add(residual_input);
+        entry.1 = entry.1.saturating_add(residual_output);
+        entry.2 |= session.last_status != "completed";
+    }
+
+    let final_input = resolved
+        .values()
+        .fold(0_u64, |sum, (input, _, _)| sum.saturating_add(*input));
+    let final_output = resolved
+        .values()
+        .fold(0_u64, |sum, (_, output, _)| sum.saturating_add(*output));
+    session.input_tokens = final_input;
+    session.output_tokens = final_output;
+
+    for (model, (input, output, partial)) in resolved {
+        add_model_tokens(
+            rollups,
+            provider,
+            day,
+            &session.session_hash,
+            &model,
+            input,
+            output,
+            partial,
+        );
     }
 }
 
@@ -2134,28 +2227,41 @@ fn ingest_session(
     daily_acc.token_data_partial |= !input_known;
 
     let mut counted_turn_model = false;
+    let mut turn_model_output = BTreeMap::<String, u64>::new();
     for turn in &session.recent_turns {
         let model_name = safe_label(&turn.model, "Unknown");
         if model_name == "Unknown" {
             continue;
         }
         counted_turn_model = true;
-        let model_key = (provider.clone(), model_name, day.clone());
+        let model_key = (provider.clone(), model_name.clone(), day.clone());
         let model_acc = model.entry(model_key).or_default();
         model_acc.session_ids.insert(session_hash.clone());
         model_acc.turn_count += 1;
         model_acc.output_tokens += turn.output_tokens;
         model_acc.token_data_partial |= turn.partial;
+        *turn_model_output.entry(model_name).or_insert(0) += turn.output_tokens;
     }
-    if !counted_turn_model {
-        let model_name = safe_label(&session.last_model, "Unknown");
-        if model_name != "Unknown" || session.turn_count > 0 || session.output_tokens > 0 {
+    let model_name = safe_label(&session.last_model, "Unknown");
+    let observed_turn_output = turn_model_output
+        .values()
+        .fold(0_u64, |sum, output| sum.saturating_add(*output));
+    let residual_input = session.input_tokens;
+    let residual_output = session.output_tokens.saturating_sub(observed_turn_output);
+    if !counted_turn_model || residual_input > 0 || residual_output > 0 {
+        if model_name != "Unknown"
+            || session.turn_count > 0
+            || session.output_tokens > 0
+            || session.input_tokens > 0
+        {
             let model_key = (provider.clone(), model_name, day.clone());
             let model_acc = model.entry(model_key).or_default();
             model_acc.session_ids.insert(session_hash.clone());
-            model_acc.turn_count += session.turn_count.max(1) as u64;
-            model_acc.input_tokens += session.input_tokens;
-            model_acc.output_tokens += session.output_tokens;
+            if !counted_turn_model {
+                model_acc.turn_count += session.turn_count.max(1) as u64;
+            }
+            model_acc.input_tokens += residual_input;
+            model_acc.output_tokens += residual_output;
             model_acc.token_data_partial |= !input_known;
         }
     }
@@ -2469,11 +2575,12 @@ fn write_audits(conn: &Connection, activity: &AgentActivity, now: u64) -> Result
         r#"
         INSERT OR REPLACE INTO ingestion_cursors (
             provider, source_id_hash, last_offset, source_generation, last_ingested_at_ms
-        ) VALUES (?1, ?2, 0, 0, ?3)
+        ) VALUES (?1, ?2, 0, ?3, ?4)
         "#,
         params![
             safe_label(&activity.source, "agent"),
             SNAPSHOT_SOURCE_HASH,
+            ROLLUP_VERSION,
             now as i64
         ],
     )
@@ -3445,7 +3552,7 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
                 title: "Session Token Hotspots".to_string(),
                 columns: vec![
                     "Session".to_string(),
-                    "Group".to_string(),
+                    "Model".to_string(),
                     "Output Tokens".to_string(),
                 ],
                 rows: summary
@@ -3467,6 +3574,7 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
                 columns: vec![
                     "Model".to_string(),
                     "Turns".to_string(),
+                    "Input Tokens".to_string(),
                     "Output Tokens".to_string(),
                 ],
                 rows: summary
@@ -3476,6 +3584,7 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
                         vec![
                             item.label.clone(),
                             item.secondary_value.to_string(),
+                            item.tertiary_value.to_string(),
                             item.value.to_string(),
                         ]
                     })
@@ -4074,6 +4183,7 @@ fn daily_points_window(
             r#"
             SELECT local_day,
                    SUM(session_count),
+                   SUM(event_count),
                    SUM(turn_count),
                    SUM(tool_call_count),
                    SUM(failure_count),
@@ -4093,13 +4203,14 @@ fn daily_points_window(
         Ok(AnalyticsDailyPoint {
             local_day: row.get(0)?,
             sessions: row.get::<_, i64>(1)?.max(0) as u64,
-            turns: row.get::<_, i64>(2)?.max(0) as u64,
-            tool_calls: row.get::<_, i64>(3)?.max(0) as u64,
-            failures: row.get::<_, i64>(4)?.max(0) as u64,
-            input_tokens: row.get::<_, i64>(5)?.max(0) as u64,
-            output_tokens: row.get::<_, i64>(6)?.max(0) as u64,
-            estimated_active_ms: row.get::<_, i64>(7)?.max(0) as u64,
-            partial: row.get::<_, i64>(8)? > 0,
+            events: row.get::<_, i64>(2)?.max(0) as u64,
+            turns: row.get::<_, i64>(3)?.max(0) as u64,
+            tool_calls: row.get::<_, i64>(4)?.max(0) as u64,
+            failures: row.get::<_, i64>(5)?.max(0) as u64,
+            input_tokens: row.get::<_, i64>(6)?.max(0) as u64,
+            output_tokens: row.get::<_, i64>(7)?.max(0) as u64,
+            estimated_active_ms: row.get::<_, i64>(8)?.max(0) as u64,
+            partial: row.get::<_, i64>(9)? > 0,
         })
     };
     if let Some(before_day) = before_day {
@@ -4122,7 +4233,7 @@ fn token_hotspots(conn: &Connection, since_day: &str) -> Result<Vec<AnalyticsRan
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT session_id_hash, output_tokens, input_tokens, token_data_partial
+            SELECT session_id_hash, output_tokens, input_tokens, token_data_partial, last_model, turn_count, last_seen_ms
             FROM sessions
             WHERE last_seen_ms >= ?1 AND (output_tokens > 0 OR input_tokens > 0)
             ORDER BY output_tokens DESC, input_tokens DESC
@@ -4134,11 +4245,20 @@ fn token_hotspots(conn: &Connection, since_day: &str) -> Result<Vec<AnalyticsRan
         .query_map(params![since_ms as i64], |row| {
             let session_hash: String = row.get(0)?;
             let short_hash: String = session_hash.chars().take(8).collect();
+            let turn_count = row.get::<_, i64>(5)?.max(0) as u64;
+            let last_seen_ms = row.get::<_, i64>(6)?.max(0) as u64;
             Ok(AnalyticsRankedItem {
-                label: format!("Session {}", short_hash),
-                category: "session".to_string(),
+                label: format!(
+                    "{} - {} turn{}\nSession {}",
+                    local_time_label(last_seen_ms),
+                    turn_count,
+                    if turn_count == 1 { "" } else { "s" },
+                    short_hash
+                ),
+                category: row.get::<_, String>(4)?,
                 value: row.get::<_, i64>(1)?.max(0) as u64,
                 secondary_value: row.get::<_, i64>(2)?.max(0) as u64,
+                tertiary_value: 0,
                 partial: row.get::<_, i64>(3)? > 0,
             })
         })
@@ -4151,7 +4271,7 @@ fn model_mix(conn: &Connection, since_day: &str) -> Result<Vec<AnalyticsRankedIt
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT model, SUM(output_tokens), SUM(turn_count), MAX(token_data_partial)
+            SELECT model, SUM(output_tokens), SUM(turn_count), SUM(input_tokens), MAX(token_data_partial)
             FROM model_rollups
             WHERE local_day >= ?1
               AND model != 'Unknown'
@@ -4169,7 +4289,8 @@ fn model_mix(conn: &Connection, since_day: &str) -> Result<Vec<AnalyticsRankedIt
                 category: "model".to_string(),
                 value: row.get::<_, i64>(1)?.max(0) as u64,
                 secondary_value: row.get::<_, i64>(2)?.max(0) as u64,
-                partial: row.get::<_, i64>(3)? > 0,
+                tertiary_value: row.get::<_, i64>(3)?.max(0) as u64,
+                partial: row.get::<_, i64>(4)? > 0,
             })
         })
         .map_err(|err| err.to_string())?;
@@ -4197,6 +4318,7 @@ fn tool_failures(conn: &Connection, since_day: &str) -> Result<Vec<AnalyticsRank
                 category: row.get(1)?,
                 value: row.get::<_, i64>(2)?.max(0) as u64,
                 secondary_value: row.get::<_, i64>(3)?.max(0) as u64,
+                tertiary_value: 0,
                 partial: false,
             })
         })
@@ -4371,6 +4493,7 @@ fn change_item(label: &str, category: &str, current: u64, previous: u64) -> Anal
 
 fn summary_metrics(daily: &[AnalyticsDailyPoint]) -> Vec<AnalyticsMetricValue> {
     let sessions = daily.iter().map(|d| d.sessions).sum();
+    let events = daily.iter().map(|d| d.events).sum();
     let turns = daily.iter().map(|d| d.turns).sum();
     let tool_calls = daily.iter().map(|d| d.tool_calls).sum();
     let failures = daily.iter().map(|d| d.failures).sum();
@@ -4380,6 +4503,7 @@ fn summary_metrics(daily: &[AnalyticsDailyPoint]) -> Vec<AnalyticsMetricValue> {
     let partial = daily.iter().any(|d| d.partial);
     vec![
         exact_metric("Sessions", sessions),
+        exact_metric("Events", events),
         exact_metric("Turns", turns),
         exact_metric("Tool calls", tool_calls),
         exact_metric("Failures", failures),
@@ -4482,8 +4606,8 @@ fn comparison_cards(comparison: &AnalyticsComparison) -> Vec<AnalyticsRecommenda
 fn comparison_columns(label: &str, value_label: &str) -> Vec<String> {
     vec![
         label.to_string(),
-        "Current".to_string(),
-        "Previous".to_string(),
+        format!("Current {}", value_label),
+        format!("Previous {}", value_label),
         format!("Delta {}", value_label),
     ]
 }
@@ -4855,6 +4979,15 @@ fn local_day(ms: u64) -> String {
     format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
 }
 
+fn local_time_label(ms: u64) -> String {
+    let dt = Utc
+        .timestamp_millis_opt(ms as i64)
+        .single()
+        .unwrap_or_else(Utc::now)
+        .with_timezone(&Local);
+    dt.format("%b %-d, %-I:%M %p").to_string()
+}
+
 fn local_day_shift(day: &str, offset_days: i64) -> String {
     let parsed =
         NaiveDate::parse_from_str(day, "%Y-%m-%d").unwrap_or_else(|_| Local::now().date_naive());
@@ -4951,6 +5084,193 @@ mod tests {
     fn hash_is_short_and_stable() {
         assert_eq!(hash_str("abc"), hash_str("abc"));
         assert_eq!(hash_str("abc").len(), 24);
+    }
+
+    #[test]
+    fn token_hotspots_include_friendly_session_label_and_model() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                session_id_hash TEXT NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                token_data_partial INTEGER NOT NULL,
+                last_model TEXT NOT NULL,
+                turn_count INTEGER NOT NULL,
+                last_seen_ms INTEGER NOT NULL
+            );
+            "#,
+        )
+        .expect("create sessions table");
+        let now = unix_ms_now();
+        conn.execute(
+            r#"
+            INSERT INTO sessions (
+                session_id_hash, output_tokens, input_tokens, token_data_partial,
+                last_model, turn_count, last_seen_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                "abcdef1234567890",
+                123_456_i64,
+                12_345_i64,
+                0_i64,
+                "gpt-5.5",
+                7_i64,
+                now as i64
+            ],
+        )
+        .expect("insert session row");
+
+        let rows = token_hotspots(&conn, &local_day(now)).expect("token hotspots");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].label.contains("7 turns\nSession abcdef12"));
+        assert_eq!(rows[0].category, "gpt-5.5");
+        assert_eq!(rows[0].value, 123_456);
+        assert_eq!(rows[0].secondary_value, 12_345);
+    }
+
+    #[test]
+    fn model_mix_artifact_includes_input_tokens() {
+        let summary = AnalyticsUsageSummary {
+            model_mix: vec![AnalyticsRankedItem {
+                label: "gpt-5.5".to_string(),
+                category: "model".to_string(),
+                value: 4_250_783,
+                secondary_value: 4_848,
+                tertiary_value: 812_345,
+                partial: false,
+            }],
+            ..Default::default()
+        };
+
+        let artifacts = artifacts_for_keys(&summary, &["model_mix".to_string()]);
+        let model_mix = artifacts
+            .iter()
+            .find(|artifact| artifact.title == "Model Mix")
+            .expect("model mix artifact");
+        assert_eq!(
+            model_mix.columns,
+            vec!["Model", "Turns", "Input Tokens", "Output Tokens"]
+        );
+        assert_eq!(
+            model_mix.rows[0],
+            vec!["gpt-5.5", "4848", "812345", "4250783"]
+        );
+    }
+
+    #[test]
+    fn local_model_tokens_replace_partial_output_with_shutdown_totals() {
+        let mut rollups = LocalHistoryRollups::default();
+        let mut session = LocalSessionBuilder {
+            session_hash: "session-a".to_string(),
+            input_tokens: 800,
+            output_tokens: 180,
+            last_model: "gpt-5.5".to_string(),
+            last_status: "completed".to_string(),
+            ..Default::default()
+        };
+        record_session_model_assistant_output(&mut session, 150);
+        record_session_model_shutdown_tokens(&mut session, "gpt-5.5", 800, 180);
+
+        reconcile_local_session_model_tokens(&mut session, &mut rollups, "copilot", "2026-06-03");
+
+        let acc = rollups
+            .model
+            .get(&(
+                "copilot".to_string(),
+                "gpt-5.5".to_string(),
+                "2026-06-03".to_string(),
+            ))
+            .expect("model rollup");
+        assert_eq!(session.input_tokens, 800);
+        assert_eq!(session.output_tokens, 180);
+        assert_eq!(acc.input_tokens, 800);
+        assert_eq!(acc.output_tokens, 180);
+    }
+
+    #[test]
+    fn local_model_tokens_attribute_residual_session_tokens_to_last_model() {
+        let mut rollups = LocalHistoryRollups::default();
+        let mut session = LocalSessionBuilder {
+            session_hash: "session-a".to_string(),
+            input_tokens: 1_000,
+            output_tokens: 180,
+            last_model: "gpt-5.5".to_string(),
+            last_status: "completed".to_string(),
+            ..Default::default()
+        };
+        record_session_model_shutdown_tokens(&mut session, "gpt-5.5", 800, 180);
+
+        reconcile_local_session_model_tokens(&mut session, &mut rollups, "copilot", "2026-06-03");
+
+        let acc = rollups
+            .model
+            .get(&(
+                "copilot".to_string(),
+                "gpt-5.5".to_string(),
+                "2026-06-03".to_string(),
+            ))
+            .expect("model rollup");
+        assert_eq!(session.input_tokens, 1_000);
+        assert_eq!(session.output_tokens, 180);
+        assert_eq!(acc.input_tokens, 1_000);
+        assert_eq!(acc.output_tokens, 180);
+    }
+
+    #[test]
+    fn local_history_parser_reconciles_daily_and_model_token_rollups() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cmc_analytics_rollup_reconcile_{}_{}.jsonl",
+            std::process::id(),
+            unix_ms_now()
+        ));
+        std::fs::write(
+            &path,
+            [
+                r#"{"type":"session.start","timestamp":"2026-06-03T10:00:00Z","data":{"selectedModel":"gpt-5.5"}}"#,
+                r#"{"type":"assistant.turn_start","timestamp":"2026-06-03T10:00:01Z","data":{"turnId":"turn-1"}}"#,
+                r#"{"type":"assistant.message","timestamp":"2026-06-03T10:00:02Z","data":{"model":"gpt-5.5","outputTokens":150}}"#,
+                r#"{"type":"session.shutdown","timestamp":"2026-06-03T10:00:03Z","data":{"currentModel":"gpt-5.5","modelMetrics":{"gpt-5.5":{"usage":{"inputTokens":1000,"cacheReadTokens":200,"outputTokens":180}}}}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write fixture");
+
+        let mut rollups = LocalHistoryRollups::default();
+        let mut parse_errors = 0;
+        parse_local_events_file(
+            &path,
+            "session-a",
+            0,
+            unix_ms_now(),
+            &mut rollups,
+            &mut parse_errors,
+        )
+        .expect("parse local history");
+        let _ = std::fs::remove_file(&path);
+
+        let daily = rollups
+            .daily
+            .get(&("copilot".to_string(), "2026-06-03".to_string()))
+            .expect("daily rollup");
+        let model = rollups
+            .model
+            .get(&(
+                "copilot".to_string(),
+                "gpt-5.5".to_string(),
+                "2026-06-03".to_string(),
+            ))
+            .expect("model rollup");
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(daily.input_tokens, 800);
+        assert_eq!(daily.output_tokens, 180);
+        assert_eq!(model.input_tokens, daily.input_tokens);
+        assert_eq!(model.output_tokens, daily.output_tokens);
+        assert_eq!(model.turn_count, 1);
     }
 
     #[test]
