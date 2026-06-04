@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::definition_paths::resolve_definition_path;
+use crate::executable_env::{copilot_sdk_client_options, resolve_executable_env, ExecutableEnv};
 
 use crate::agent::{
     collect_agent_activity_with_history, AgentActivity, AgentEventSummary, AgentSessionSummary,
@@ -3751,15 +3752,20 @@ async fn synthesize_chat_answer_with_copilot(
     definition_gap_prompt: bool,
 ) -> Result<SdkAnalyticsAnswer, String> {
     use github_copilot_sdk::types::{MessageOptions, SessionConfig, SystemMessageConfig};
-    use github_copilot_sdk::{Client, ClientOptions};
+    use github_copilot_sdk::Client;
 
     let summary_json = serde_json::to_string(summary).map_err(|err| err.to_string())?;
+    let executable_env = resolve_executable_env();
     let mcp_script = ensure_insights_mcp_server_script(app)?;
     let project_root = project_root_for_mcp().or_else(|| std::env::current_dir().ok());
     let mcp_tools = mission_control_insights_tools_for_prompt(prompt);
-    let mcp_servers =
-        mission_control_insights_mcp_servers(&mcp_script, project_root.as_deref(), mcp_tools);
-    let client = Client::start(ClientOptions::new())
+    let mcp_servers = mission_control_insights_mcp_servers(
+        &mcp_script,
+        project_root.as_deref(),
+        mcp_tools,
+        &executable_env,
+    );
+    let client = Client::start(copilot_sdk_client_options())
         .await
         .map_err(|err| err.to_string())?;
     let sdk_event_state = Arc::new(Mutex::new(AnalyticsSdkEventState::default()));
@@ -3940,12 +3946,19 @@ fn call_insights_mcp_tool_with_args(
     arguments: Value,
 ) -> Result<Value, String> {
     let script = ensure_insights_mcp_server_script(app)?;
-    let mut command = Command::new("node");
+    let executable_env = resolve_executable_env();
+    let node = executable_env.node.as_ref().ok_or_else(|| {
+        "Node.js executable was not found for Mission Control Insights MCP.".to_string()
+    })?;
+    let mut command = Command::new(node);
     command
         .arg(script)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    if let Some(path) = &executable_env.path {
+        command.env("PATH", path);
+    }
     if let Some(project_root) = project_root_for_mcp() {
         command.env("CMC_PROJECT_ROOT", project_root);
     }
@@ -4051,10 +4064,14 @@ fn mission_control_insights_mcp_servers(
     script_path: &Path,
     project_root: Option<&Path>,
     tools: Vec<String>,
+    executable_env: &ExecutableEnv,
 ) -> HashMap<String, github_copilot_sdk::types::McpServerConfig> {
     use github_copilot_sdk::types::{McpServerConfig, McpStdioServerConfig};
 
     let mut env = HashMap::new();
+    if let Some(path) = &executable_env.path {
+        env.insert("PATH".to_string(), path.to_string_lossy().to_string());
+    }
     if let Some(project_root) = project_root {
         env.insert(
             "CMC_PROJECT_ROOT".to_string(),
@@ -4067,7 +4084,11 @@ fn mission_control_insights_mcp_servers(
         McpServerConfig::Stdio(McpStdioServerConfig {
             tools,
             timeout: Some(20_000),
-            command: "node".to_string(),
+            command: executable_env
+                .node
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|| "node".to_string()),
             args: vec![script_path.to_string_lossy().to_string()],
             env,
             cwd: project_root.map(|path| path.to_string_lossy().to_string()),
@@ -6073,6 +6094,7 @@ fn plural(value: u64) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     #[test]
     fn safe_label_filters_control_characters() {
@@ -6727,29 +6749,8 @@ mod tests {
     }
 
     #[test]
-    fn skill_completeness_artifact_uses_static_evaluator_score() {
-        let project_root = std::env::current_dir()
-            .expect("cwd")
-            .parent()
-            .expect("project root")
-            .to_path_buf();
-        let skill_dir = project_root
-            .join(".copilot")
-            .join("skills")
-            .join(format!("cmc-static-eval-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&skill_dir);
-        std::fs::create_dir_all(&skill_dir).expect("create temp skill dir");
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "# Static Eval Test\n\nA deliberately thin skill used to verify static evaluation scoring in artifacts.\n",
-        )
-        .expect("write temp skill");
-
-        let id = skill_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("skill id")
-            .to_string();
+    fn skill_completeness_artifact_uses_payload_score() {
+        let id = "cmc-static-eval-test";
         let payload = serde_json::json!({
             "kind": "skills",
             "review": {
@@ -6770,7 +6771,13 @@ mod tests {
                     "completeness_score": 5,
                     "issues": []
                 }],
-                "completeness": [],
+                "completeness": [{
+                    "id": id,
+                    "root": "project:.copilot/skills",
+                    "definition_ref": id,
+                    "completeness_score": 3,
+                    "issues": ["Add validation guidance"]
+                }],
                 "context_cost": [],
                 "description_lengths": [],
                 "overlap_pairs": [],
@@ -6786,40 +6793,17 @@ mod tests {
         let score = &completeness.rows[0][1];
         let details: Value = serde_json::from_str(&completeness.rows[0][3]).expect("details");
 
-        assert!(score.ends_with("/100"));
+        assert_eq!(score, "3/5");
         assert_eq!(
             details.get("scoreLabel").and_then(Value::as_str),
             Some(score.as_str())
         );
-        assert_eq!(details.get("maxScore").and_then(Value::as_u64), Some(100));
-
-        let _ = std::fs::remove_dir_all(&skill_dir);
+        assert_eq!(details.get("maxScore").and_then(Value::as_u64), Some(5));
     }
 
     #[test]
-    fn agent_readiness_artifact_uses_static_evaluator_score() {
-        let project_root = std::env::current_dir()
-            .expect("cwd")
-            .parent()
-            .expect("project root")
-            .to_path_buf();
-        let agent_dir = project_root
-            .join(".copilot")
-            .join("agents")
-            .join(format!("cmc-static-agent-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&agent_dir);
-        std::fs::create_dir_all(&agent_dir).expect("create temp agent dir");
-        std::fs::write(
-            agent_dir.join("AGENT.md"),
-            "# Static Agent Test\n\nA deliberately thin agent used to verify static evaluation scoring in artifacts.\n",
-        )
-        .expect("write temp agent");
-
-        let id = agent_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("agent id")
-            .to_string();
+    fn agent_readiness_artifact_uses_payload_score() {
+        let id = "cmc-static-agent-test";
         let payload = serde_json::json!({
             "kind": "agents",
             "review": {
@@ -6840,7 +6824,13 @@ mod tests {
                     "completeness_score": 5,
                     "issues": []
                 }],
-                "completeness": [],
+                "completeness": [{
+                    "id": id,
+                    "root": "project:.copilot/agents",
+                    "definition_ref": id,
+                    "completeness_score": 3,
+                    "issues": ["Add validation guidance"]
+                }],
                 "context_cost": [],
                 "description_lengths": [],
                 "overlap_pairs": [],
@@ -6859,15 +6849,13 @@ mod tests {
         assert!(readiness
             .description
             .contains("Automated checks for whether an agent explains when to use it"));
-        assert!(score.ends_with("/100"));
+        assert_eq!(score, "3/5");
         assert_eq!(details.get("kind").and_then(Value::as_str), Some("agents"));
         assert_eq!(
             details.get("scoreLabel").and_then(Value::as_str),
             Some(score.as_str())
         );
-        assert_eq!(details.get("maxScore").and_then(Value::as_u64), Some(100));
-
-        let _ = std::fs::remove_dir_all(&agent_dir);
+        assert_eq!(details.get("maxScore").and_then(Value::as_u64), Some(5));
     }
 
     #[test]
@@ -6902,10 +6890,16 @@ mod tests {
     fn mcp_server_config_exposes_insights_tools() {
         let script_path = PathBuf::from("/tmp/mission-control-insights.js");
         let project_root = PathBuf::from("/tmp/project");
+        let executable_env = ExecutableEnv {
+            path: Some(OsString::from("/tmp/bin")),
+            node: Some(PathBuf::from("/tmp/bin/node")),
+            copilot: None,
+        };
         let servers = mission_control_insights_mcp_servers(
             &script_path,
             Some(&project_root),
             all_mission_control_insights_tools(),
+            &executable_env,
         );
         let server = servers
             .get("mission-control-insights")
@@ -6913,8 +6907,9 @@ mod tests {
         let github_copilot_sdk::types::McpServerConfig::Stdio(config) = server else {
             panic!("expected stdio MCP server");
         };
-        assert_eq!(config.command, "node");
+        assert_eq!(config.command, "/tmp/bin/node");
         assert_eq!(config.args, vec!["/tmp/mission-control-insights.js"]);
+        assert_eq!(config.env.get("PATH"), Some(&"/tmp/bin".to_string()));
         assert!(config.tools.contains(&"list_prompt_samples".to_string()));
         assert!(config.tools.contains(&"read_skill_definition".to_string()));
         assert!(config.tools.contains(&"analyze_copilot_skills".to_string()));

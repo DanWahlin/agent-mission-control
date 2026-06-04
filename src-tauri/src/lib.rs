@@ -17,6 +17,7 @@
 mod agent;
 mod analytics;
 mod definition_paths;
+mod executable_env;
 mod skill_evaluator;
 
 use tauri::{

@@ -1,4 +1,5 @@
 use crate::definition_paths::{definition_roots, resolve_definition_path};
+use crate::executable_env::copilot_sdk_client_options;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -245,7 +246,7 @@ async fn judge_definition_with_copilot(
     source: &str,
 ) -> Result<JudgeEvaluation, String> {
     use github_copilot_sdk::types::{MessageOptions, SessionConfig, SystemMessageConfig};
-    use github_copilot_sdk::{Client, ClientOptions};
+    use github_copilot_sdk::Client;
 
     let kind = if kind == "agent" { "agent" } else { "skill" };
     let rubric = if kind == "agent" {
@@ -255,7 +256,7 @@ async fn judge_definition_with_copilot(
     };
     let source = truncate_chars(source, 24_000);
     let static_json = serde_json::to_string(evaluation).map_err(|err| err.to_string())?;
-    let client = Client::start(ClientOptions::new())
+    let client = Client::start(copilot_sdk_client_options())
         .await
         .map_err(|_| "sdk_unavailable".to_string())?;
     let sdk_event_state = Arc::new(Mutex::new(String::new()));
