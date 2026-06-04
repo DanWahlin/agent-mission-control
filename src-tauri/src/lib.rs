@@ -33,7 +33,7 @@ use agent::{
 };
 use analytics::{
     AnalyticsChatRequest, AnalyticsChatResponse, AnalyticsRangeRequest, AnalyticsRecommendation,
-    AnalyticsStatus, AnalyticsUsageSummary,
+    AnalyticsStatus, AnalyticsUsageSummary, EngineeringDigest, EngineeringDigestRequest,
 };
 use skill_evaluator::SkillEvaluation;
 
@@ -184,6 +184,16 @@ async fn get_analytics_usage_summary(
     request: AnalyticsRangeRequest,
 ) -> Result<AnalyticsUsageSummary, String> {
     tauri::async_runtime::spawn_blocking(move || analytics::analytics_usage_summary(&app, request))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn get_engineering_digest(
+    app: AppHandle,
+    request: EngineeringDigestRequest,
+) -> Result<EngineeringDigest, String> {
+    tauri::async_runtime::spawn_blocking(move || analytics::engineering_digest(&app, request))
         .await
         .map_err(|err| err.to_string())?
 }
@@ -474,6 +484,7 @@ pub fn run() {
             get_analytics_status,
             run_analytics_ingestion_once,
             get_analytics_usage_summary,
+            get_engineering_digest,
             get_analytics_recommendation_facts,
             ask_analytics_chat,
             set_mcp_server_enabled,

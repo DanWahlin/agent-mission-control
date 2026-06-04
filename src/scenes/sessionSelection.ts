@@ -30,18 +30,15 @@ export function pickSelectedSession(input: SelectedSessionInput): SelectedSessio
 
   const activeSessions = sessions.filter(session => session.is_active);
 
-  // Honor a sticky id from prefs only when it points at a selectable
-  // current session. If an old inactive session from the same repo is
-  // persisted while new work is active, showing that stale detail card
-  // beside a "Running sessions" picker makes Last/Age/Tokens look broken.
+  // Honor a sticky id from prefs when it points at a retained session.
+  // Idle sessions stay selectable now, with an explicit idle label so the
+  // detail card does not masquerade as a live terminal.
   if (userSelectedSession && preferredSessionId) {
     const index = sessions.findIndex(session => session.id === preferredSessionId);
-    if (index >= 0 && (activeSessions.length === 0 || sessions[index].is_active)) {
+    if (index >= 0) {
       return { session: sessions[index], selectedIndex: index, userSelectedSession };
     }
-    if (index >= 0 && activeSessions.length > 0) {
-      userSelectedSession = false;
-    }
+    userSelectedSession = false;
   }
 
   const safeIndex = Math.max(0, Math.min(selectedIndex, sessions.length - 1));
@@ -64,12 +61,15 @@ export function pickSelectedSession(input: SelectedSessionInput): SelectedSessio
 
 export function sessionPickerOptions(sessions: CopilotSessionSummary[]): SessionPickerOption[] {
   const indexed = sessions.map((session, index) => ({ session, index }));
-  const active = indexed.filter(({ session }) => session.is_active);
-  const options = active.length > 0 ? active : indexed;
-  return options.sort((a, b) => {
+  return indexed.sort((a, b) => {
+    const activeRank = Number(b.session.is_active) - Number(a.session.is_active);
+    if (activeRank !== 0) return activeRank;
     const aReview = errorOrReview(a.session) ? 1 : 0;
     const bReview = errorOrReview(b.session) ? 1 : 0;
-    return bReview - aReview || Number(b.session.is_active) - Number(a.session.is_active);
+    const reviewRank = bReview - aReview;
+    if (reviewRank !== 0) return reviewRank;
+    return (a.session.stale_seconds ?? Number.MAX_SAFE_INTEGER)
+      - (b.session.stale_seconds ?? Number.MAX_SAFE_INTEGER);
   });
 }
 

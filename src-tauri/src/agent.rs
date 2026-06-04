@@ -70,6 +70,8 @@ pub struct AgentHistorySummary {
     pub model_mix: Vec<AgentHistoryMetric>,
     pub category_mix: Vec<AgentHistoryMetric>,
     pub top_tools: Vec<AgentHistoryMetric>,
+    #[serde(default)]
+    pub high_activity_sessions: Vec<AgentHistorySession>,
     pub recent_sessions: Vec<AgentHistorySession>,
     pub recent_failures: Vec<AgentHistoryFailure>,
     #[serde(default)]
@@ -109,6 +111,8 @@ pub struct AgentHistorySession {
     pub is_active: bool,
     pub status: String,
     pub event_count: usize,
+    #[serde(default)]
+    pub tool_count: usize,
     pub error_count: usize,
     #[serde(default)]
     pub turn_count: usize,
@@ -151,6 +155,8 @@ pub struct AgentHistoryScopeSummary {
     pub model_mix: Vec<AgentHistoryMetric>,
     pub category_mix: Vec<AgentHistoryMetric>,
     pub top_tools: Vec<AgentHistoryMetric>,
+    #[serde(default)]
+    pub high_activity_sessions: Vec<AgentHistorySession>,
     pub recent_sessions: Vec<AgentHistorySession>,
     pub recent_failures: Vec<AgentHistoryFailure>,
 }
@@ -1651,6 +1657,7 @@ fn build_history_summary(
         model_mix: global.model_mix,
         category_mix: global.category_mix,
         top_tools: global.top_tools,
+        high_activity_sessions: global.high_activity_sessions,
         recent_sessions: global.recent_sessions,
         recent_failures: global.recent_failures,
         session_scopes,
@@ -1699,6 +1706,7 @@ fn build_history_scope_summary(
                 ..Default::default()
             })
             .collect(),
+        high_activity_sessions: history_high_activity_sessions(sessions),
         recent_sessions: sessions
             .iter()
             .take(MAX_HISTORY_RECENT_SESSIONS)
@@ -1716,6 +1724,23 @@ fn build_history_scope_summary(
             })
             .collect(),
     }
+}
+
+fn history_high_activity_sessions(sessions: &[AgentSessionSummary]) -> Vec<AgentHistorySession> {
+    let mut ranked = sessions.to_vec();
+    ranked.sort_by(|a, b| {
+        b.turn_count
+            .cmp(&a.turn_count)
+            .then_with(|| b.tool_count.cmp(&a.tool_count))
+            .then_with(|| b.event_count.cmp(&a.event_count))
+            .then_with(|| b.output_tokens.cmp(&a.output_tokens))
+            .then_with(|| b.last_event_timestamp.cmp(&a.last_event_timestamp))
+    });
+    ranked
+        .iter()
+        .take(MAX_HISTORY_RECENT_SESSIONS)
+        .map(history_session_from_summary)
+        .collect()
 }
 
 fn history_tools_for_session(session: &AgentSessionSummary) -> Vec<AgentToolMetric> {
@@ -2005,6 +2030,7 @@ fn history_session_from_summary(session: &AgentSessionSummary) -> AgentHistorySe
         is_active: session.is_active,
         status: session.status.clone(),
         event_count: session.event_count,
+        tool_count: session.tool_count,
         error_count: session.error_count,
         turn_count: session.turn_count,
         input_tokens: session.input_tokens,

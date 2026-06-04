@@ -126,6 +126,7 @@ export interface CopilotHistorySession {
   is_active: boolean;
   status: string;
   event_count: number;
+  tool_count?: number;
   error_count: number;
   turn_count?: number;
   input_tokens?: number;
@@ -153,6 +154,7 @@ export interface CopilotHistorySummary {
   model_mix: CopilotHistoryMetric[];
   category_mix: CopilotHistoryMetric[];
   top_tools: CopilotHistoryMetric[];
+  high_activity_sessions?: CopilotHistorySession[];
   recent_sessions: CopilotHistorySession[];
   recent_failures: CopilotHistoryFailure[];
   session_scopes?: CopilotHistorySessionScope[];
@@ -181,6 +183,116 @@ export interface CopilotActivity {
   schema_drift?: SchemaDriftReport[];
   history?: CopilotHistorySummary;
   generated_at_ms: number;
+}
+
+export interface EngineeringDigest {
+  generated_at_ms: number;
+  selected_day: string;
+  month: string;
+  available_years: number[];
+  calendar_days: EngineeringDigestCalendarDay[];
+  day: EngineeringDigestDay;
+  caveats: string[];
+}
+
+export interface EngineeringDigestCalendarDay {
+  local_day: string;
+  day_number: number;
+  in_month: boolean;
+  enabled: boolean;
+  is_today: boolean;
+  intensity: number;
+  sessions: number;
+  events: number;
+  turns: number;
+  tool_calls: number;
+  failures: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_active_ms: number;
+  partial: boolean;
+  badges: string[];
+  dominant_repo?: string;
+  dominant_branch?: string;
+}
+
+export interface EngineeringDigestDay {
+  local_day: string;
+  totals: Array<{
+    label: string;
+    value: number;
+    exact?: boolean;
+    estimated?: boolean;
+    partial?: boolean;
+  }>;
+  repos: EngineeringDigestRepoGroup[];
+  models: Array<{
+    label: string;
+    category: string;
+    value: number;
+    secondary_value?: number;
+    tertiary_value?: number;
+    partial?: boolean;
+  }>;
+  tools: EngineeringDigestTool[];
+  failures: EngineeringDigestFailure[];
+  token_hotspots: EngineeringDigestSession[];
+  useful_sessions: EngineeringDigestSession[];
+  narrative: string;
+  exports: EngineeringDigestExport[];
+}
+
+export interface EngineeringDigestRepoGroup {
+  repository: string;
+  branch: string;
+  sessions: EngineeringDigestSession[];
+  events: number;
+  failures: number;
+  input_tokens: number;
+  output_tokens: number;
+  first_seen_ms: number;
+  last_seen_ms: number;
+}
+
+export interface EngineeringDigestSession {
+  session_hash: string;
+  title: string;
+  repository: string;
+  branch: string;
+  status: string;
+  is_active: boolean;
+  events: number;
+  failures: number;
+  turns: number;
+  tool_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  last_model: string;
+  first_seen_ms: number;
+  last_seen_ms: number;
+}
+
+export interface EngineeringDigestTool {
+  name: string;
+  category: string;
+  calls: number;
+  successes: number;
+  failures: number;
+  total_duration_ms: number;
+}
+
+export interface EngineeringDigestFailure {
+  kind: string;
+  tool: string;
+  category: string;
+  count: number;
+  last_seen_ms: number;
+}
+
+export interface EngineeringDigestExport {
+  kind: string;
+  label: string;
+  body: string;
 }
 
 export interface SchemaDriftReport {

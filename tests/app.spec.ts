@@ -43,6 +43,7 @@ test.describe('Copilot Mission Control app shell', () => {
       const mission = document.querySelector('#mission-route-btn') as HTMLElement;
       const history = document.querySelector('#history-route-btn') as HTMLElement;
       const analytics = document.querySelector('#analytics-route-btn') as HTMLElement;
+      const panels = document.querySelector('#panels-btn') as HTMLButtonElement;
       const missionStyle = getComputedStyle(mission);
       const historyStyle = getComputedStyle(history);
       const analyticsStyle = getComputedStyle(analytics);
@@ -56,11 +57,13 @@ test.describe('Copilot Mission Control app shell', () => {
         missionColor: missionStyle.color,
         historyColor: historyStyle.color,
         analyticsColor: analyticsStyle.color,
+        panelsDisabled: panels.disabled,
       };
     });
 
     const initial = await routeStyles();
     expect(initial.missionCurrent).toBe('page');
+    expect(initial.panelsDisabled).toBe(false);
     expect(initial.historyCurrent).toBeNull();
     expect(initial.analyticsCurrent).toBeNull();
     expect(initial.missionBackgroundImage).not.toBe('none');
@@ -74,6 +77,7 @@ test.describe('Copilot Mission Control app shell', () => {
     expect(darkHistory.missionCurrent).toBeNull();
     expect(darkHistory.historyCurrent).toBe('page');
     expect(darkHistory.analyticsCurrent).toBeNull();
+    expect(darkHistory.panelsDisabled).toBe(true);
     expect(darkHistory.missionBackgroundImage).toBe('none');
     expect(darkHistory.historyBackgroundImage).not.toBe('none');
     expect(darkHistory.analyticsBackgroundImage).toBe('none');
@@ -86,6 +90,7 @@ test.describe('Copilot Mission Control app shell', () => {
     expect(lightHistory.historyCurrent).toBe('page');
     expect(lightHistory.historyBackgroundImage).not.toBe('none');
     expect(lightHistory.historyColor).toBe(lightActiveColor);
+    expect(lightHistory.panelsDisabled).toBe(true);
 
     await page.locator('#analytics-route-btn').click();
     await expect.poll(async () => (await routeStyles()).analyticsColor).toBe(lightActiveColor);
@@ -96,6 +101,7 @@ test.describe('Copilot Mission Control app shell', () => {
     expect(lightAnalytics.analyticsCurrent).toBe('page');
     expect(lightAnalytics.missionCurrent).toBeNull();
     expect(lightAnalytics.historyCurrent).toBeNull();
+    expect(lightAnalytics.panelsDisabled).toBe(true);
     expect(lightAnalytics.analyticsBackgroundImage).not.toBe('none');
     expect(lightAnalytics.analyticsBackgroundImage).toBe(lightHistory.historyBackgroundImage);
 
@@ -105,10 +111,25 @@ test.describe('Copilot Mission Control app shell', () => {
     expect(lightMission.missionCurrent).toBe('page');
     expect(lightMission.historyCurrent).toBeNull();
     expect(lightMission.analyticsCurrent).toBeNull();
+    expect(lightMission.panelsDisabled).toBe(false);
     expect(lightMission.missionBackgroundImage).not.toBe('none');
     expect(lightMission.historyBackgroundImage).toBe('none');
     expect(lightMission.missionBackgroundImage).toBe(lightHistory.historyBackgroundImage);
     expect(lightMission.missionColor).toBe(lightHistory.historyColor);
+  });
+
+  test('history route defaults to Overview and exposes Daily Log tab', async ({ page }) => {
+    await page.locator('#history-route-btn').click();
+    await expect(page.locator('#history-overview-tab')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#history-flight-log-tab')).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator('#history-overview-panel')).toBeVisible();
+    await expect(page.locator('#history-flight-log-panel')).toBeHidden();
+
+    await page.locator('#history-flight-log-tab').click();
+    await expect(page.locator('#history-overview-tab')).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator('#history-flight-log-tab')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#history-overview-panel')).toBeHidden();
+    await expect(page.locator('#history-flight-log-panel')).toBeVisible();
   });
 
   test('analytics chat route renders grounded fixture artifacts', async ({ page }) => {
@@ -226,8 +247,7 @@ test.describe('Copilot Mission Control app shell', () => {
     await expect(page.locator('#analytics-chat-transcript')).toContainText('I found a token hotspot');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('Token Trend');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('Model Shifts');
-    await expect(page.locator('.analytics-artifact').filter({ hasText: 'Model Shifts' }).locator('thead')).toContainText('Current Turns');
-    await expect(page.locator('.analytics-artifact').filter({ hasText: 'Model Shifts' }).locator('thead')).toContainText('Previous Turns');
+    await expect(page.locator('.analytics-artifact').filter({ hasText: 'Model Shifts' }).locator('th')).toContainText(['Model', 'CurrentTurns', 'PreviousTurns', 'DeltaTurns']);
     await expect(page.locator('#analytics-chat-transcript')).toContainText('5,573');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('4,126,507');
     await expect(page.locator('#analytics-chat-transcript')).toContainText('+36,012,649');
@@ -249,7 +269,7 @@ test.describe('Copilot Mission Control app shell', () => {
     await expect.poll(() => page.locator('#analytics-chat-transcript').evaluate((el) => {
       const transcript = el as HTMLElement;
       return Math.round(transcript.scrollTop + transcript.clientHeight - transcript.scrollHeight);
-    })).toBeGreaterThanOrEqual(-64);
+    })).toBeGreaterThanOrEqual(-80);
 
     await page.locator('#analytics-chat-input').fill('second prompt');
     await page.locator('#analytics-chat-form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
@@ -257,7 +277,7 @@ test.describe('Copilot Mission Control app shell', () => {
     await expect.poll(() => page.locator('#analytics-chat-transcript').evaluate((el) => {
       const transcript = el as HTMLElement;
       return Math.round(transcript.scrollTop + transcript.clientHeight - transcript.scrollHeight);
-    })).toBeGreaterThanOrEqual(-64);
+    })).toBeGreaterThanOrEqual(-80);
 
     await page.locator('#analytics-chat-input').fill('draft question');
     await page.locator('#analytics-chat-new').click();

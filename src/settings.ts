@@ -26,6 +26,7 @@
     analyticsTokenNoticeSeen: 'cmc_analytics_token_notice_seen',
     panelsHidden: 'cmc_panels_hidden',
     schemaDriftDismissed: 'cmc_schema_drift_dismissed',
+    historyTab: 'cmc_history_tab',
     missionPrefs: 'cmc_prefs',
   });
 

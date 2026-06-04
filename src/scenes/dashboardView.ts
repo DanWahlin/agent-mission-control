@@ -14,6 +14,7 @@ export interface SessionPickerRow {
   isActive: boolean;
   selected: boolean;
   shortId: string;
+  statusLabel: string;
   x: number;
   y: number;
   w: number;
@@ -68,7 +69,14 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
   const { layout, activity, sessionOptions, selectedSessionIndex, eventLog, replayCursor, atLive } = input;
   const compact = layout.compact;
   const activeOptions = sessionOptions.filter(({ session }) => session.is_active);
-  const pickerOptions = (activeOptions.length > 0 ? activeOptions : sessionOptions.slice(0, 1)).slice(0, 5);
+  const pickerOptions = sessionOptions.slice(0, 5);
+  if (!pickerOptions.some(({ index }) => index === selectedSessionIndex)) {
+    const selectedOption = sessionOptions.find(({ index }) => index === selectedSessionIndex);
+    if (selectedOption) {
+      if (pickerOptions.length >= 5) pickerOptions[pickerOptions.length - 1] = selectedOption;
+      else pickerOptions.push(selectedOption);
+    }
+  }
   const sessionPickerRows = pickerOptions.map(({ session, index }, i) => sessionPickerRow(
     session,
     index,
@@ -198,6 +206,7 @@ function sessionOptionRow(session: CopilotSessionSummary, index: number) {
     shortId: session.id.length > 8 ? session.id.slice(0, 8) : session.id,
     status: session.status,
     isActive: session.is_active,
+    statusLabel: session.is_active ? 'active' : 'idle',
   };
 }
 

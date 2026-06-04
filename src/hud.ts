@@ -22,6 +22,9 @@
 
   function safeGet(key) { return settings.get(key); }
   function safeSet(key, value) { settings.set(key, value); }
+  function normalizeHistoryTab(tab) {
+    return tab === 'flight-log' ? 'flight-log' : 'overview';
+  }
 
   // -------------------------------------------------------------------
   // Theme toggle (light/dark).
@@ -825,6 +828,11 @@
   var analyticsTokenNoticeSeen = settings.getBool(STORAGE_KEYS.analyticsTokenNoticeSeen);
   var analyticsTokenReturnFocus = null;
   var historyContent = $('history-content');
+  var historyOverviewPanel = $('history-overview-panel');
+  var historyFlightLogPanel = $('history-flight-log-panel');
+  var historyFlightLogContent = $('history-flight-log-content');
+  var historyOverviewTab = $('history-overview-tab');
+  var historyFlightLogTab = $('history-flight-log-tab');
   var historyKpiSummary = $('history-kpi-summary');
   var historySubtitle = $('history-subtitle');
   var historyLiveStamp = $('history-live-stamp');
@@ -849,7 +857,7 @@
   var activeSchemaDriftReport = null;
   var lastSchemaDriftFingerprint = '';
   var historySessionFilter = 'all';
-  var openHistoryFailureKeys = new Set();
+  var historyTab = normalizeHistoryTab(safeGet(STORAGE_KEYS.historyTab));
   var DASHBOARD_SPLASH_MIN_MS = Number.isFinite(Number(window.__cmcSplashMinMs))
     ? Math.max(0, Number(window.__cmcSplashMinMs))
     : 2000;
@@ -878,6 +886,14 @@
   var historyAnalyticsLoadedAtMs = 0;
   var historyAnalyticsLoading = false;
   var historyAnalyticsError = '';
+  var flightLogDigest = null;
+  var flightLogLoading = false;
+  var flightLogError = '';
+  var flightLogSelectedDay = localDayString(new Date());
+  var flightLogMonth = flightLogSelectedDay.slice(0, 7);
+  var flightLogCopyStatus = '';
+  var flightLogExpandedExports = {};
+  var flightLogRequestSeq = 0;
   var analyticsChatMessages = [];
   var analyticsChatLoading = false;
   var analyticsChatRequestSeq = 0;
@@ -898,6 +914,52 @@
     return window.performance && typeof window.performance.now === 'function'
       ? window.performance.now()
       : Date.now();
+  }
+
+  function localDayString(date) {
+    var d = date instanceof Date ? date : new Date(date || Date.now());
+    if (Number.isNaN(d.getTime())) d = new Date();
+    return [
+      d.getFullYear(),
+      String(d.getMonth() + 1).padStart(2, '0'),
+      String(d.getDate()).padStart(2, '0'),
+    ].join('-');
+  }
+
+  function localMonthLabel(month) {
+    var date = new Date(String(month || '').slice(0, 7) + '-01T12:00:00');
+    if (Number.isNaN(date.getTime())) date = new Date();
+    return date.toLocaleDateString([], { month: 'long', year: 'numeric' });
+  }
+
+  function localDateLabel(day) {
+    var date = new Date(String(day || '') + 'T12:00:00');
+    if (Number.isNaN(date.getTime())) return String(day || 'selected day');
+    return date.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' });
+  }
+
+  function shiftMonth(month, delta) {
+    var date = new Date(String(month || flightLogMonth).slice(0, 7) + '-01T12:00:00');
+    if (Number.isNaN(date.getTime())) date = new Date();
+    date.setMonth(date.getMonth() + delta);
+    return localDayString(date).slice(0, 7);
+  }
+
+  function lastSelectableDayForMonth(month) {
+    var normalized = String(month || flightLogMonth).slice(0, 7);
+    var today = localDayString(new Date());
+    if (normalized >= today.slice(0, 7)) return today;
+    var first = new Date(normalized + '-01T12:00:00');
+    if (Number.isNaN(first.getTime())) return today;
+    first.setMonth(first.getMonth() + 1);
+    first.setDate(0);
+    return localDayString(first);
+  }
+
+  function clampSelectableMonth(month) {
+    var normalized = String(month || flightLogMonth).slice(0, 7);
+    var todayMonth = localDayString(new Date()).slice(0, 7);
+    return normalized > todayMonth ? todayMonth : normalized;
   }
 
   function routeFromHash() {
@@ -977,7 +1039,6 @@
       historyBarRefreshFrame = 0;
     }
     liveFingerprints.history = '';
-    openHistoryFailureKeys.clear();
   }
 
   function analyticsFixture() {
@@ -990,12 +1051,17 @@
       if (command === 'get_analytics_status') return Promise.resolve(fixture.status || defaultAnalyticsStatus());
       if (command === 'ask_analytics_chat') return Promise.resolve(fixture.chat || defaultAnalyticsChat(payload && payload.request && payload.request.prompt));
       if (command === 'get_analytics_usage_summary') return Promise.resolve(fixture.summary || defaultAnalyticsUsageSummary());
+      if (command === 'get_engineering_digest') {
+        var digest = typeof fixture.digest === 'function' ? fixture.digest(payload && payload.request) : fixture.digest;
+        return Promise.resolve(digest || defaultEngineeringDigest(payload && payload.request));
+      }
     }
     var invoke = tauriInvoke();
     if (!invoke) {
       if (command === 'get_analytics_status') return Promise.resolve(defaultAnalyticsStatus());
       if (command === 'ask_analytics_chat') return Promise.resolve(defaultAnalyticsChat(payload && payload.request && payload.request.prompt));
       if (command === 'get_analytics_usage_summary') return Promise.resolve(defaultAnalyticsUsageSummary());
+      if (command === 'get_engineering_digest') return Promise.resolve(defaultEngineeringDigest(payload && payload.request));
     }
     return invoke(command, payload || {});
   }
@@ -1046,6 +1112,62 @@
       tool_failures: [],
       recommendations: [],
       caveats: ['Open the Tauri app to index local analytics data.'],
+    };
+  }
+
+  function defaultEngineeringDigest(request) {
+    var selectedDay = request && request.selected_day || flightLogSelectedDay || localDayString(new Date());
+    var month = request && request.month || selectedDay.slice(0, 7);
+    var date = new Date(month + '-01T12:00:00');
+    if (Number.isNaN(date.getTime())) date = new Date();
+    var selected = new Date(selectedDay + 'T12:00:00');
+    if (Number.isNaN(selected.getTime())) selected = new Date();
+    var first = new Date(selected);
+    first.setDate(selected.getDate() - selected.getDay() - 28);
+    var calendarDays = [];
+    var totalDays = Math.max(1, Math.round((selected.getTime() - first.getTime()) / 86400000) + 1);
+    for (var i = 0; i < totalDays; i++) {
+      var dayDate = new Date(first);
+      dayDate.setDate(first.getDate() + i);
+      var localDay = localDayString(dayDate);
+      calendarDays.push({
+        local_day: localDay,
+        day_number: dayDate.getDate(),
+        in_month: localDay.slice(0, 7) === month,
+        enabled: false,
+        is_today: localDay === localDayString(new Date()),
+        intensity: 0,
+        sessions: 0,
+        events: 0,
+        turns: 0,
+        tool_calls: 0,
+        failures: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        estimated_active_ms: 0,
+        partial: false,
+        badges: [],
+      });
+    }
+    return {
+      generated_at_ms: 0,
+      selected_day: selectedDay,
+      month: month,
+      available_years: [Number(selectedDay.slice(0, 4)) || new Date().getFullYear()],
+      calendar_days: calendarDays,
+      day: {
+        local_day: selectedDay,
+        totals: [],
+        repos: [],
+        models: [],
+        tools: [],
+        failures: [],
+        token_hotspots: [],
+        useful_sessions: [],
+        narrative: 'No indexed Copilot CLI activity is available for ' + selectedDay + '.',
+        exports: [],
+      },
+      caveats: ['Open the Tauri app to build the Daily Log from local analytics.'],
     };
   }
 
@@ -1552,6 +1674,56 @@
     });
   }
 
+  function flightLogFingerprint() {
+    if (flightLogLoading) return 'loading|' + flightLogSelectedDay + '|' + flightLogMonth;
+    if (flightLogError) return 'error|' + flightLogError + '|' + flightLogSelectedDay + '|' + flightLogMonth;
+    var digest = flightLogDigest || {};
+    var day = digest.day || {};
+    return [
+      digest.generated_at_ms || 0,
+      digest.selected_day || flightLogSelectedDay,
+      digest.month || flightLogMonth,
+      (digest.calendar_days || []).map(function (item) {
+        return [item.local_day, item.events, item.failures, item.intensity, (item.badges || []).join(',')].join(':');
+      }).join('|'),
+      (day.repos || []).map(function (repo) { return repo.repository + ':' + repo.branch + ':' + repo.events; }).join('|'),
+      (day.tools || []).map(function (tool) { return tool.name + ':' + tool.calls + ':' + tool.failures; }).join('|'),
+      (day.failures || []).map(function (failure) { return failure.tool + ':' + failure.count; }).join('|'),
+    ].join('||');
+  }
+
+  function loadFlightLogDigest(force) {
+    if (flightLogLoading && !force) return;
+    if (!force && flightLogDigest && flightLogDigest.selected_day === flightLogSelectedDay && flightLogDigest.month === flightLogMonth) return;
+    var requestSeq = ++flightLogRequestSeq;
+    var requestedDay = flightLogSelectedDay;
+    var requestedMonth = flightLogMonth;
+    flightLogLoading = true;
+    flightLogError = '';
+    if (appRoute === 'history' && historyTab === 'flight-log') renderHistory(lastDashboard, true);
+    callAnalyticsCommand('get_engineering_digest', {
+      request: {
+        selected_day: requestedDay,
+        month: requestedMonth,
+      },
+    }).then(function (digest) {
+      if (requestSeq !== flightLogRequestSeq) return;
+      flightLogDigest = digest || defaultEngineeringDigest({ selected_day: requestedDay, month: requestedMonth });
+      flightLogSelectedDay = flightLogDigest.selected_day || flightLogSelectedDay;
+      flightLogMonth = flightLogDigest.month || flightLogMonth;
+      flightLogCopyStatus = '';
+    }).catch(function (err) {
+      if (requestSeq !== flightLogRequestSeq) return;
+      flightLogDigest = defaultEngineeringDigest({ selected_day: requestedDay, month: requestedMonth });
+      flightLogError = err && err.message ? err.message : String(err || 'Unable to load Daily Log');
+    }).then(function () {
+      if (requestSeq !== flightLogRequestSeq) return;
+      flightLogLoading = false;
+      liveFingerprints.history = '';
+      if (appRoute === 'history' && historyTab === 'flight-log') renderHistory(lastDashboard, true);
+    });
+  }
+
   function hasHistoryAnalyticsSummary(summary) {
     return !!(summary && Array.isArray(summary.metrics) && summary.metrics.length > 0);
   }
@@ -1637,6 +1809,7 @@
     setRouteButtonState(missionRouteBtn, appRoute === 'mission');
     setRouteButtonState(historyRouteBtn, appRoute === 'history');
     setRouteButtonState(analyticsRouteBtn, appRoute === 'analytics');
+    applyPanelsState();
     if (historyScreen) historyScreen.setAttribute('aria-hidden', appRoute === 'history' ? 'false' : 'true');
     if (analyticsChatScreen) analyticsChatScreen.setAttribute('aria-hidden', appRoute === 'analytics' ? 'false' : 'true');
     [gameRoot, dashboardOverlay, domLoading].forEach(function (el) {
@@ -1842,23 +2015,30 @@
   function sessionOptionLines(opt) {
     var marker = opt && opt.isActive ? '● ' : '○ ';
     var shortId = (opt && (opt.shortId || (opt.id || '').slice(0, 8))) || '';
+    var repository = opt && opt.repository;
+    var title = opt && opt.title;
     var sessionName = opt && opt.sessionName;
-    if (sessionName) {
+    var main = repository || title || (opt && opt.id) || 'session';
+    var detail = sessionName || (repository && title !== repository ? title : '');
+    if (detail) {
       return {
-        main: marker + (opt.repository || opt.title || opt.id || 'session'),
-        sub: sessionName + (shortId ? ' · ' + shortId : ''),
+        main: marker + main,
+        sub: detail + (shortId ? ' · ' + shortId : ''),
       };
     }
     return {
-      main: marker + ((opt && (opt.title || opt.id)) || 'session') + (shortId ? ' · ' + shortId : ''),
-      sub: '',
+      main: marker + main,
+      sub: shortId,
     };
   }
 
   function renderSessionOption(opt) {
     var lines = sessionOptionLines(opt || {});
+    var statusLabel = opt && opt.statusLabel;
     return '<span class="cmc-session-option-text">'
-      + '<span class="cmc-session-option-main">' + escapeHtml(lines.main) + '</span>'
+      + '<span class="cmc-session-option-main"><span>' + escapeHtml(lines.main) + '</span>'
+      + (statusLabel ? '<span class="cmc-session-status-label">' + escapeHtml(statusLabel) + '</span>' : '')
+      + '</span>'
       + (lines.sub ? '<span class="cmc-session-option-sub">' + escapeHtml(lines.sub) + '</span>' : '')
       + '</span>';
   }
@@ -2193,6 +2373,7 @@
           opt.repository || '',
           opt.shortId || '',
           opt.isActive ? '1' : '0',
+          opt.statusLabel || '',
         ].join(':');
       }).join('|'),
       selected.id || '',
@@ -2532,16 +2713,6 @@
     return label ? label + ' · ' + id : id;
   }
 
-  function historyFailureKey(failure) {
-    return [
-      failure && failure.session_id,
-      failure && failure.timestamp,
-      failure && failure.kind,
-      failure && failure.tool,
-      failure && failure.category,
-    ].map(function (value) { return String(value || ''); }).join('|');
-  }
-
   function updateHistorySessionFilter(history) {
     if (!historySessionFilterSelect) return;
     var scopes = historySessionScopes(history);
@@ -2669,20 +2840,9 @@
       + '</div>';
   }
 
-  function renderHistoryDistributionBar(barPercent, failurePercent, fillClass) {
-    var bar = Math.max(0, Math.min(100, Number(barPercent || 0)));
-    var failure = Math.max(0, Math.min(100, Number(failurePercent || 0)));
-    return '<div class="history-distribution-bar" aria-hidden="true">'
-      + '<svg class="history-bar-svg history-distribution-svg" data-history-width="100" viewBox="0 0 100 10" preserveAspectRatio="none" focusable="false">'
-      + '<path class="history-distribution-fill ' + escapeHtml(fillClass) + '" data-percent="' + historySvgPercent(bar) + '" d="' + historyLeftRoundedPath(historyFillWidth(bar, 100), 10) + '"></path>'
-      + '<path class="history-distribution-failure" data-percent="' + historySvgPercent(failure) + '" d="' + historyLeftRoundedPath(historyFillWidth(failure, 100), 10) + '"></path>'
-      + '</svg>'
-      + '</div>';
-  }
-
   function refreshHistoryBarShapes(root) {
     var scope = root || document;
-    var svgs = scope.querySelectorAll('.history-bar-svg-horizontal, .history-distribution-svg');
+    var svgs = scope.querySelectorAll('.history-bar-svg-horizontal');
     svgs.forEach(function (svg) {
       var rect = svg.getBoundingClientRect();
       var width = Math.round(rect.width || Number(svg.getAttribute('data-history-width')) || 100);
@@ -2743,7 +2903,7 @@
       { label: 'Events', value: eventTotal },
       { label: 'Tool Calls', value: toolTotal },
       { label: 'Models Used', value: historyUniqueModelCount(history) },
-      { label: 'Input Tokens', value: tokenTotals.input, token: true },
+      { label: 'Input Tokens', value: tokenTotals.inputPending ? 'pending' : tokenTotals.input, token: true },
       { label: 'Output Tokens', value: tokenTotals.output, token: true },
     ];
     return '<section class="history-kpis" aria-label="History summary metrics">'
@@ -2761,9 +2921,12 @@
   function tokenTotalsForHistory(view, history, scoped) {
     if (scoped) {
       var session = history && history.recent_sessions && history.recent_sessions[0];
+      var input = Number(session && session.input_tokens || 0);
+      var output = Number(session && session.output_tokens || 0);
       return {
-        input: Number(session && session.input_tokens || 0),
-        output: Number(session && session.output_tokens || 0),
+        input: input,
+        output: output,
+        inputPending: input <= 0 && output > 0,
       };
     }
     var indexedInput = Number(history && history.input_tokens);
@@ -2772,12 +2935,14 @@
       return {
         input: indexedInput,
         output: indexedOutput,
+        inputPending: false,
       };
     }
     var activity = view && view.activity || {};
     return {
       input: Number(activity.totalInputTokens || 0),
       output: Number(activity.totalOutputTokens || 0),
+      inputPending: false,
     };
   }
 
@@ -2977,7 +3142,7 @@
 
   function renderTopToolsCompact(history) {
     return renderRankCard(
-      'Top tools',
+      'Top Tools',
       'Most-used allowlisted tool names, capped by the backend.',
       history.top_tools,
       'No tool usage is visible yet.',
@@ -2985,34 +3150,59 @@
     ).replace('class="history-card"', 'class="history-card compact-card"');
   }
 
-  function renderSessionDistribution(sessions) {
-    var rows = Array.isArray(sessions) ? sessions : [];
-    var max = rows.reduce(function (acc, session) { return Math.max(acc, Number(session.event_count || 0)); }, 0);
-    var body = rows.length && max > 0
-      ? '<div class="history-session-distribution">' + rows.map(function (session, index) {
-          var title = session.title || session.session_name || session.repository || shortSessionId(session.id);
-          var events = Number(session.event_count || 0);
-          var failures = Number(session.error_count || 0);
-          var failurePct = events > 0 ? Math.max(0, Math.min(100, (failures / events) * 100)) : 0;
-          var barPct = historyBarPercent(events, max);
-          var fillClass = historyPaletteFillClass(index);
-          return '<div class="history-distribution-row">'
-            + '<div class="history-rank-meta"><span class="history-rank-name" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span><span>' + escapeHtml(exactNumber(events) + ' events') + '</span></div>'
-            + renderHistoryDistributionBar(barPct, failurePct.toFixed(1), fillClass)
-            + '<div class="history-row-meta">' + escapeHtml(exactNumber(failures) + ' failures · ' + (session.last_model || 'model unknown')) + '</div>'
-            + '</div>';
-        }).join('') + '</div>'
-      : '<div class="history-empty">No session distribution is visible yet.</div>';
-    return '<article class="history-card compact-card" data-history-card="session-distribution">'
-      + '<div class="history-card-title"><span>Session distribution</span><span>events</span></div>'
-      + '<p class="history-card-copy">Shows whether activity is spread across sessions or concentrated in a few outliers.</p>'
+  function historySessionTokenPair(session) {
+    var input = Number(session && session.input_tokens || 0);
+    var output = Number(session && session.output_tokens || 0);
+    var inputLabel = input <= 0 && output > 0 ? 'pending input tokens' : exactNumber(input) + ' input tokens';
+    return inputLabel + ' · ' + exactNumber(output) + ' output tokens';
+  }
+
+  function highActivitySessions(history) {
+    var rows = Array.isArray(history && history.high_activity_sessions) && history.high_activity_sessions.length
+      ? history.high_activity_sessions
+      : ((history && history.recent_sessions) || []);
+    return rows.slice().sort(function (a, b) {
+      return Number(b.turn_count || 0) - Number(a.turn_count || 0)
+        || Number(b.tool_count || 0) - Number(a.tool_count || 0)
+        || Number(b.event_count || 0) - Number(a.event_count || 0)
+        || Number(b.output_tokens || 0) - Number(a.output_tokens || 0)
+        || String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+    }).slice(0, 8);
+  }
+
+  function renderHighActivitySessions(history) {
+    var rows = highActivitySessions(history);
+    if (!rows.length) {
+      return '<article class="history-card" data-history-card="high-activity-sessions">'
+        + '<div class="history-card-title"><span>High Activity Sessions</span><span>sessions</span></div>'
+        + '<p class="history-card-copy">Ranks sessions by turns, tool calls, events, output tokens, then recency.</p>'
+        + '<div class="history-empty">No high-activity sessions are visible yet.</div>'
+        + '</article>';
+    }
+    var body = '<div class="history-activity-session-list">' + rows.map(function (session) {
+      var title = session.title || session.session_name || session.repository || shortSessionId(session.id);
+      var scope = [session.repository, session.branch].filter(Boolean).join(' / ');
+      var details = (scope || shortSessionId(session.id))
+        + ' · ' + countLabel(session.event_count, 'event', 'events')
+        + ' · ' + countLabel(session.turn_count, 'turn', 'turns')
+        + ' · ' + countLabel(session.tool_count, 'tool call', 'tool calls')
+        + ' · ' + historySessionTokenPair(session)
+        + ' · ' + countLabel(session.error_count, 'failure', 'failures');
+      return '<div class="flight-log-row history-activity-session-row">'
+        + '<strong>' + escapeHtml(title) + '</strong>'
+        + '<span>' + escapeHtml(details) + '</span>'
+        + '</div>';
+    }).join('') + '</div>';
+    return '<article class="history-card" data-history-card="high-activity-sessions">'
+      + '<div class="history-card-title"><span>High Activity Sessions</span><span>sessions</span></div>'
+      + '<p class="history-card-copy">Ranks sessions in this History range by turns, tool calls, events, output tokens, then recency.</p>'
       + body
       + '</article>';
   }
 
   function renderModelsCompact(metrics) {
     return renderRankCard(
-      'Models used',
+      'Models Used',
       'Turn-level models are counted when available; sessions fall back to the last observed model, including Unknown.',
       metrics,
       'No model-bearing activity is visible yet.',
@@ -3044,51 +3234,8 @@
         }).join('') + '</div>'
       : '<div class="history-empty">No scanned sessions are available yet.</div>';
     return '<article class="history-card" data-history-card="recent-sessions">'
-      + '<div class="history-card-title"><span>Recent sessions</span><span>status</span></div>'
+      + '<div class="history-card-title"><span>Recent Sessions</span><span>status</span></div>'
       + '<p class="history-card-copy">Latest privacy-safe session summaries across the scanned activity window.</p>'
-      + body
-      + '</article>';
-  }
-
-  function renderHistoryFailures(failures) {
-    var rows = Array.isArray(failures) ? failures : [];
-    var visibleKeys = new Set();
-    var body = rows.length
-      ? '<div class="history-failure-list">' + rows.map(function (failure, index) {
-          var category = failure.category || 'alert';
-          var tool = failure.tool || 'tool';
-          var kind = failure.kind || 'failure';
-          var sessionId = shortSessionId(failure.session_id);
-          var when = historyAgeLabel(failure.timestamp);
-          var key = historyFailureKey(failure);
-          visibleKeys.add(key);
-          return '<details class="history-failure-item" data-history-failure-key="' + escapeHtml(key) + '"' + (openHistoryFailureKeys.has(key) ? ' open' : '') + '>'
-            + '<summary class="history-failure-row">'
-            + '<span class="history-anomaly-code">A-' + escapeHtml(String(index + 1).padStart(2, '0')) + '</span>'
-            + '<div><div class="history-row-title">' + escapeHtml(categoryLabel(category) + ' · ' + tool) + '</div>'
-            + '<div class="history-row-sub">' + escapeHtml(sessionId + ' · ' + when) + '</div></div>'
-            + '<span class="history-failure-dot history-failure-toggle">Details</span>'
-            + '</summary>'
-            + '<div class="history-failure-details">'
-            + '<div class="history-failure-detail-grid">'
-            + '<div><div class="history-failure-detail-label">Kind</div><div class="history-failure-detail-value">' + escapeHtml(kind) + '</div></div>'
-            + '<div><div class="history-failure-detail-label">Category</div><div class="history-failure-detail-value">' + escapeHtml(categoryLabel(category)) + '</div></div>'
-            + '<div><div class="history-failure-detail-label">Tool / hook</div><div class="history-failure-detail-value">' + escapeHtml(tool) + '</div></div>'
-            + '<div><div class="history-failure-detail-label">Session</div><div class="history-failure-detail-value">' + escapeHtml(sessionId) + '</div></div>'
-            + '<div><div class="history-failure-detail-label">Observed</div><div class="history-failure-detail-value">' + escapeHtml(when) + '</div></div>'
-            + '<div><div class="history-failure-detail-label">Timestamp</div><div class="history-failure-detail-value">' + escapeHtml(failure.timestamp || 'unknown') + '</div></div>'
-            + '</div>'
-            + '<div>Details are limited to sanitized metadata. Raw error text, command output, tool arguments, file paths, and diffs are intentionally excluded.</div>'
-            + '</div>'
-            + '</details>';
-        }).join('') + '</div>'
-      : '<div class="history-empty">No sanitized failures are visible in the observed history window.</div>';
-    openHistoryFailureKeys.forEach(function (key) {
-      if (!visibleKeys.has(key)) openHistoryFailureKeys.delete(key);
-    });
-    return '<article class="history-card" data-history-card="failure-history">'
-      + '<div class="history-card-title"><span>Failure history</span><span>failures</span></div>'
-      + '<p class="history-card-copy">Failure rows intentionally exclude raw error details, command output, tool arguments, file paths, and diffs.</p>'
       + body
       + '</article>';
   }
@@ -3103,12 +3250,277 @@
       + '</div>';
   }
 
+  function flightLogLoadingMarkup() {
+    return '<div class="history-loading-stage" role="status" aria-live="polite">'
+      + '<div class="history-loading-dialog">'
+      + '<div class="history-loading-title">Preparing Daily Log</div>'
+      + '<div class="history-loading-copy">Building the calendar and Daily Debrief from local analytics.</div>'
+      + '<div class="history-loading-bar" aria-hidden="true"><span></span></div>'
+      + '</div>'
+      + '</div>';
+  }
+
+  function renderHistoryTabs() {
+    var isFlightLog = historyTab === 'flight-log';
+    if (historyOverviewTab) {
+      historyOverviewTab.classList.toggle('active', !isFlightLog);
+      historyOverviewTab.setAttribute('aria-selected', isFlightLog ? 'false' : 'true');
+      if (!isFlightLog) historyOverviewTab.setAttribute('aria-current', 'page');
+      else historyOverviewTab.removeAttribute('aria-current');
+    }
+    if (historyFlightLogTab) {
+      historyFlightLogTab.classList.toggle('active', isFlightLog);
+      historyFlightLogTab.setAttribute('aria-selected', isFlightLog ? 'true' : 'false');
+      if (isFlightLog) historyFlightLogTab.setAttribute('aria-current', 'page');
+      else historyFlightLogTab.removeAttribute('aria-current');
+    }
+    if (historyOverviewPanel) historyOverviewPanel.hidden = isFlightLog;
+    if (historyFlightLogPanel) historyFlightLogPanel.hidden = !isFlightLog;
+    var filter = historySessionFilterSelect && historySessionFilterSelect.closest('.history-filter');
+    if (filter) filter.hidden = isFlightLog;
+    if (historySessionFilterSelect) {
+      historySessionFilterSelect.hidden = isFlightLog;
+      historySessionFilterSelect.disabled = isFlightLog;
+    }
+    if (historyKpiSummary) historyKpiSummary.hidden = isFlightLog;
+  }
+
+  function metricByLabel(metrics, label) {
+    var row = (metrics || []).find(function (metric) { return metric.label === label; });
+    return row ? Number(row.value || 0) : 0;
+  }
+
+  function renderFlightLogSummary(day) {
+    var metrics = day.totals || [];
+    var cards = [
+      ['Sessions', metricByLabel(metrics, 'Sessions')],
+      ['Turns', metricByLabel(metrics, 'Turns')],
+      ['Input tokens', metricByLabel(metrics, 'Input tokens')],
+      ['Output tokens', metricByLabel(metrics, 'Output tokens')],
+    ];
+    return '<div class="flight-log-summary" aria-label="Daily Debrief summary">'
+      + cards.map(function (card) {
+        return '<div class="flight-log-stat"><div class="flight-log-stat-label">' + escapeHtml(card[0]) + '</div>'
+          + '<div class="flight-log-stat-value">' + escapeHtml(exactNumber(card[1])) + '</div></div>';
+      }).join('')
+      + '</div>';
+  }
+
+  function flightLogMonthOptions(selectedMonth) {
+    var labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var selected = Number(String(selectedMonth || '').slice(5, 7)) || 1;
+    return labels.map(function (label, index) {
+      var value = String(index + 1).padStart(2, '0');
+      return '<option value="' + value + '"' + (index + 1 === selected ? ' selected' : '') + '>' + label + '</option>';
+    }).join('');
+  }
+
+  function flightLogYearOptions(selectedMonth, availableYears) {
+    var todayYear = new Date().getFullYear();
+    var selectedYear = Number(String(selectedMonth || '').slice(0, 4)) || todayYear;
+    var years = (availableYears || []).map(function (year) { return Number(year); })
+      .filter(function (year) { return Number.isFinite(year); });
+    if (years.indexOf(selectedYear) < 0) years.push(selectedYear);
+    years = Array.from(new Set(years)).sort(function (a, b) { return b - a; });
+    return years.map(function (year) {
+      return '<option value="' + year + '"' + (year === selectedYear ? ' selected' : '') + '>' + year + '</option>';
+    }).join('');
+  }
+
+  function renderFlightLogYearControl(selectedMonth, availableYears) {
+    var years = (availableYears || []).map(function (year) { return Number(year); })
+      .filter(function (year) { return Number.isFinite(year); });
+    years = Array.from(new Set(years));
+    var selectedYear = Number(String(selectedMonth || '').slice(0, 4)) || new Date().getFullYear();
+    if (years.length <= 1) {
+      return '<span class="flight-log-control flight-log-year-label" data-flight-log-year-label data-year="' + escapeHtml(selectedYear) + '">' + escapeHtml(selectedYear) + '</span>';
+    }
+    return '<select class="flight-log-control flight-log-select year" data-flight-log-year-select aria-label="Jump to year">' + flightLogYearOptions(selectedMonth, years) + '</select>';
+  }
+
+  function renderFlightLogCalendar(digest) {
+    var days = digest.calendar_days || [];
+    var weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var selectedMonth = digest.month || flightLogMonth;
+    var isCurrentMonth = selectedMonth >= localDayString(new Date()).slice(0, 7);
+    return '<article class="history-card flight-log-calendar-card" data-history-card="flight-log-calendar">'
+      + '<div class="history-card-title"><span>Calendar</span><span>activity</span></div>'
+      + '<div class="flight-log-toolbar">'
+      + '<div class="flight-log-jump">'
+      + '<select class="flight-log-control flight-log-select month" data-flight-log-month-select aria-label="Jump to month">' + flightLogMonthOptions(selectedMonth) + '</select>'
+      + renderFlightLogYearControl(selectedMonth, digest.available_years)
+      + '</div>'
+      + '<div class="flight-log-nav">'
+      + '<button class="flight-log-control flight-log-button" type="button" data-flight-log-month="-1" aria-label="Previous month">Prev</button>'
+      + '<button class="flight-log-control flight-log-button" type="button" data-flight-log-month="1" aria-label="Next month"' + (isCurrentMonth ? ' disabled aria-disabled="true"' : '') + '>Next</button>'
+      + '<button class="flight-log-control flight-log-button" type="button" data-flight-log-today>Today</button>'
+      + '</div></div>'
+      + '<div class="flight-log-weekdays" aria-hidden="true">' + weekdays.map(function (day) { return '<span>' + day + '</span>'; }).join('') + '</div>'
+      + '<div class="flight-log-calendar" role="grid" aria-label="Daily Log activity calendar">'
+      + days.map(function (day) {
+        var selected = day.local_day === digest.selected_day;
+        var classes = ['flight-log-day'];
+        var enabled = day.enabled !== false && Number(day.events || 0) > 0;
+        if (!day.in_month) classes.push('outside');
+        if (enabled) classes.push('has-events');
+        else classes.push('disabled');
+        if (selected) classes.push('selected');
+        if (day.is_today) classes.push('today');
+        var labelParts = [day.local_day];
+        if (Number(day.events || 0) > 0) labelParts.push(exactNumber(day.events || 0) + ' events', exactNumber(day.sessions || 0) + ' sessions');
+        else labelParts.push('No indexed activity');
+        if (day.failures) labelParts.push(exactNumber(day.failures) + ' failures');
+        return '<button class="' + classes.join(' ') + '" type="button" role="gridcell" data-flight-log-day="' + escapeHtml(day.local_day) + '" aria-label="' + escapeHtml(labelParts.join(', ')) + '" aria-selected="' + (selected ? 'true' : 'false') + '"' + (!enabled ? ' disabled aria-disabled="true"' : '') + '>'
+          + '<div class="flight-log-day-number">' + escapeHtml(day.day_number) + '</div>'
+          + '</button>';
+      }).join('')
+      + '</div></article>';
+  }
+
+  function renderFlightLogRows(rows, empty, mapper) {
+    if (!rows || !rows.length) return '<div class="history-empty">' + escapeHtml(empty) + '</div>';
+    return rows.map(mapper).join('');
+  }
+
+  function flightLogTokenPair(item) {
+    var input = Number(item && item.input_tokens || 0);
+    var output = Number(item && item.output_tokens || 0);
+    var inputLabel = input <= 0 && output > 0 ? 'pending' : exactNumber(input);
+    return inputLabel + ' input tokens · ' + exactNumber(output) + ' output tokens';
+  }
+
+  function countLabel(count, singular, plural) {
+    var value = Number(count || 0);
+    return exactNumber(value) + ' ' + (value === 1 ? singular : plural);
+  }
+
+  function flightLogExportTitle(item) {
+    if (!item) return 'Export';
+    if (item.kind === 'daily-digest') return 'Daily Digest';
+    if (item.kind === 'resume') return 'Resume Prompt';
+    return String(item.label || 'Export').replace(/^Copy\s+/i, '');
+  }
+
+  function flightLogExportRows(body) {
+    var lines = String(body || '').split('\n').length;
+    return Math.max(4, Math.min(7, lines));
+  }
+
+  function renderFlightLogExports(exports) {
+    if (!exports || !exports.length) return '';
+    return '<div class="flight-log-export-list">'
+      + exports.map(function (item) {
+        var title = flightLogExportTitle(item);
+        var expanded = !!flightLogExpandedExports[item.kind];
+        return '<details class="flight-log-export-panel"' + (expanded ? ' open' : '') + ' data-flight-log-export-panel="' + escapeHtml(item.kind) + '">'
+          + '<summary>' + escapeHtml(title) + '</summary>'
+          + '<div class="flight-log-export-preview">'
+          + '<textarea readonly rows="' + flightLogExportRows(item.body) + '" aria-label="' + escapeHtml(title + ' preview') + '">' + escapeHtml(item.body || '') + '</textarea>'
+          + '<button class="flight-log-control flight-log-export" type="button" data-flight-log-export="' + escapeHtml(item.kind) + '" aria-label="Copy ' + escapeHtml(title) + '" title="Copy ' + escapeHtml(title) + '">⧉</button>'
+          + '</div></details>';
+      }).join('')
+      + '</div>';
+  }
+
+  function renderFlightLogDebrief(digest) {
+    var day = digest.day || defaultEngineeringDigest({ selected_day: digest.selected_day, month: digest.month }).day;
+    var exports = day.exports || [];
+    var debriefDate = day.local_day || digest.selected_day;
+    return '<article class="history-card flight-log-debrief" data-history-card="flight-log-debrief">'
+      + '<div class="history-card-title"><span>Daily Debrief - ' + escapeHtml(localDateLabel(debriefDate)) + '</span><span>selected day</span></div>'
+      + renderFlightLogSummary(day)
+      + '<section class="flight-log-section flight-log-narrative"><h3>Mission Summary</h3>' + escapeHtml(day.narrative || '') + '</section>'
+      + '<div class="flight-log-debrief-grid">'
+      + '<section class="flight-log-section"><h3>What I Worked On</h3>'
+      + renderFlightLogRows(day.repos, 'No project activity is indexed for this day.', function (repo) {
+        return '<div class="flight-log-row"><strong>' + escapeHtml(repo.repository + ' / ' + repo.branch) + '</strong>'
+          + '<span>' + escapeHtml(exactNumber(repo.events || 0) + ' events · ' + exactNumber((repo.sessions || []).length) + ' sessions · ' + exactNumber(repo.output_tokens || 0) + ' output tokens') + '</span>'
+          + (repo.sessions || []).slice(0, 3).map(function (session) { return '<span>' + escapeHtml(session.title || session.session_hash) + '</span>'; }).join('')
+          + '</div>';
+      })
+      + '<div class="flight-log-export-instruction">Expand a section to preview it before copying.</div>'
+      + renderFlightLogExports(exports)
+      + '<div class="flight-log-copy-status" aria-live="polite">' + escapeHtml(flightLogCopyStatus) + '</div></section>'
+      + '<section class="flight-log-section"><h3>Models</h3>'
+      + renderFlightLogRows(day.models, 'No model activity is indexed for this day.', function (model) {
+        return '<div class="flight-log-row"><strong>' + escapeHtml(model.label || 'Unknown') + '</strong><span>' + escapeHtml(exactNumber(model.secondary_value || 0) + ' turns · ' + exactNumber(model.value || 0) + ' output tokens') + '</span></div>';
+      }) + '</section>'
+      + '<section class="flight-log-section"><h3>Token Hotspots</h3>'
+      + renderFlightLogRows(day.token_hotspots, '', function (session) {
+        return '<div class="flight-log-row"><strong>' + escapeHtml(session.title || session.session_hash) + '</strong><span>' + escapeHtml(flightLogTokenPair(session) + ' · ' + (session.last_model || 'Unknown')) + '</span></div>';
+      }) + '</section>'
+      + '<section class="flight-log-section"><h3>Tools / MCP</h3>'
+      + renderFlightLogRows(day.tools, 'No tool activity is indexed for this day.', function (tool) {
+        return '<div class="flight-log-row"><strong>' + escapeHtml(tool.name || 'tool') + '</strong><span>' + escapeHtml(categoryLabel(tool.category || 'activity') + ' · ' + countLabel(tool.calls, 'call', 'calls') + ' · ' + countLabel(tool.failures, 'failure', 'failures') + (tool.total_duration_ms ? ' · ' + formatDuration(tool.total_duration_ms) : '')) + '</span></div>';
+      }) + '</section>'
+      + '<section class="flight-log-section"><h3>High Activity Sessions</h3>'
+      + renderFlightLogRows(day.useful_sessions, 'No high-signal sessions are indexed for this day.', function (session) {
+        return '<div class="flight-log-row"><strong>' + escapeHtml(session.title || session.session_hash) + '</strong><span>' + escapeHtml(session.repository + ' / ' + session.branch + ' · ' + countLabel(session.events, 'event', 'events') + ' · ' + countLabel(session.turns, 'turn', 'turns') + ' · ' + countLabel(session.tool_calls, 'tool call', 'tool calls') + ' · ' + flightLogTokenPair(session) + ' · ' + countLabel(session.failures, 'failure', 'failures')) + '</span></div>';
+      }) + '</section>'
+      + '</div></article>';
+  }
+
+  function renderFlightLog(force) {
+    if (!historyFlightLogContent) return;
+    if (flightLogLoading) {
+      historyFlightLogContent.innerHTML = flightLogLoadingMarkup();
+      return;
+    }
+    var digest = flightLogDigest || defaultEngineeringDigest({ selected_day: flightLogSelectedDay, month: flightLogMonth });
+    if (flightLogError) {
+      historyFlightLogContent.innerHTML = '<div class="history-empty">Daily Log could not load: ' + escapeHtml(flightLogError) + '</div>';
+      return;
+    }
+    historyFlightLogContent.innerHTML = '<section class="flight-log" aria-label="Daily Log calendar">'
+      + renderFlightLogCalendar(digest)
+      + renderFlightLogDebrief(digest)
+      + '</section>'
+      + (digest.caveats && digest.caveats.length ? '<div class="history-empty">' + escapeHtml(digest.caveats.join(' ')) + '</div>' : '');
+  }
+
+  function copyFlightLogExport(kind) {
+    var exports = flightLogDigest && flightLogDigest.day && flightLogDigest.day.exports || [];
+    var item = exports.find(function (entry) { return entry.kind === kind; });
+    if (!item) {
+      flightLogCopyStatus = 'Nothing to copy for this export.';
+      renderFlightLog(true);
+      return;
+    }
+    flightLogExpandedExports[item.kind] = true;
+    var done = function () {
+      flightLogCopyStatus = flightLogExportTitle(item) + ' copied';
+      renderFlightLog(true);
+    };
+    var fail = function (err) {
+      flightLogCopyStatus = 'Copy failed: ' + (err && err.message ? err.message : String(err || 'clipboard unavailable'));
+      renderFlightLog(true);
+    };
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(item.body).then(done).catch(fail);
+      return;
+    }
+    fail('clipboard unavailable');
+  }
+
   function renderHistory(view, force) {
     if (!historyContent) return;
+    renderHistoryTabs();
+    if (historyTab === 'flight-log') {
+      var flightFingerprint = historyFingerprint(view) + '|flight-log|' + flightLogFingerprint();
+      if (!force && flightFingerprint === liveFingerprints.history) return;
+      liveFingerprints.history = flightFingerprint;
+      if (historySubtitle) historySubtitle.textContent = 'Review each day of Copilot activity with a calendar view and daily summary.';
+      if (historyLiveStamp) historyLiveStamp.textContent = flightLogDigest && flightLogDigest.generated_at_ms ? generatedAtLabel({ generated_at_ms: flightLogDigest.generated_at_ms }) : 'Preparing Daily Log...';
+      if (!flightLogDigest || flightLogDigest.selected_day !== flightLogSelectedDay || flightLogDigest.month !== flightLogMonth) {
+        loadFlightLogDigest(false);
+      }
+      renderFlightLog(true);
+      return;
+    }
     if (!dashboardHasLoadedHistory(view) && cachedHistoryIsFresh()) {
       view = cachedHistoryDashboard;
     }
-    var fingerprint = historyFingerprint(view);
+    var fingerprint = historyFingerprint(view) + '|overview';
     if (!force && fingerprint === liveFingerprints.history) return;
     liveFingerprints.history = fingerprint;
 
@@ -3158,20 +3570,17 @@
       + '<div class="history-column history-tools-region">'
       + renderModelsCompact(history.model_mix)
       + renderTopToolsCompact(history)
-      + renderSessionDistribution(history.recent_sessions)
       + '</div>'
       + '<div class="history-column history-chart-region">'
-      + renderHistoryChart('Activity, rolling 24 hours', 'Hourly buckets across the last 24 hours in your local time zone; right edge is now.', history.activity_24h, 'history-24h', { generatedAtMs: history.generated_at_ms })
-      + renderHistoryChart('Activity, last 7 days', 'Daily activity over the last 7 days', history.activity_7d, 'history-7d')
+      + renderHistoryChart('Activity, Rolling 24 Hours', 'Hourly buckets across the last 24 hours in your local time zone; right edge is now.', history.activity_24h, 'history-24h', { generatedAtMs: history.generated_at_ms })
+      + renderHistoryChart('Activity, Last 7 Days', 'Daily activity over the last 7 days', history.activity_7d, 'history-7d')
       + '</div>'
       + '<div class="history-column history-breakdown-region">'
       + renderActivityBreakdown(history)
+      + renderHighActivitySessions(history)
       + '</div>'
       + '<div class="history-column history-column-middle history-sessions-region">'
       + renderHistorySessions(history.recent_sessions)
-      + '</div>'
-      + '<div class="history-column history-column-right history-failures-region">'
-      + renderHistoryFailures(history.recent_failures)
       + '</div>'
       + '</section>';
     refreshHistoryBarShapes(historyContent);
@@ -3422,6 +3831,82 @@
       renderHistory(lastDashboard, true);
     });
   }
+  [historyOverviewTab, historyFlightLogTab].forEach(function (tab) {
+    if (!tab) return;
+    tab.addEventListener('click', function () {
+      historyTab = tab.getAttribute('data-history-tab') || 'overview';
+      historyTab = normalizeHistoryTab(historyTab);
+      safeSet(STORAGE_KEYS.historyTab, historyTab);
+      flightLogCopyStatus = '';
+      liveFingerprints.history = '';
+      renderHistory(lastDashboard, true);
+      if (historyTab === 'flight-log') loadFlightLogDigest(false);
+    });
+  });
+  if (historyFlightLogContent) {
+    historyFlightLogContent.addEventListener('click', function (event) {
+      var target = event.target;
+      if (!target || !target.closest) return;
+      var monthButton = target.closest('[data-flight-log-month]');
+      if (monthButton) {
+        flightLogMonth = clampSelectableMonth(shiftMonth(flightLogMonth, Number(monthButton.getAttribute('data-flight-log-month') || 0)));
+        flightLogSelectedDay = lastSelectableDayForMonth(flightLogMonth);
+        flightLogCopyStatus = '';
+        flightLogExpandedExports = {};
+        liveFingerprints.history = '';
+        loadFlightLogDigest(true);
+        return;
+      }
+      var todayButton = target.closest('[data-flight-log-today]');
+      if (todayButton) {
+        flightLogSelectedDay = localDayString(new Date());
+        flightLogMonth = flightLogSelectedDay.slice(0, 7);
+        flightLogCopyStatus = '';
+        flightLogExpandedExports = {};
+        liveFingerprints.history = '';
+        loadFlightLogDigest(true);
+        return;
+      }
+      var dayButton = target.closest('[data-flight-log-day]');
+      if (dayButton) {
+        flightLogSelectedDay = dayButton.getAttribute('data-flight-log-day') || flightLogSelectedDay;
+        flightLogMonth = flightLogSelectedDay.slice(0, 7);
+        flightLogCopyStatus = '';
+        flightLogExpandedExports = {};
+        liveFingerprints.history = '';
+        loadFlightLogDigest(true);
+        return;
+      }
+      var exportButton = target.closest('[data-flight-log-export]');
+      if (exportButton) {
+        copyFlightLogExport(exportButton.getAttribute('data-flight-log-export') || '');
+        return;
+      }
+    });
+    historyFlightLogContent.addEventListener('change', function (event) {
+      var target = event.target;
+      if (!target || !target.matches) return;
+      if (!target.matches('[data-flight-log-month-select]') && !target.matches('[data-flight-log-year-select]')) return;
+      var monthSelect = historyFlightLogContent.querySelector('[data-flight-log-month-select]');
+      var yearSelect = historyFlightLogContent.querySelector('[data-flight-log-year-select]');
+      var yearLabel = historyFlightLogContent.querySelector('[data-flight-log-year-label]');
+      var month = monthSelect && monthSelect.value ? monthSelect.value : flightLogMonth.slice(5, 7);
+      var year = yearSelect && yearSelect.value ? yearSelect.value : (yearLabel && yearLabel.getAttribute('data-year')) || flightLogMonth.slice(0, 4);
+      flightLogMonth = clampSelectableMonth(year + '-' + month);
+      flightLogSelectedDay = lastSelectableDayForMonth(flightLogMonth);
+      flightLogCopyStatus = '';
+      flightLogExpandedExports = {};
+      liveFingerprints.history = '';
+      loadFlightLogDigest(true);
+    });
+    historyFlightLogContent.addEventListener('toggle', function (event) {
+      var target = event.target;
+      if (!target || !target.matches || !target.matches('[data-flight-log-export-panel]')) return;
+      var kind = target.getAttribute('data-flight-log-export-panel') || '';
+      if (!kind) return;
+      flightLogExpandedExports[kind] = !!target.open;
+    }, true);
+  }
   if (historyContent) {
     historyContent.addEventListener('pointerover', function (event) {
       updateHistoryChartReadout(event.target, event);
@@ -3441,14 +3926,6 @@
     historyContent.addEventListener('focusout', function (event) {
       hideHistoryChartReadout(event.target);
     });
-    historyContent.addEventListener('toggle', function (event) {
-      var target = event.target;
-      if (!target || !target.matches || !target.matches('.history-failure-item')) return;
-      var key = target.getAttribute('data-history-failure-key');
-      if (!key) return;
-      if (target.open) openHistoryFailureKeys.add(key);
-      else openHistoryFailureKeys.delete(key);
-    }, true);
   }
   window.addEventListener('hashchange', function () {
     applyAppRoute(routeFromHash(), { syncHash: false, focus: true });
@@ -3534,12 +4011,14 @@
 
   function applyPanelsState() {
     if (panelsBtn) {
+      var panelsAvailable = appRoute === 'mission';
       panelsBtn.innerHTML = panelsHidden ? ICON_EYE_SLASH : ICON_EYE_OPEN;
-      panelsBtn.title = panelsHidden
-        ? 'Show side panels'
-        : 'Hide side panels for focus mode';
+      panelsBtn.title = panelsAvailable
+        ? (panelsHidden ? 'Show side panels' : 'Hide side panels for focus mode')
+        : 'Panel visibility is only available on Home';
       panelsBtn.setAttribute('aria-label', panelsBtn.title);
       panelsBtn.setAttribute('aria-pressed', panelsHidden ? 'true' : 'false');
+      panelsBtn.toggleAttribute('disabled', !panelsAvailable);
     }
     if (typeof window.__cmcSetPanelsHidden === 'function') {
       window.__cmcSetPanelsHidden(panelsHidden);
@@ -3547,6 +4026,7 @@
   }
 
   function togglePanels() {
+    if (appRoute !== 'mission') return;
     panelsHidden = !panelsHidden;
     settings.setBool(STORAGE_KEYS.panelsHidden, panelsHidden);
     applyPanelsState();

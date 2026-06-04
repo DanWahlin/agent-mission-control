@@ -1,0 +1,36 @@
+.history-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.78fr) repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.history-column {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.history-tools-region {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+}
+.history-chart-region {
+  grid-column: 2 / 4;
+  grid-row: 1;
+  grid-template-columns: 1fr;
+}
+.history-breakdown-region {
+  grid-column: 2 / 4;
+  grid-row: 2;
+}
+.history-sessions-region {
+  grid-column: 2 / 4;
+  grid-row: 3;
+}
+.history-card {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  padding: 54px 16px 16px;
+  box-sizing: border-box;
+  min-width: 0;
+}

@@ -26,5 +26,6 @@ execFileSync(process.execPath, [require.resolve('typescript/bin/tsc'), '-p', 'ts
 copyFile('src/index.html', 'dist');
 copyFile('node_modules/phaser/dist/phaser.min.js', 'dist');
 
+fs.cpSync(fromRoot('src/styles'), fromRoot('dist/styles'), { recursive: true });
 fs.cpSync(fromRoot('assets'), fromRoot('dist/assets'), { recursive: true });
 copyFile('docs/img/copilot-mission-control.webp', 'dist/docs/img');

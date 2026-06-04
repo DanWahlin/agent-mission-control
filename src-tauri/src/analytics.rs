@@ -27,8 +27,8 @@ use crate::agent::{
 };
 
 const ANALYTICS_DB_FILE: &str = "analytics.sqlite3";
-const SCHEMA_VERSION: i64 = 1;
-const ROLLUP_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 2;
+const ROLLUP_VERSION: i64 = 3;
 const DEFAULT_RANGE_DAYS: u32 = 7;
 const MAX_RANGE_DAYS: u32 = 180;
 const LOCAL_HISTORY_INGEST_DAYS: u32 = 30;
@@ -76,6 +76,14 @@ pub struct AnalyticsChatRequest {
     pub prompt: String,
     #[serde(default)]
     pub range_days: Option<u32>,
+}
+
+#[derive(serde::Deserialize, Default)]
+pub struct EngineeringDigestRequest {
+    #[serde(default)]
+    pub selected_day: Option<String>,
+    #[serde(default)]
+    pub month: Option<String>,
 }
 
 #[derive(serde::Serialize, Default)]
@@ -158,6 +166,113 @@ pub struct AnalyticsUsageSummary {
     pub caveats: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comparison: Option<AnalyticsComparison>,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct EngineeringDigest {
+    pub generated_at_ms: u64,
+    pub selected_day: String,
+    pub month: String,
+    pub available_years: Vec<i32>,
+    pub calendar_days: Vec<EngineeringDigestCalendarDay>,
+    pub day: EngineeringDigestDay,
+    pub caveats: Vec<String>,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct EngineeringDigestCalendarDay {
+    pub local_day: String,
+    pub day_number: u32,
+    pub in_month: bool,
+    pub enabled: bool,
+    pub is_today: bool,
+    pub intensity: u8,
+    pub sessions: u64,
+    pub events: u64,
+    pub turns: u64,
+    pub tool_calls: u64,
+    pub failures: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub estimated_active_ms: u64,
+    pub partial: bool,
+    pub badges: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_branch: Option<String>,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct EngineeringDigestDay {
+    pub local_day: String,
+    pub totals: Vec<AnalyticsMetricValue>,
+    pub repos: Vec<EngineeringDigestRepoGroup>,
+    pub models: Vec<AnalyticsRankedItem>,
+    pub tools: Vec<EngineeringDigestTool>,
+    pub failures: Vec<EngineeringDigestFailure>,
+    pub token_hotspots: Vec<EngineeringDigestSession>,
+    pub useful_sessions: Vec<EngineeringDigestSession>,
+    pub narrative: String,
+    pub exports: Vec<EngineeringDigestExport>,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct EngineeringDigestRepoGroup {
+    pub repository: String,
+    pub branch: String,
+    pub sessions: Vec<EngineeringDigestSession>,
+    pub events: u64,
+    pub failures: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub first_seen_ms: u64,
+    pub last_seen_ms: u64,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct EngineeringDigestSession {
+    pub session_hash: String,
+    pub title: String,
+    pub repository: String,
+    pub branch: String,
+    pub status: String,
+    pub is_active: bool,
+    pub events: u64,
+    pub failures: u64,
+    pub turns: u64,
+    pub tool_calls: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub last_model: String,
+    pub first_seen_ms: u64,
+    pub last_seen_ms: u64,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct EngineeringDigestTool {
+    pub name: String,
+    pub category: String,
+    pub calls: u64,
+    pub successes: u64,
+    pub failures: u64,
+    pub total_duration_ms: u64,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct EngineeringDigestFailure {
+    pub kind: String,
+    pub tool: String,
+    pub category: String,
+    pub count: u64,
+    pub last_seen_ms: u64,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct EngineeringDigestExport {
+    pub kind: String,
+    pub label: String,
+    pub body: String,
 }
 
 #[derive(serde::Serialize, Default, Clone)]
@@ -301,6 +416,16 @@ pub fn analytics_usage_summary(
         normalize_range_days(request.range_days),
         request.compare_previous,
     )
+}
+
+pub fn engineering_digest(
+    app: &AppHandle,
+    request: EngineeringDigestRequest,
+) -> Result<EngineeringDigest, String> {
+    ensure_recent_ingestion(app)?;
+    let mut conn = open_connection(app)?;
+    ensure_schema(app, &mut conn)?;
+    engineering_digest_from_db(&conn, request)
 }
 
 pub fn analytics_recommendation_facts(
@@ -1001,6 +1126,15 @@ fn ensure_schema(app: &AppHandle, conn: &mut Connection) -> Result<(), String> {
     if schema_ready_for(&db_path) {
         return Ok(());
     }
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS analytics_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        [],
+    )
+    .map_err(|err| err.to_string())?;
+    let current_schema = db_schema_version(conn)?;
+    if current_schema != SCHEMA_VERSION {
+        rebuild_analytics_schema(conn)?;
+    }
     let tx = conn.transaction().map_err(|err| err.to_string())?;
     tx.execute_batch(
         r#"
@@ -1021,6 +1155,9 @@ fn ensure_schema(app: &AppHandle, conn: &mut Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS sessions (
             provider TEXT NOT NULL,
             session_id_hash TEXT NOT NULL,
+            repository TEXT NOT NULL DEFAULT '',
+            branch TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
             first_seen_ms INTEGER NOT NULL,
             last_seen_ms INTEGER NOT NULL,
             status TEXT NOT NULL,
@@ -1161,6 +1298,36 @@ fn ensure_schema(app: &AppHandle, conn: &mut Connection) -> Result<(), String> {
     tx.commit().map_err(|err| err.to_string())?;
     mark_schema_ready(db_path);
     Ok(())
+}
+
+fn db_schema_version(conn: &Connection) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT value FROM analytics_meta WHERE key = 'schema_version'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|err| err.to_string())
+    .map(|value| value.and_then(|raw| raw.parse::<i64>().ok()).unwrap_or(0))
+}
+
+fn rebuild_analytics_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        DROP TABLE IF EXISTS analytics_meta;
+        DROP TABLE IF EXISTS ingestion_cursors;
+        DROP TABLE IF EXISTS sessions;
+        DROP TABLE IF EXISTS daily_rollups;
+        DROP TABLE IF EXISTS model_rollups;
+        DROP TABLE IF EXISTS category_rollups;
+        DROP TABLE IF EXISTS tool_rollups;
+        DROP TABLE IF EXISTS failure_rollups;
+        DROP TABLE IF EXISTS recent_event_facts;
+        DROP TABLE IF EXISTS ingested_event_keys;
+        DROP TABLE IF EXISTS ingestion_audit;
+        "#,
+    )
+    .map_err(|err| err.to_string())
 }
 
 fn ensure_recent_ingestion(app: &AppHandle) -> Result<(), String> {
@@ -1314,9 +1481,11 @@ fn ingest_local_copilot_history(conn: &mut Connection) -> Result<bool, String> {
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("session");
+        let metadata = read_local_session_metadata(&session_dir);
         parse_local_events_file(
             &events_path,
             session_id,
+            metadata,
             since_ms,
             now,
             &mut rollups,
@@ -1385,6 +1554,9 @@ struct LocalHistoryRollups {
 struct AnalyticsSessionRow {
     provider: String,
     session_id_hash: String,
+    repository: String,
+    branch: String,
+    title: String,
     first_seen_ms: u64,
     last_seen_ms: u64,
     status: String,
@@ -1417,6 +1589,9 @@ struct AnalyticsEventFact {
 #[derive(Default)]
 struct LocalSessionBuilder {
     session_hash: String,
+    repository: String,
+    branch: String,
+    title: String,
     first_seen_ms: u64,
     last_seen_ms: u64,
     event_count: u64,
@@ -1443,9 +1618,64 @@ struct PendingLocalTool {
     started_at_ms: u64,
 }
 
+#[derive(Default)]
+struct LocalSessionMetadata {
+    repository: String,
+    branch: String,
+    title: String,
+}
+
+fn read_local_session_metadata(session_dir: &Path) -> LocalSessionMetadata {
+    let mut values = BTreeMap::<String, String>::new();
+    let workspace_path = session_dir.join("workspace.yaml");
+    if let Ok(content) = fs::read_to_string(workspace_path) {
+        for line in content.lines() {
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            let key = key.trim();
+            if !matches!(
+                key,
+                "repository" | "branch" | "name" | "summary" | "git_root"
+            ) {
+                continue;
+            }
+            values.insert(
+                key.to_string(),
+                value
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_string(),
+            );
+        }
+    }
+    let repository = values
+        .get("repository")
+        .or_else(|| values.get("git_root"))
+        .map(|value| sanitize_repository_label(value))
+        .unwrap_or_else(|| "Unknown".to_string());
+    let branch = values
+        .get("branch")
+        .map(|value| sanitize_branch_label(value))
+        .unwrap_or_else(|| "unknown".to_string());
+    let title = values
+        .get("name")
+        .or_else(|| values.get("summary"))
+        .map(|value| sanitize_title_label(value))
+        .filter(|value| value != "Untitled")
+        .unwrap_or_else(|| format!("{} {}", repository, branch));
+    LocalSessionMetadata {
+        repository,
+        branch,
+        title,
+    }
+}
+
 fn parse_local_events_file(
     path: &Path,
     session_id: &str,
+    metadata: LocalSessionMetadata,
     since_ms: u64,
     now: u64,
     rollups: &mut LocalHistoryRollups,
@@ -1460,6 +1690,9 @@ fn parse_local_events_file(
     let session_hash = hash_with_provider(&provider, session_id);
     let mut session = LocalSessionBuilder {
         session_hash: session_hash.clone(),
+        repository: metadata.repository,
+        branch: metadata.branch,
+        title: metadata.title,
         last_status: "completed".to_string(),
         ..Default::default()
     };
@@ -1539,6 +1772,9 @@ fn parse_local_events_file(
     rollups.sessions.push(AnalyticsSessionRow {
         provider,
         session_id_hash: session_hash,
+        repository: session.repository,
+        branch: session.branch,
+        title: session.title,
         first_seen_ms: session.first_seen_ms,
         last_seen_ms: session.last_seen_ms,
         status: session.last_status,
@@ -2051,14 +2287,18 @@ fn write_local_sessions(
         conn.execute(
             r#"
             INSERT OR REPLACE INTO sessions (
-                provider, session_id_hash, first_seen_ms, last_seen_ms, status, is_active,
+                provider, session_id_hash, repository, branch, title,
+                first_seen_ms, last_seen_ms, status, is_active,
                 event_count, tool_count, turn_count, input_tokens, output_tokens,
                 input_tokens_known, output_tokens_known, token_data_partial, last_model
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
             "#,
             params![
                 session.provider,
                 session.session_id_hash,
+                session.repository,
+                session.branch,
+                session.title,
                 session.first_seen_ms as i64,
                 session.last_seen_ms as i64,
                 session.status,
@@ -2188,14 +2428,18 @@ fn ingest_session(
     conn.execute(
         r#"
         INSERT OR REPLACE INTO sessions (
-            provider, session_id_hash, first_seen_ms, last_seen_ms, status, is_active,
+            provider, session_id_hash, repository, branch, title,
+            first_seen_ms, last_seen_ms, status, is_active,
             event_count, tool_count, turn_count, input_tokens, output_tokens,
             input_tokens_known, output_tokens_known, token_data_partial, last_model
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, ?14)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, ?16, ?17)
         "#,
         params![
             provider,
             session_hash,
+            sanitize_repository_label(&session.repository),
+            sanitize_branch_label(&session.branch),
+            sanitize_title_label(&session.title),
             event_ms as i64,
             event_ms as i64,
             safe_label(&session.status, "unknown"),
@@ -2635,7 +2879,7 @@ fn status_from_db(app: &AppHandle, conn: &Connection) -> Result<AnalyticsStatus,
         retention_recent_days: RECENT_FACT_RETENTION_DAYS,
         retention_rollup_days: ROLLUP_RETENTION_DAYS,
         snapshot_limited,
-        privacy_summary: "Analytics is indexed from local Copilot CLI session history and stores derived counts, hashed session ids, models, tool/category names, token totals, and coverage caveats.".to_string(),
+        privacy_summary: "Analytics is indexed from local Copilot CLI session history and stores derived counts, hashed session ids, sanitized repo/branch/title labels, models, tool/category names, token totals, and coverage caveats.".to_string(),
         warnings,
     })
 }
@@ -2699,6 +2943,724 @@ fn usage_summary_from_db(
         caveats,
         comparison,
     })
+}
+
+fn engineering_digest_from_db(
+    conn: &Connection,
+    request: EngineeringDigestRequest,
+) -> Result<EngineeringDigest, String> {
+    let generated_at_ms = unix_ms_now();
+    let today = local_day(generated_at_ms);
+    let selected_day = normalize_selected_day(request.selected_day.as_deref(), &today);
+    let month = normalize_digest_month(request.month.as_deref(), &selected_day);
+    let grid = rolling_calendar_days(&selected_day, &month);
+    let first_day = grid
+        .first()
+        .map(|day| day.local_day.clone())
+        .unwrap_or_else(|| selected_day.clone());
+    let after_last_day = grid
+        .last()
+        .map(|day| local_day_shift(&day.local_day, 1))
+        .unwrap_or_else(|| local_day_shift(&selected_day, 1));
+    let daily_points = daily_points_window(conn, &first_day, Some(&after_last_day))?;
+    let daily_by_day = daily_points
+        .into_iter()
+        .map(|point| (point.local_day.clone(), point))
+        .collect::<BTreeMap<_, _>>();
+    let dominant_by_day = dominant_session_labels(conn, &first_day, &after_last_day)?;
+    let max_events = daily_by_day
+        .values()
+        .map(|point| point.events)
+        .max()
+        .unwrap_or(0);
+    let max_tokens = daily_by_day
+        .values()
+        .map(|point| point.input_tokens.saturating_add(point.output_tokens))
+        .max()
+        .unwrap_or(0);
+    let mcp_by_day = category_calls_by_day(conn, &first_day, &after_last_day, "mcp")?;
+    let mut available_years = available_digest_years(conn)?;
+    if available_years.is_empty() {
+        available_years.push(
+            selected_day
+                .chars()
+                .take(4)
+                .collect::<String>()
+                .parse::<i32>()
+                .unwrap_or_else(|_| Local::now().year()),
+        );
+    }
+    let calendar_days = grid
+        .into_iter()
+        .map(|slot| {
+            let point = daily_by_day.get(&slot.local_day);
+            let events = point.map(|p| p.events).unwrap_or(0);
+            let tokens = point
+                .map(|p| p.input_tokens.saturating_add(p.output_tokens))
+                .unwrap_or(0);
+            let failures = point.map(|p| p.failures).unwrap_or(0);
+            let mcp_calls = *mcp_by_day.get(&slot.local_day).unwrap_or(&0);
+            let mut badges = Vec::new();
+            if failures > 0 {
+                badges.push("Failure".to_string());
+            }
+            if max_tokens > 0 && tokens >= ((max_tokens as f64) * 0.75).ceil() as u64 {
+                badges.push("Token spike".to_string());
+            }
+            if mcp_calls >= 3 {
+                badges.push("MCP".to_string());
+            }
+            if point.map(|p| p.sessions).unwrap_or(0) > 0 {
+                badges.push("Active".to_string());
+            }
+            let dominant = dominant_by_day.get(&slot.local_day);
+            EngineeringDigestCalendarDay {
+                local_day: slot.local_day.clone(),
+                day_number: slot.day_number,
+                in_month: slot.in_month,
+                enabled: events > 0,
+                is_today: slot.local_day == today,
+                intensity: heatmap_intensity(events, max_events),
+                sessions: point.map(|p| p.sessions).unwrap_or(0),
+                events,
+                turns: point.map(|p| p.turns).unwrap_or(0),
+                tool_calls: point.map(|p| p.tool_calls).unwrap_or(0),
+                failures,
+                input_tokens: point.map(|p| p.input_tokens).unwrap_or(0),
+                output_tokens: point.map(|p| p.output_tokens).unwrap_or(0),
+                estimated_active_ms: point.map(|p| p.estimated_active_ms).unwrap_or(0),
+                partial: point.map(|p| p.partial).unwrap_or(false),
+                badges,
+                dominant_repo: dominant.map(|item| item.0.clone()),
+                dominant_branch: dominant.map(|item| item.1.clone()),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let day = engineering_digest_day(conn, &selected_day)?;
+    let snapshot_limited = latest_audit_code(conn)?
+        .map(|code| code == "SNAPSHOT_LIMITED")
+        .unwrap_or(false);
+    let mut caveats = vec![format!(
+        "Daily Log uses indexed local analytics for the most recent {} days.",
+        LOCAL_HISTORY_INGEST_DAYS
+    )];
+    if snapshot_limited {
+        caveats.push(
+            "Current analytics are snapshot-limited until local history indexing completes."
+                .to_string(),
+        );
+    }
+    if day.totals.iter().any(|metric| metric.partial) {
+        caveats.push("Some token totals are partial because input usage can arrive after output usage in live sessions.".to_string());
+    }
+
+    Ok(EngineeringDigest {
+        generated_at_ms,
+        selected_day,
+        month,
+        available_years,
+        calendar_days,
+        day,
+        caveats,
+    })
+}
+
+#[derive(Clone)]
+struct MonthGridSlot {
+    local_day: String,
+    day_number: u32,
+    in_month: bool,
+}
+
+fn normalize_selected_day(value: Option<&str>, fallback: &str) -> String {
+    let fallback_date = NaiveDate::parse_from_str(fallback, "%Y-%m-%d")
+        .unwrap_or_else(|_| Local::now().date_naive());
+    let requested = value
+        .and_then(|day| NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+        .unwrap_or(fallback_date);
+    let selected = requested.min(fallback_date);
+    format!(
+        "{:04}-{:02}-{:02}",
+        selected.year(),
+        selected.month(),
+        selected.day()
+    )
+}
+
+fn normalize_digest_month(value: Option<&str>, selected_day: &str) -> String {
+    let selected_month: String = selected_day.chars().take(7).collect();
+    if let Some(month) = value {
+        if month.len() == 7
+            && NaiveDate::parse_from_str(&format!("{}-01", month), "%Y-%m-%d").is_ok()
+        {
+            return month.min(selected_month.as_str()).to_string();
+        }
+    }
+    selected_month
+}
+
+fn rolling_calendar_days(selected_day: &str, month: &str) -> Vec<MonthGridSlot> {
+    let selected = NaiveDate::parse_from_str(selected_day, "%Y-%m-%d")
+        .unwrap_or_else(|_| Local::now().date_naive());
+    let visible_week_start = selected
+        .checked_sub_signed(chrono::Duration::days(
+            selected.weekday().num_days_from_sunday() as i64,
+        ))
+        .unwrap_or(selected);
+    let grid_start = visible_week_start
+        .checked_sub_signed(chrono::Duration::days(28))
+        .unwrap_or(visible_week_start);
+    let grid_end = visible_week_start
+        .checked_add_signed(chrono::Duration::days(6))
+        .unwrap_or(selected);
+    let total_days = (grid_end - grid_start).num_days().max(0) + 1;
+    (0..total_days)
+        .filter_map(|offset| grid_start.checked_add_signed(chrono::Duration::days(offset)))
+        .map(|day| MonthGridSlot {
+            local_day: format!("{:04}-{:02}-{:02}", day.year(), day.month(), day.day()),
+            day_number: day.day(),
+            in_month: format!("{:04}-{:02}", day.year(), day.month()) == month,
+        })
+        .collect()
+}
+
+fn heatmap_intensity(events: u64, max_events: u64) -> u8 {
+    if events == 0 || max_events == 0 {
+        return 0;
+    }
+    let pct = events as f64 / max_events as f64;
+    if pct >= 0.75 {
+        4
+    } else if pct >= 0.5 {
+        3
+    } else if pct >= 0.25 {
+        2
+    } else {
+        1
+    }
+}
+
+fn engineering_digest_day(
+    conn: &Connection,
+    selected_day: &str,
+) -> Result<EngineeringDigestDay, String> {
+    let daily = daily_points_window(conn, selected_day, Some(&local_day_shift(selected_day, 1)))?;
+    let totals = summary_metrics(&daily);
+    let sessions = digest_sessions_for_day(conn, selected_day)?;
+    let repos = group_digest_sessions(&sessions);
+    let models = model_mix_for_day(conn, selected_day)?;
+    let tools = tools_for_day(conn, selected_day)?;
+    let failures = failures_for_day(conn, selected_day)?;
+    let mut token_hotspots = sessions.clone();
+    token_hotspots.sort_by(|a, b| {
+        b.output_tokens
+            .cmp(&a.output_tokens)
+            .then_with(|| b.input_tokens.cmp(&a.input_tokens))
+    });
+    token_hotspots.truncate(6);
+    let mut useful_sessions = sessions.clone();
+    useful_sessions.sort_by(|a, b| {
+        b.turns
+            .cmp(&a.turns)
+            .then_with(|| b.tool_calls.cmp(&a.tool_calls))
+            .then_with(|| b.events.cmp(&a.events))
+            .then_with(|| b.output_tokens.cmp(&a.output_tokens))
+            .then_with(|| b.last_seen_ms.cmp(&a.last_seen_ms))
+    });
+    useful_sessions.truncate(6);
+    let narrative = digest_narrative(selected_day, &totals, &repos, &models, &tools, &failures);
+    let exports = digest_exports(
+        selected_day,
+        &narrative,
+        &totals,
+        &repos,
+        &models,
+        &tools,
+        &failures,
+    );
+    Ok(EngineeringDigestDay {
+        local_day: selected_day.to_string(),
+        totals,
+        repos,
+        models,
+        tools,
+        failures,
+        token_hotspots,
+        useful_sessions,
+        narrative,
+        exports,
+    })
+}
+
+fn dominant_session_labels(
+    conn: &Connection,
+    first_day: &str,
+    after_last_day: &str,
+) -> Result<BTreeMap<String, (String, String)>, String> {
+    let (start_ms, _, _) = local_day_bounds(first_day);
+    let (end_ms, _, _) = local_day_bounds(after_last_day);
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT s.repository, s.branch, f.occurred_at_ms, COUNT(*)
+            FROM recent_event_facts f
+            JOIN sessions s
+              ON s.provider = f.provider AND s.session_id_hash = f.session_id_hash
+            WHERE f.occurred_at_ms >= ?1 AND f.occurred_at_ms < ?2
+            GROUP BY s.repository, s.branch, f.session_id_hash, f.occurred_at_ms / 86400000
+            "#,
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![start_ms as i64, end_ms as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?.max(0) as u64,
+                row.get::<_, i64>(3)?.max(0) as u64,
+            ))
+        })
+        .map_err(|err| err.to_string())?;
+    let mut winners = BTreeMap::<String, (String, String, u64)>::new();
+    for row in rows {
+        let (repo, branch, occurred_at_ms, events) = row.map_err(|err| err.to_string())?;
+        let day = local_day(occurred_at_ms);
+        let entry = winners
+            .entry(day)
+            .or_insert_with(|| (repo.clone(), branch.clone(), 0));
+        if events > entry.2 {
+            *entry = (repo, branch, events);
+        }
+    }
+    Ok(winners
+        .into_iter()
+        .map(|(day, (repo, branch, _))| (day, (repo, branch)))
+        .collect())
+}
+
+fn category_calls_by_day(
+    conn: &Connection,
+    first_day: &str,
+    after_last_day: &str,
+    category: &str,
+) -> Result<BTreeMap<String, u64>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT local_day, SUM(tool_call_count)
+            FROM category_rollups
+            WHERE local_day >= ?1 AND local_day < ?2 AND category = ?3
+            GROUP BY local_day
+            "#,
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![first_day, after_last_day, category], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?.max(0) as u64,
+            ))
+        })
+        .map_err(|err| err.to_string())?;
+    rows.collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(|err| err.to_string())
+}
+
+fn available_digest_years(conn: &Connection) -> Result<Vec<i32>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT DISTINCT CAST(substr(local_day, 1, 4) AS INTEGER)
+            FROM daily_rollups
+            WHERE event_count > 0
+               OR session_count > 0
+               OR turn_count > 0
+               OR tool_call_count > 0
+               OR failure_count > 0
+            ORDER BY 1 DESC
+            "#,
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, i32>(0))
+        .map_err(|err| err.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+
+fn digest_sessions_for_day(
+    conn: &Connection,
+    selected_day: &str,
+) -> Result<Vec<EngineeringDigestSession>, String> {
+    let (start_ms, end_ms, _) = local_day_bounds(selected_day);
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT s.session_id_hash,
+                   s.title,
+                   s.repository,
+                   s.branch,
+                   s.status,
+                   s.is_active,
+                   COALESCE(MIN(f.occurred_at_ms), s.first_seen_ms),
+                   COALESCE(MAX(f.occurred_at_ms), s.last_seen_ms),
+                   COALESCE(COUNT(f.id), 0),
+                   COALESCE(SUM(CASE WHEN f.success = 0 THEN 1 ELSE 0 END), 0),
+                   CASE
+                     WHEN COUNT(f.id) > 0 THEN COALESCE(SUM(CASE WHEN f.kind LIKE '%turn%' THEN 1 ELSE 0 END), 0)
+                     ELSE s.turn_count
+                   END,
+                   CASE
+                     WHEN COUNT(f.id) > 0 THEN COALESCE(SUM(CASE WHEN f.kind LIKE 'tool.%' OR f.kind LIKE 'hook.%' THEN 1 ELSE 0 END), 0)
+                     ELSE s.tool_count
+                   END,
+                   COALESCE(MAX(f.input_tokens), 0),
+                   COALESCE(MAX(f.output_tokens), 0),
+                   COALESCE((
+                     SELECT MAX(p.input_tokens)
+                     FROM recent_event_facts p
+                     WHERE p.provider = s.provider
+                       AND p.session_id_hash = s.session_id_hash
+                       AND p.occurred_at_ms < ?1
+                       AND p.input_tokens IS NOT NULL
+                   ), 0),
+                   COALESCE((
+                     SELECT MAX(p.output_tokens)
+                     FROM recent_event_facts p
+                     WHERE p.provider = s.provider
+                       AND p.session_id_hash = s.session_id_hash
+                       AND p.occurred_at_ms < ?1
+                       AND p.output_tokens IS NOT NULL
+                   ), 0),
+                   s.input_tokens,
+                   s.output_tokens,
+                   s.last_model
+            FROM sessions s
+            LEFT JOIN recent_event_facts f
+              ON f.provider = s.provider
+             AND f.session_id_hash = s.session_id_hash
+             AND f.occurred_at_ms >= ?1
+             AND f.occurred_at_ms < ?2
+            WHERE (f.id IS NOT NULL)
+               OR (s.last_seen_ms >= ?1 AND s.last_seen_ms < ?2)
+            GROUP BY s.provider, s.session_id_hash
+            ORDER BY COALESCE(MAX(f.occurred_at_ms), s.last_seen_ms) DESC
+            LIMIT 24
+            "#,
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![start_ms as i64, end_ms as i64], |row| {
+            let session_hash: String = row.get(0)?;
+            Ok(EngineeringDigestSession {
+                session_hash: session_hash.chars().take(8).collect(),
+                title: row.get::<_, String>(1)?,
+                repository: row.get::<_, String>(2)?,
+                branch: row.get::<_, String>(3)?,
+                status: row.get::<_, String>(4)?,
+                is_active: row.get::<_, i64>(5)? > 0,
+                first_seen_ms: row.get::<_, i64>(6)?.max(0) as u64,
+                last_seen_ms: row.get::<_, i64>(7)?.max(0) as u64,
+                events: row.get::<_, i64>(8)?.max(0) as u64,
+                failures: row.get::<_, i64>(9)?.max(0) as u64,
+                turns: row.get::<_, i64>(10)?.max(0) as u64,
+                tool_calls: row.get::<_, i64>(11)?.max(0) as u64,
+                input_tokens: token_delta_for_day(
+                    row.get::<_, i64>(8)?.max(0) as u64,
+                    row.get::<_, i64>(12)?.max(0) as u64,
+                    row.get::<_, i64>(14)?.max(0) as u64,
+                    row.get::<_, i64>(16)?.max(0) as u64,
+                ),
+                output_tokens: token_delta_for_day(
+                    row.get::<_, i64>(8)?.max(0) as u64,
+                    row.get::<_, i64>(13)?.max(0) as u64,
+                    row.get::<_, i64>(15)?.max(0) as u64,
+                    row.get::<_, i64>(17)?.max(0) as u64,
+                ),
+                last_model: row.get::<_, String>(18)?,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+
+fn group_digest_sessions(sessions: &[EngineeringDigestSession]) -> Vec<EngineeringDigestRepoGroup> {
+    let mut groups = BTreeMap::<(String, String), EngineeringDigestRepoGroup>::new();
+    for session in sessions {
+        let key = (session.repository.clone(), session.branch.clone());
+        let entry = groups
+            .entry(key)
+            .or_insert_with(|| EngineeringDigestRepoGroup {
+                repository: session.repository.clone(),
+                branch: session.branch.clone(),
+                first_seen_ms: session.first_seen_ms,
+                last_seen_ms: session.last_seen_ms,
+                ..Default::default()
+            });
+        entry.events += session.events;
+        entry.failures += session.failures;
+        entry.input_tokens += session.input_tokens;
+        entry.output_tokens += session.output_tokens;
+        entry.first_seen_ms = if entry.first_seen_ms == 0 {
+            session.first_seen_ms
+        } else {
+            entry.first_seen_ms.min(session.first_seen_ms)
+        };
+        entry.last_seen_ms = entry.last_seen_ms.max(session.last_seen_ms);
+        entry.sessions.push(session.clone());
+    }
+    let mut values = groups.into_values().collect::<Vec<_>>();
+    values.sort_by(|a, b| {
+        b.events
+            .cmp(&a.events)
+            .then_with(|| b.output_tokens.cmp(&a.output_tokens))
+            .then_with(|| a.repository.cmp(&b.repository))
+    });
+    values
+}
+
+fn model_mix_for_day(
+    conn: &Connection,
+    selected_day: &str,
+) -> Result<Vec<AnalyticsRankedItem>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT model, SUM(output_tokens), SUM(turn_count), SUM(input_tokens), MAX(token_data_partial)
+            FROM model_rollups
+            WHERE local_day = ?1
+              AND model != 'Unknown'
+              AND (turn_count > 0 OR output_tokens > 0 OR input_tokens > 0)
+            GROUP BY model
+            ORDER BY SUM(turn_count) DESC, SUM(output_tokens) DESC
+            LIMIT 8
+            "#,
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![selected_day], |row| {
+            Ok(AnalyticsRankedItem {
+                label: row.get(0)?,
+                category: "model".to_string(),
+                value: row.get::<_, i64>(1)?.max(0) as u64,
+                secondary_value: row.get::<_, i64>(2)?.max(0) as u64,
+                tertiary_value: row.get::<_, i64>(3)?.max(0) as u64,
+                partial: row.get::<_, i64>(4)? > 0,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+
+fn tools_for_day(
+    conn: &Connection,
+    selected_day: &str,
+) -> Result<Vec<EngineeringDigestTool>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT tool_name, tool_category, SUM(call_count), SUM(success_count), SUM(failure_count), SUM(total_duration_ms)
+            FROM tool_rollups
+            WHERE local_day = ?1
+            GROUP BY tool_name, tool_category
+            ORDER BY SUM(call_count) DESC, SUM(failure_count) DESC
+            LIMIT 10
+            "#,
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![selected_day], |row| {
+            Ok(EngineeringDigestTool {
+                name: row.get(0)?,
+                category: row.get(1)?,
+                calls: row.get::<_, i64>(2)?.max(0) as u64,
+                successes: row.get::<_, i64>(3)?.max(0) as u64,
+                failures: row.get::<_, i64>(4)?.max(0) as u64,
+                total_duration_ms: row.get::<_, i64>(5)?.max(0) as u64,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+
+fn failures_for_day(
+    conn: &Connection,
+    selected_day: &str,
+) -> Result<Vec<EngineeringDigestFailure>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT kind, tool, category, SUM(count), MAX(last_seen_ms)
+            FROM failure_rollups
+            WHERE local_day = ?1
+            GROUP BY kind, tool, category
+            ORDER BY SUM(count) DESC, MAX(last_seen_ms) DESC
+            LIMIT 10
+            "#,
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![selected_day], |row| {
+            Ok(EngineeringDigestFailure {
+                kind: row.get(0)?,
+                tool: row.get(1)?,
+                category: row.get(2)?,
+                count: row.get::<_, i64>(3)?.max(0) as u64,
+                last_seen_ms: row.get::<_, i64>(4)?.max(0) as u64,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+
+fn token_delta_for_day(
+    event_count: u64,
+    max_within_day: u64,
+    max_before_day: u64,
+    fallback: u64,
+) -> u64 {
+    if event_count == 0 {
+        return fallback;
+    }
+    max_within_day.saturating_sub(max_before_day)
+}
+
+fn digest_narrative(
+    selected_day: &str,
+    totals: &[AnalyticsMetricValue],
+    repos: &[EngineeringDigestRepoGroup],
+    models: &[AnalyticsRankedItem],
+    tools: &[EngineeringDigestTool],
+    _failures: &[EngineeringDigestFailure],
+) -> String {
+    let sessions = metric_value(totals, "Sessions");
+    if sessions == 0 {
+        return format!(
+            "No indexed Copilot CLI activity is available for {}.",
+            selected_day
+        );
+    }
+    let top_repo = repos
+        .first()
+        .map(|repo| format!("{} on {}", repo.repository, repo.branch))
+        .unwrap_or_else(|| "local projects".to_string());
+    let top_model = models
+        .first()
+        .map(|model| model.label.clone())
+        .unwrap_or_else(|| "Unknown model".to_string());
+    let top_tool = tools
+        .first()
+        .map(|tool| tool.name.clone())
+        .unwrap_or_else(|| "tools".to_string());
+    format!(
+        "On {}, you worked mostly in {}, across {} session{}. {} handled most observed model activity, and {} was the busiest tool.",
+        selected_day,
+        top_repo,
+        sessions,
+        plural(sessions),
+        top_model,
+        top_tool
+    )
+}
+
+fn digest_token_pair(input_tokens: u64, output_tokens: u64) -> String {
+    let input_label = if input_tokens == 0 && output_tokens > 0 {
+        "pending input tokens".to_string()
+    } else {
+        format!("{} input tokens", input_tokens)
+    };
+    format!("{} / {} output tokens", input_label, output_tokens)
+}
+
+fn digest_exports(
+    selected_day: &str,
+    narrative: &str,
+    totals: &[AnalyticsMetricValue],
+    repos: &[EngineeringDigestRepoGroup],
+    models: &[AnalyticsRankedItem],
+    tools: &[EngineeringDigestTool],
+    failures: &[EngineeringDigestFailure],
+) -> Vec<EngineeringDigestExport> {
+    let sessions = metric_value(totals, "Sessions");
+    let turns = metric_value(totals, "Turns");
+    let output_tokens = metric_value(totals, "Output tokens");
+    let repo_line = repos
+        .iter()
+        .take(3)
+        .map(|repo| format!("{} ({})", repo.repository, repo.branch))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let model_line = models
+        .iter()
+        .take(3)
+        .map(|model| {
+            format!(
+                "{} ({})",
+                model.label,
+                digest_token_pair(model.tertiary_value, model.value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let tool_line = tools
+        .iter()
+        .take(5)
+        .map(|tool| format!("{} ({})", tool.name, tool.calls))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let failure_line = if failures.is_empty() {
+        "No repeated failure pattern stood out.".to_string()
+    } else {
+        failures
+            .iter()
+            .take(3)
+            .map(|failure| {
+                format!(
+                    "{} / {}: {}",
+                    category_label(&failure.category),
+                    failure.tool,
+                    failure.count
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let daily_digest = format!(
+        "## Daily Digest - {}\n\n{}\n\n### Scope\n{}\n\n### AI usage\n{} session{}, {} turn{}, {} output tokens.\n\n### Models\n{}\n\n### Tools\n{}",
+        selected_day,
+        narrative,
+        if repo_line.is_empty() { "No indexed project activity." } else { &repo_line },
+        sessions,
+        plural(sessions),
+        turns,
+        plural(turns),
+        output_tokens,
+        if model_line.is_empty() { "No model activity indexed." } else { &model_line },
+        if tool_line.is_empty() { "No tool activity indexed." } else { &tool_line }
+    );
+    let resume = format!(
+        "Use the Mission Control Daily Log for {} as context. Continue from this summary: {} Focus first on: {}",
+        selected_day,
+        narrative,
+        failure_line
+    );
+    vec![
+        EngineeringDigestExport {
+            kind: "daily-digest".to_string(),
+            label: "Copy Daily Digest".to_string(),
+            body: daily_digest,
+        },
+        EngineeringDigestExport {
+            kind: "resume".to_string(),
+            label: "Copy resume prompt".to_string(),
+            body: resume,
+        },
+    ]
 }
 
 fn chat_response_from_summary(
@@ -4811,6 +5773,43 @@ fn safe_label(value: &str, fallback: &str) -> String {
         .collect::<String>()
 }
 
+fn sanitize_repository_label(value: &str) -> String {
+    let normalized = value.trim().replace('\\', "/");
+    let trimmed = normalized.trim_end_matches('/');
+    let candidate = trimmed
+        .rsplit('/')
+        .find(|segment| !segment.trim().is_empty())
+        .unwrap_or(trimmed);
+    safe_label(candidate, "Unknown")
+}
+
+fn sanitize_branch_label(value: &str) -> String {
+    let trimmed = value
+        .trim()
+        .strip_prefix("refs/heads/")
+        .unwrap_or(value.trim());
+    safe_label(trimmed, "unknown")
+}
+
+fn sanitize_title_label(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "Untitled".to_string();
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("~/") {
+        return "Untitled".to_string();
+    }
+    trimmed
+        .chars()
+        .filter(|ch| {
+            ch.is_ascii_alphanumeric() || *ch == ' ' || matches!(*ch, '.' | '_' | '-' | ':' | '#')
+        })
+        .take(96)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 fn local_copilot_history_root() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -5244,6 +6243,11 @@ mod tests {
         parse_local_events_file(
             &path,
             "session-a",
+            LocalSessionMetadata {
+                repository: "copilot-mission-control".to_string(),
+                branch: "main".to_string(),
+                title: "Build Daily Log".to_string(),
+            },
             0,
             unix_ms_now(),
             &mut rollups,
@@ -5372,6 +6376,235 @@ mod tests {
         .expect("valid SDK answer");
         assert!(answer.in_scope);
         assert_eq!(answer.artifacts, vec!["model_mix"]);
+    }
+
+    #[test]
+    fn flight_log_sanitizes_workspace_metadata() {
+        assert_eq!(
+            sanitize_repository_label("/Users/example/secret-client/copilot-mission-control"),
+            "copilot-mission-control"
+        );
+        assert_eq!(
+            sanitize_branch_label("refs/heads/feature/flight-log"),
+            "feature/flight-log"
+        );
+        assert_eq!(
+            sanitize_title_label("Build Daily Log\nwith raw\tcontrol chars"),
+            "Build Daily Logwith rawcontrol chars"
+        );
+        assert_eq!(
+            sanitize_title_label("/Users/example/secret/file.rs"),
+            "Untitled"
+        );
+    }
+
+    #[test]
+    fn flight_log_calendar_rolls_up_to_selected_day_without_future_cells() {
+        let days = rolling_calendar_days("2026-06-03", "2026-06");
+        assert_eq!(
+            days.last().map(|day| day.local_day.as_str()),
+            Some("2026-06-06")
+        );
+        assert!(days.iter().any(|day| day.local_day == "2026-05-31"));
+        assert!(days.iter().any(|day| day.local_day == "2026-06-04"));
+    }
+
+    #[test]
+    fn flight_log_digest_queries_selected_day_and_exports_safe_text() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE analytics_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE sessions (
+                provider TEXT NOT NULL,
+                session_id_hash TEXT NOT NULL,
+                repository TEXT NOT NULL DEFAULT '',
+                branch TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                first_seen_ms INTEGER NOT NULL,
+                last_seen_ms INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                is_active INTEGER NOT NULL,
+                event_count INTEGER NOT NULL,
+                tool_count INTEGER NOT NULL,
+                turn_count INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                input_tokens_known INTEGER NOT NULL,
+                output_tokens_known INTEGER NOT NULL,
+                token_data_partial INTEGER NOT NULL,
+                last_model TEXT NOT NULL,
+                PRIMARY KEY (provider, session_id_hash)
+            );
+            CREATE TABLE daily_rollups (
+                provider TEXT NOT NULL,
+                local_day TEXT NOT NULL,
+                bucket_start_ms INTEGER NOT NULL,
+                bucket_end_ms INTEGER NOT NULL,
+                timezone_offset_minutes INTEGER NOT NULL,
+                session_count INTEGER NOT NULL,
+                event_count INTEGER NOT NULL,
+                turn_count INTEGER NOT NULL,
+                tool_call_count INTEGER NOT NULL,
+                failure_count INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                estimated_active_ms INTEGER NOT NULL,
+                token_data_partial INTEGER NOT NULL,
+                PRIMARY KEY (provider, local_day)
+            );
+            CREATE TABLE model_rollups (
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                local_day TEXT NOT NULL,
+                session_count INTEGER NOT NULL,
+                turn_count INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                token_data_partial INTEGER NOT NULL,
+                PRIMARY KEY (provider, model, local_day)
+            );
+            CREATE TABLE category_rollups (
+                provider TEXT NOT NULL,
+                category TEXT NOT NULL,
+                local_day TEXT NOT NULL,
+                turn_count INTEGER NOT NULL,
+                tool_call_count INTEGER NOT NULL,
+                failure_count INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                token_data_partial INTEGER NOT NULL,
+                PRIMARY KEY (provider, category, local_day)
+            );
+            CREATE TABLE tool_rollups (
+                provider TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                tool_category TEXT NOT NULL,
+                local_day TEXT NOT NULL,
+                call_count INTEGER NOT NULL,
+                success_count INTEGER NOT NULL,
+                failure_count INTEGER NOT NULL,
+                total_duration_ms INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (provider, tool_name, tool_category, local_day)
+            );
+            CREATE TABLE failure_rollups (
+                provider TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                category TEXT NOT NULL,
+                local_day TEXT NOT NULL,
+                count INTEGER NOT NULL,
+                last_seen_ms INTEGER NOT NULL,
+                PRIMARY KEY (provider, kind, tool, category, local_day)
+            );
+            CREATE TABLE recent_event_facts (
+                id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                session_id_hash TEXT NOT NULL,
+                event_key TEXT NOT NULL,
+                occurred_at_ms INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                category TEXT NOT NULL,
+                success INTEGER NOT NULL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                safe_detail_kind TEXT NOT NULL DEFAULT '',
+                safe_detail_value TEXT NOT NULL DEFAULT '',
+                safe_detail_is_estimate INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE ingestion_audit (
+                id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                source_id_hash TEXT NOT NULL,
+                occurred_at_ms INTEGER NOT NULL,
+                safe_code TEXT NOT NULL,
+                count INTEGER NOT NULL,
+                soft_cap_exceeded INTEGER NOT NULL,
+                hard_cap_exceeded INTEGER NOT NULL
+            );
+            "#,
+        )
+        .expect("schema");
+        let (start_ms, end_ms, offset) = local_day_bounds("2026-06-03");
+        conn.execute(
+            "INSERT INTO daily_rollups VALUES ('copilot','2026-06-03',?1,?2,?3,2,24,6,11,2,1200,3400,600000,0)",
+            params![start_ms as i64, end_ms as i64, offset],
+        )
+        .expect("daily");
+        conn.execute(
+            "INSERT INTO sessions VALUES ('copilot','sessionhash1','copilot-mission-control','main','Build Daily Log',?1,?2,'needs-attention',1,24,11,6,1200,3400,1,1,0,'gpt-5.5')",
+            params![start_ms as i64, (start_ms + 60_000) as i64],
+        )
+        .expect("session");
+        conn.execute(
+            "INSERT INTO recent_event_facts (id,provider,session_id_hash,event_key,occurred_at_ms,kind,tool,category,success,input_tokens,output_tokens) VALUES ('e1','copilot','sessionhash1','k1',?1,'tool.execution_complete','bash','terminal',0,1200,3400)",
+            params![(start_ms + 10_000) as i64],
+        )
+        .expect("event");
+        conn.execute(
+            "INSERT INTO model_rollups VALUES ('copilot','gpt-5.5','2026-06-03',1,6,1200,3400,0,0,0)",
+            [],
+        )
+        .expect("model");
+        conn.execute(
+            "INSERT INTO category_rollups VALUES ('copilot','mcp','2026-06-03',0,4,0,0,0,0)",
+            [],
+        )
+        .expect("category");
+        conn.execute(
+            "INSERT INTO tool_rollups VALUES ('copilot','bash','terminal','2026-06-03',7,5,2,90000)",
+            [],
+        )
+        .expect("tool");
+        conn.execute(
+            "INSERT INTO failure_rollups VALUES ('copilot','tool.execution_complete','bash','terminal','2026-06-03',2,?1)",
+            params![(start_ms + 10_000) as i64],
+        )
+        .expect("failure");
+
+        let digest = engineering_digest_from_db(
+            &conn,
+            EngineeringDigestRequest {
+                selected_day: Some("2026-06-03".to_string()),
+                month: Some("2026-06".to_string()),
+            },
+        )
+        .expect("digest");
+
+        assert_eq!(digest.selected_day, "2026-06-03");
+        assert_eq!(digest.day.repos[0].repository, "copilot-mission-control");
+        assert_eq!(digest.day.models[0].label, "gpt-5.5");
+        assert_eq!(digest.day.tools[0].name, "bash");
+        assert_eq!(digest.day.failures[0].count, 2);
+        assert!(digest
+            .day
+            .narrative
+            .contains("copilot-mission-control on main"));
+        assert!(digest
+            .day
+            .exports
+            .iter()
+            .any(|export| export.kind == "daily-digest"
+                && export.body.contains("copilot-mission-control")
+                && export.body.contains("## Daily Digest - 2026-06-03")
+                && export.body.contains("### AI usage")
+                && export
+                    .body
+                    .contains("gpt-5.5 (1200 input tokens / 3400 output tokens)")
+                && !export.body.contains("### Follow-up")
+                && !export.body.contains("Yesterday/Today:")));
+        assert_eq!(
+            digest_token_pair(0, 3400),
+            "pending input tokens / 3400 output tokens"
+        );
+        assert!(!digest.day.narrative.contains("/Users/"));
+        assert!(digest
+            .calendar_days
+            .iter()
+            .any(|day| day.local_day == "2026-06-03" && day.badges.contains(&"MCP".to_string())));
     }
 
     #[test]

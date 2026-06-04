@@ -71,9 +71,14 @@ const MISSION_FIXTURE = {
       { name: 'bash', count: 7, percent: 14.9 },
     ],
     recent_sessions: [
-      { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:15:00Z', is_active: true, status: 'working', event_count: 82, error_count: 0, turn_count: 4, input_tokens: 1600, output_tokens: 4200, last_model: 'gpt-5.5', last_tool: 'apply_patch' },
-      { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:14:00Z', is_active: true, status: 'needs-attention', event_count: 64, error_count: 2, turn_count: 3, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', last_tool: 'bash' },
-      { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '2026-05-21T07:12:00Z', is_active: false, status: 'idle', event_count: 38, error_count: 0, turn_count: 1, input_tokens: 500, output_tokens: 1000, last_model: 'unknown', last_tool: 'web_fetch' },
+      { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:15:00Z', is_active: true, status: 'working', event_count: 82, tool_count: 23, error_count: 0, turn_count: 4, input_tokens: 1600, output_tokens: 4200, last_model: 'gpt-5.5', last_tool: 'apply_patch' },
+      { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:14:00Z', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, error_count: 2, turn_count: 3, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', last_tool: 'bash' },
+      { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '2026-05-21T07:12:00Z', is_active: false, status: 'idle', event_count: 38, tool_count: 7, error_count: 0, turn_count: 1, input_tokens: 500, output_tokens: 1000, last_model: 'unknown', last_tool: 'web_fetch' },
+    ],
+    high_activity_sessions: [
+      { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:15:00Z', is_active: true, status: 'working', event_count: 82, tool_count: 23, error_count: 0, turn_count: 4, input_tokens: 1600, output_tokens: 4200, last_model: 'gpt-5.5', last_tool: 'apply_patch' },
+      { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:14:00Z', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, error_count: 2, turn_count: 3, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', last_tool: 'bash' },
+      { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '2026-05-21T07:12:00Z', is_active: false, status: 'idle', event_count: 38, tool_count: 7, error_count: 0, turn_count: 1, input_tokens: 500, output_tokens: 1000, last_model: 'unknown', last_tool: 'web_fetch' },
     ],
     recent_failures: [
       { session_id: 'beta4567', timestamp: '2026-05-21T07:14:00Z', kind: 'tool.execution_complete', tool: 'bash', category: 'alert' },
@@ -108,7 +113,10 @@ const MISSION_FIXTURE = {
           { name: 'apply_patch', count: 7, percent: 43.8 },
         ],
         recent_sessions: [
-          { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:15:00Z', is_active: true, status: 'working', event_count: 82, error_count: 0, turn_count: 4, input_tokens: 1600, output_tokens: 4200, last_model: 'gpt-5.5', last_tool: 'apply_patch' },
+          { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:15:00Z', is_active: true, status: 'working', event_count: 82, tool_count: 23, error_count: 0, turn_count: 4, input_tokens: 1600, output_tokens: 4200, last_model: 'gpt-5.5', last_tool: 'apply_patch' },
+        ],
+        high_activity_sessions: [
+          { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:15:00Z', is_active: true, status: 'working', event_count: 82, tool_count: 23, error_count: 0, turn_count: 4, input_tokens: 1600, output_tokens: 4200, last_model: 'gpt-5.5', last_tool: 'apply_patch' },
         ],
         recent_failures: [],
       },
@@ -140,7 +148,10 @@ const MISSION_FIXTURE = {
           { name: 'postToolUse', count: 4, percent: 36.4 },
         ],
         recent_sessions: [
-          { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:14:00Z', is_active: true, status: 'needs-attention', event_count: 64, error_count: 2, turn_count: 3, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', last_tool: 'bash' },
+          { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:14:00Z', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, error_count: 2, turn_count: 3, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', last_tool: 'bash' },
+        ],
+        high_activity_sessions: [
+          { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '2026-05-21T07:14:00Z', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, error_count: 2, turn_count: 3, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', last_tool: 'bash' },
         ],
         recent_failures: [
           { session_id: 'beta4567', timestamp: '2026-05-21T07:14:00Z', kind: 'tool.execution_complete', tool: 'bash', category: 'alert' },
@@ -158,6 +169,105 @@ async function installFixture(page: Page, fixture = MISSION_FIXTURE) {
   await page.addInitScript((fixtureArg) => {
     (window as any).__missionControlFixture = fixtureArg;
   }, fixture);
+}
+
+async function installFlightLogFixture(page: Page) {
+  await page.addInitScript(() => {
+    const calendarDays = [
+      { local_day: '2026-05-18', day_number: 18, in_month: true, enabled: true, is_today: false, intensity: 1, sessions: 1, events: 42, turns: 2, tool_calls: 8, failures: 0, input_tokens: 800, output_tokens: 1400, estimated_active_ms: 300000, partial: false, badges: ['Active'], dominant_repo: 'docs', dominant_branch: 'main' },
+      { local_day: '2026-05-19', day_number: 19, in_month: true, enabled: true, is_today: false, intensity: 2, sessions: 2, events: 61, turns: 4, tool_calls: 12, failures: 1, input_tokens: 900, output_tokens: 2000, estimated_active_ms: 600000, partial: false, badges: ['Failure', 'Active'], dominant_repo: 'copilot-mission-control', dominant_branch: 'main' },
+      { local_day: '2026-05-20', day_number: 20, in_month: true, enabled: false, is_today: false, intensity: 0, sessions: 0, events: 0, turns: 0, tool_calls: 0, failures: 0, input_tokens: 0, output_tokens: 0, estimated_active_ms: 0, partial: false, badges: [] },
+      { local_day: '2026-05-21', day_number: 21, in_month: true, enabled: true, is_today: false, intensity: 4, sessions: 3, events: 184, turns: 8, tool_calls: 47, failures: 2, input_tokens: 3300, output_tokens: 8120, estimated_active_ms: 900000, partial: false, badges: ['Failure', 'Token spike', 'MCP'], dominant_repo: 'copilot-mission-control', dominant_branch: 'main' },
+      { local_day: '2026-05-22', day_number: 22, in_month: true, enabled: false, is_today: false, intensity: 0, sessions: 0, events: 0, turns: 0, tool_calls: 0, failures: 0, input_tokens: 0, output_tokens: 0, estimated_active_ms: 0, partial: false, badges: [] },
+      { local_day: '2026-05-23', day_number: 23, in_month: true, enabled: false, is_today: false, intensity: 0, sessions: 0, events: 0, turns: 0, tool_calls: 0, failures: 0, input_tokens: 0, output_tokens: 0, estimated_active_ms: 0, partial: false, badges: [] },
+      { local_day: '2026-06-01', day_number: 1, in_month: true, enabled: true, is_today: false, intensity: 2, sessions: 2, events: 101, turns: 5, tool_calls: 13, failures: 0, input_tokens: 1100, output_tokens: 2200, estimated_active_ms: 600000, partial: false, badges: ['Active'], dominant_repo: 'copilot-mission-control', dominant_branch: 'main' },
+      { local_day: '2026-06-02', day_number: 2, in_month: true, enabled: true, is_today: false, intensity: 2, sessions: 2, events: 102, turns: 5, tool_calls: 13, failures: 0, input_tokens: 1100, output_tokens: 2200, estimated_active_ms: 600000, partial: false, badges: ['Active'], dominant_repo: 'copilot-mission-control', dominant_branch: 'main' },
+      { local_day: '2026-06-03', day_number: 3, in_month: true, enabled: false, is_today: true, intensity: 0, sessions: 0, events: 0, turns: 0, tool_calls: 0, failures: 0, input_tokens: 0, output_tokens: 0, estimated_active_ms: 0, partial: false, badges: [] },
+      { local_day: '2026-06-04', day_number: 4, in_month: true, enabled: false, is_today: false, intensity: 0, sessions: 0, events: 0, turns: 0, tool_calls: 0, failures: 0, input_tokens: 0, output_tokens: 0, estimated_active_ms: 0, partial: false, badges: [] },
+      { local_day: '2026-06-05', day_number: 5, in_month: true, enabled: false, is_today: false, intensity: 0, sessions: 0, events: 0, turns: 0, tool_calls: 0, failures: 0, input_tokens: 0, output_tokens: 0, estimated_active_ms: 0, partial: false, badges: [] },
+      { local_day: '2026-06-06', day_number: 6, in_month: true, enabled: false, is_today: false, intensity: 0, sessions: 0, events: 0, turns: 0, tool_calls: 0, failures: 0, input_tokens: 0, output_tokens: 0, estimated_active_ms: 0, partial: false, badges: [] },
+    ];
+    const activeDay = {
+      local_day: '2026-05-21',
+      totals: [
+        { label: 'Sessions', value: 3, exact: true },
+        { label: 'Events', value: 184, exact: true },
+        { label: 'Turns', value: 8, exact: true },
+        { label: 'Tool calls', value: 47, exact: true },
+        { label: 'Failures', value: 2, exact: true },
+        { label: 'Input tokens', value: 3300, exact: true },
+        { label: 'Output tokens', value: 8120, exact: true },
+      ],
+      repos: [
+        {
+          repository: 'copilot-mission-control',
+          branch: 'main',
+          events: 146,
+          failures: 2,
+          input_tokens: 2800,
+          output_tokens: 7120,
+          first_seen_ms: Date.parse('2026-05-21T07:11:00Z'),
+          last_seen_ms: Date.parse('2026-05-21T07:15:00Z'),
+          sessions: [
+            { session_hash: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', status: 'working', is_active: true, events: 82, failures: 0, turns: 4, tool_calls: 23, input_tokens: 1600, output_tokens: 4200, last_model: 'gpt-5.5', first_seen_ms: Date.parse('2026-05-21T07:11:00Z'), last_seen_ms: Date.parse('2026-05-21T07:15:00Z') },
+            { session_hash: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', status: 'needs-attention', is_active: true, events: 64, failures: 2, turns: 3, tool_calls: 17, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', first_seen_ms: Date.parse('2026-05-21T07:12:00Z'), last_seen_ms: Date.parse('2026-05-21T07:14:00Z') },
+          ],
+        },
+      ],
+      models: [{ label: 'gpt-5.5', category: 'model', value: 7120, secondary_value: 7, tertiary_value: 2800, partial: false }],
+      tools: [
+        { name: 'view', category: 'library', calls: 14, successes: 14, failures: 0, total_duration_ms: 1200 },
+        { name: 'bash', category: 'terminal', calls: 7, successes: 6, failures: 1, total_duration_ms: 90000 },
+        { name: 'github-mcp-server-get_file_contents', category: 'mcp', calls: 4, successes: 4, failures: 0, total_duration_ms: 4000 },
+      ],
+      failures: [{ kind: 'tool.execution_complete', tool: 'bash', category: 'terminal', count: 2, last_seen_ms: Date.parse('2026-05-21T07:14:00Z') }],
+      token_hotspots: [{ session_hash: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', status: 'working', is_active: true, events: 82, failures: 0, turns: 4, tool_calls: 23, input_tokens: 0, output_tokens: 4200, last_model: 'gpt-5.5', first_seen_ms: Date.parse('2026-05-21T07:11:00Z'), last_seen_ms: Date.parse('2026-05-21T07:15:00Z') }],
+      useful_sessions: [{ session_hash: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', status: 'needs-attention', is_active: true, events: 64, failures: 2, turns: 3, tool_calls: 17, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', first_seen_ms: Date.parse('2026-05-21T07:12:00Z'), last_seen_ms: Date.parse('2026-05-21T07:14:00Z') }],
+      narrative: 'On 2026-05-21, you worked mostly in copilot-mission-control on main, across 3 sessions. gpt-5.5 handled most observed model activity, and view was the busiest tool.',
+      exports: [
+        { kind: 'daily-digest', label: 'Copy Daily Digest', body: '## Daily Digest - 2026-05-21\n\nDaily Log work in copilot-mission-control.\n\n### AI usage\n3 sessions, 7 turns, 7120 output tokens.\n\n### Models\ngpt-5.5 (2800 input tokens / 7120 output tokens)' },
+        { kind: 'resume', label: 'Copy resume prompt', body: 'Continue from Daily Log 2026-05-21.' },
+      ],
+    };
+    const emptyDay = {
+      local_day: '2026-05-20',
+      totals: [],
+      repos: [],
+      models: [],
+      tools: [],
+      failures: [],
+      token_hotspots: [],
+      useful_sessions: [],
+      narrative: 'No indexed Copilot CLI activity is available for 2026-05-20.',
+      exports: [],
+    };
+    (window as any).__analyticsFixture = {
+      digest: (request: any) => {
+        (window as any).__lastFlightLogRequest = request;
+        const selected = request && request.selected_day ? request.selected_day : '2026-05-21';
+        return {
+          generated_at_ms: Date.parse('2026-05-21T07:20:00Z'),
+          selected_day: selected,
+          month: '2026-05',
+          available_years: [2026, 2025],
+          calendar_days: calendarDays,
+          day: selected === '2026-05-20' ? emptyDay : activeDay,
+          caveats: ['Fixture Daily Log caveat.'],
+        };
+      },
+    };
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        lastText: '',
+        writeText(text: string) {
+          this.lastText = text;
+          (window as any).__copiedFlightLogText = text;
+          return Promise.resolve();
+        },
+      },
+      configurable: true,
+    });
+  });
 }
 
 async function getHistoryNumbers(page: Page) {
@@ -189,8 +299,8 @@ async function getHistoryNumbers(page: Page) {
       topTools: rankRows('top-tools'),
       models: rankRows('models-used'),
       eventMix: rankRows('event-mix'),
+      highActivityRows: rowText('.history-activity-session-row'),
       sessionRows: rowText('.history-session-row'),
-      failureRows: rowText('.history-failure-item summary'),
     };
   });
 }
@@ -542,14 +652,16 @@ test.describe('Copilot Mission Control — History', () => {
     await expect(page.locator('.history-token-kpi').filter({ hasText: 'Output Tokens' })).toContainText('8,120');
     await expect(page.locator('#history-token-summary')).toHaveCount(0);
     await expect(page.locator('#history-session-filter')).toContainText('Build Mission Control · alpha123');
-    await expect(page.locator('#history-content')).toContainText('Failure rows intentionally exclude raw error details');
     await expect(page.locator('[data-history-card="history-24h"] svg.history-chart')).toBeVisible();
     await expect(page.locator('[data-history-card="history-7d"] svg.history-chart')).toBeVisible();
-    await expect(page.locator('#history-content')).toContainText('Models used');
+    await expect(page.locator('#history-content')).toContainText('Models Used');
     await expect(page.locator('#history-content')).toContainText('Activity Breakdown');
-    await expect(page.locator('#history-content')).toContainText('Top tools');
-    await expect(page.locator('#history-content')).toContainText('Failure history');
-    await expect(page.locator('#history-content')).toContainText('Hooks · postToolUse');
+    await expect(page.locator('#history-content')).toContainText('Top Tools');
+    await expect(page.locator('[data-history-card="session-distribution"]')).toHaveCount(0);
+    await expect(page.locator('[data-history-card="high-activity-sessions"]')).toContainText('High Activity Sessions');
+    await expect(page.locator('[data-history-card="high-activity-sessions"] .history-activity-session-row')).toHaveCount(3);
+    await expect(page.locator('[data-history-card="high-activity-sessions"] .history-activity-session-row').first()).toContainText('copilot-mission-control / main · 82 events · 4 turns · 23 tool calls · 1,600 input tokens · 4,200 output tokens · 0 failures');
+    await expect(page.locator('[data-history-card="high-activity-sessions"] .history-chart-readout')).toHaveCount(0);
     await expect(page.locator('#history-session-filter')).toHaveCSS('font-size', '14px');
     const historyLayout = await page.evaluate(() => {
       const grid = document.querySelector('.history-grid') as HTMLElement;
@@ -558,16 +670,13 @@ test.describe('Copilot Mission Control — History', () => {
       const breakdown = document.querySelector('.history-breakdown-region') as HTMLElement;
       const models = document.querySelector('[data-history-card="models-used"]') as HTMLElement;
       const topTools = document.querySelector('[data-history-card="top-tools"]') as HTMLElement;
-      const distribution = document.querySelector('[data-history-card="session-distribution"]') as HTMLElement;
       const sessions = document.querySelector('.history-sessions-region') as HTMLElement;
-      const failures = document.querySelector('.history-failures-region') as HTMLElement;
       const gridStyle = window.getComputedStyle(grid);
       const gridRect = grid.getBoundingClientRect();
       const chartRect = chartRegion.getBoundingClientRect();
       const breakdownRect = breakdown.getBoundingClientRect();
       const modelsRect = models.getBoundingClientRect();
       const topToolsRect = topTools.getBoundingClientRect();
-      const distributionRect = distribution.getBoundingClientRect();
       return {
         columns: gridStyle.gridTemplateColumns.split(' ').filter(Boolean).length,
         chartLeft: Math.round(chartRect.left - gridRect.left),
@@ -581,12 +690,10 @@ test.describe('Copilot Mission Control — History', () => {
         breakdownWidth: Math.round(breakdownRect.width),
         modelsLeft: Math.round(modelsRect.left - gridRect.left),
         topToolsLeft: Math.round(topToolsRect.left - gridRect.left),
-        distributionLeft: Math.round(distributionRect.left - gridRect.left),
         modelsTop: Math.round(modelsRect.top),
         topToolsTop: Math.round(topToolsRect.top),
-        distributionTop: Math.round(distributionRect.top),
-        sessionsLeft: Math.round(sessions.getBoundingClientRect().left),
-        failuresLeft: Math.round(failures.getBoundingClientRect().left),
+        sessionsLeft: Math.round(sessions.getBoundingClientRect().left - gridRect.left),
+        sessionsWidth: Math.round(sessions.getBoundingClientRect().width),
       };
     });
     expect(historyLayout.columns).toBe(3);
@@ -598,15 +705,13 @@ test.describe('Copilot Mission Control — History', () => {
     expect(historyLayout.breakdownWidth).toBe(historyLayout.chartWidth);
     expect(historyLayout.modelsLeft).toBe(0);
     expect(historyLayout.topToolsLeft).toBe(0);
-    expect(historyLayout.distributionLeft).toBe(0);
     expect(historyLayout.modelsTop).toBeLessThan(historyLayout.topToolsTop);
-    expect(historyLayout.topToolsTop).toBeLessThan(historyLayout.distributionTop);
-    expect(historyLayout.failuresLeft).toBeGreaterThan(historyLayout.sessionsLeft);
+    expect(historyLayout.sessionsLeft).toBe(historyLayout.chartLeft);
+    expect(historyLayout.sessionsWidth).toBe(historyLayout.chartWidth);
     const scrollbarStyles = await page.evaluate(() => {
       const selectors = [
         '#history-screen',
         '.history-session-list',
-        '.history-failure-list',
         '#inspector-list',
         '#schema-drift-dialog',
         '#attention-body',
@@ -667,6 +772,198 @@ test.describe('Copilot Mission Control — History', () => {
     expect(dashboardLayout.session.height).toBeLessThan(460);
     expect(dashboardLayout.session.bottom).toBeLessThanOrEqual(dashboardLayout.model.bottom + 24);
     expect(dashboardLayout.feed.top).toBeGreaterThanOrEqual(dashboardLayout.session.bottom + 8);
+  });
+
+  test('Daily Log tab renders calendar heatmap and Daily Debrief details', async ({ page }) => {
+    await installFlightLogFixture(page);
+    await page.reload();
+    await waitForGame(page);
+
+    await page.locator('#history-route-btn').click();
+    await page.locator('#history-flight-log-tab').click();
+
+    await expect(page.locator('#history-flight-log-tab')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.history-filter')).toBeHidden();
+    await expect(page.locator('[data-history-card="flight-log-calendar"]')).toBeVisible();
+    await expect(page.locator('[data-flight-log-month-select]')).toBeVisible();
+    await expect(page.locator('[data-flight-log-year-select]')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Next month' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Next month' }).click();
+    await expect.poll(async () => page.evaluate(() => (window as any).__lastFlightLogRequest)).toMatchObject({
+      month: '2026-06',
+      selected_day: '2026-06-03',
+    });
+    await page.locator('[data-flight-log-day="2026-05-21"]').click();
+    await expect(page.locator('[data-flight-log-day="2026-05-21"] .flight-log-day-number')).toBeVisible();
+    await expect(page.locator('[data-flight-log-day="2026-05-21"] .flight-log-event-dot')).toHaveCount(0);
+    await expect(page.locator('[data-flight-log-day="2026-05-21"]')).toHaveAttribute('aria-label', /184 events/);
+    await expect(page.locator('[data-flight-log-day="2026-05-21"]')).toHaveAttribute('aria-selected', 'true');
+    await page.locator('#mission-route-btn').click();
+    await page.locator('#history-route-btn').click();
+    await expect(page.locator('#history-flight-log-tab')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('[data-history-card="flight-log-calendar"]')).toBeVisible();
+    await expect(page.locator('[data-history-card="flight-log-calendar"]')).not.toContainText('0 events');
+    await expect(page.locator('[data-flight-log-day="2026-05-22"]')).toBeDisabled();
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('Daily Debrief');
+    await expect(page.locator('[data-history-card="flight-log-debrief"] .flight-log-stat').filter({ hasText: 'Input tokens' })).toContainText('3,300');
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('copilot-mission-control / main');
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('gpt-5.5');
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('github-mcp-server-get_file_contents');
+    const toolsPanel = page.locator('.flight-log-section').filter({ hasText: 'Tools / MCP' });
+    await expect(toolsPanel).toContainText('bash');
+    await expect(toolsPanel).toContainText('Commands · 7 calls · 1 failure');
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('Mission Summary');
+    await expect(page.getByRole('heading', { name: 'Transmit' })).toHaveCount(0);
+    const workedOn = page.locator('.flight-log-section').filter({ hasText: 'What I Worked On' });
+    const dailyDigestPanel = workedOn.locator('[data-flight-log-export-panel="daily-digest"]');
+    const resumePanel = workedOn.locator('[data-flight-log-export-panel="resume"]');
+    const dailyDigestPreview = dailyDigestPanel.locator('textarea');
+    const resumePreview = resumePanel.locator('textarea');
+    await expect(workedOn.locator('[data-flight-log-export]')).toHaveCount(2);
+    await expect(workedOn).toContainText('Expand a section to preview it before copying.');
+    await expect(workedOn).toContainText('Daily Digest');
+    await expect(workedOn).toContainText('Resume Prompt');
+    await expect(workedOn).not.toContainText('standup update');
+    await expect(workedOn).not.toContainText('Markdown digest');
+    await expect(workedOn).not.toContainText('PR summary');
+    await expect(workedOn).not.toContainText('Copy Daily Digest');
+    await expect(dailyDigestPanel).not.toHaveAttribute('open', '');
+    await expect(dailyDigestPreview).not.toBeVisible();
+    await dailyDigestPanel.locator('summary').click();
+    await expect(dailyDigestPreview).toBeVisible();
+    await expect(dailyDigestPreview).toHaveValue(/Daily Log work in copilot-mission-control/);
+    await expect(dailyDigestPreview).toHaveJSProperty('readOnly', true);
+    const dailyDigestHeight = await dailyDigestPreview.evaluate((textarea) => Math.round((textarea as HTMLTextAreaElement).getBoundingClientRect().height));
+    expect(dailyDigestHeight).toBeGreaterThanOrEqual(80);
+    expect(dailyDigestHeight).toBeLessThanOrEqual(170);
+    await resumePanel.locator('summary').click();
+    await expect(resumePreview).toBeVisible();
+    await expect(resumePreview).toHaveValue('Continue from Daily Log 2026-05-21.');
+    await expect(page.getByRole('heading', { name: 'Models' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Token Hotspots' })).toBeVisible();
+    const models = page.locator('.flight-log-section').filter({ hasText: 'Models' });
+    const tokenHotspots = page.locator('.flight-log-section').filter({ hasText: 'Token Hotspots' });
+    await expect(models).toContainText('gpt-5.5');
+    await expect(models).not.toContainText('Token hotspot');
+    await expect(tokenHotspots).toContainText('Build Mission Control');
+    await expect(tokenHotspots).toContainText('pending input tokens · 4,200 output tokens');
+    await expect(tokenHotspots).not.toContainText('Token hotspot ·');
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('7 calls · 1 failure');
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).not.toContainText('1 failures');
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('High Activity Sessions');
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('64 events · 3 turns · 17 tool calls · 1,200 input tokens · 2,920 output tokens · 2 failures');
+    await expect(page.locator('[data-history-card="flight-log-debrief"]')).not.toContainText('Unresolved Work');
+    await expect(page.locator('[data-flight-log-failure]')).toHaveCount(0);
+    const dayHeights = await page.locator('[data-flight-log-day]').evaluateAll((days) =>
+      Array.from(new Set(days.map((day) => Math.round((day as HTMLElement).getBoundingClientRect().height)))),
+    );
+    expect(dayHeights).toHaveLength(1);
+    const numberOffsets = await page.locator('[data-flight-log-day]').evaluateAll((days) =>
+      Array.from(new Set(days.map((day) => {
+        const cell = (day as HTMLElement).getBoundingClientRect();
+        const number = (day as HTMLElement).querySelector('.flight-log-day-number')!.getBoundingClientRect();
+        return Math.round(number.top - cell.top);
+      }))),
+    );
+    expect(numberOffsets).toHaveLength(1);
+  });
+
+  test('Daily Log disabled no-data days stay visible without a green badge', async ({ page }) => {
+    await installFlightLogFixture(page);
+    await page.reload();
+    await waitForGame(page);
+
+    await page.locator('#history-route-btn').click();
+    await page.locator('#history-flight-log-tab').click();
+
+    await expect(page.locator('[data-flight-log-day="2026-05-20"]')).toBeDisabled();
+    await expect(page.locator('[data-flight-log-day="2026-05-20"]')).not.toHaveClass(/has-events/);
+    await expect(page.locator('[data-flight-log-day="2026-05-20"] .flight-log-day-number')).toBeVisible();
+  });
+
+  test('Daily Log keeps remaining selected-week days visible and disabled', async ({ page }) => {
+    await installFlightLogFixture(page);
+    await page.reload();
+    await waitForGame(page);
+
+    await page.locator('#history-route-btn').click();
+    await page.locator('#history-flight-log-tab').click();
+    await page.locator('[data-flight-log-month-select]').selectOption('06');
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__lastFlightLogRequest)).toMatchObject({
+      month: '2026-06',
+      selected_day: '2026-06-03',
+    });
+    await page.locator('[data-flight-log-day="2026-06-02"]').click();
+    await expect.poll(async () => page.evaluate(() => (window as any).__lastFlightLogRequest)).toMatchObject({
+      month: '2026-06',
+      selected_day: '2026-06-02',
+    });
+    await expect(page.locator('[data-flight-log-day="2026-06-03"]')).toBeVisible();
+    await expect(page.locator('[data-flight-log-day="2026-06-03"]')).toBeDisabled();
+    await expect(page.locator('[data-flight-log-day="2026-06-03"]')).not.toHaveClass(/has-events/);
+  });
+
+  test('Daily Log month and year dropdowns request a historical period', async ({ page }) => {
+    await installFlightLogFixture(page);
+    await page.reload();
+    await waitForGame(page);
+
+    await page.locator('#history-route-btn').click();
+    await page.locator('#history-flight-log-tab').click();
+    await page.locator('[data-flight-log-month-select]').selectOption('04');
+    await expect.poll(async () => page.evaluate(() => (window as any).__lastFlightLogRequest)).toMatchObject({
+      month: '2026-04',
+      selected_day: '2026-04-30',
+    });
+
+    await page.locator('[data-flight-log-year-select]').selectOption('2025');
+    await expect.poll(async () => page.evaluate(() => (window as any).__lastFlightLogRequest)).toMatchObject({
+      month: '2025-05',
+      selected_day: '2025-05-31',
+    });
+  });
+
+  test('Daily Log renders a static year label when only one data year exists', async ({ page }) => {
+    await installFlightLogFixture(page);
+    await page.addInitScript(() => {
+      const fixture = (window as any).__analyticsFixture;
+      const originalDigest = fixture.digest;
+      fixture.digest = (request: any) => ({
+        ...originalDigest(request),
+        available_years: [2026],
+      });
+    });
+    await page.reload();
+    await waitForGame(page);
+
+    await page.locator('#history-route-btn').click();
+    await page.locator('#history-flight-log-tab').click();
+
+    await expect(page.locator('[data-flight-log-year-select]')).toHaveCount(0);
+    await expect(page.locator('[data-flight-log-year-label]')).toHaveText('2026');
+  });
+
+  test('Daily Log export preview copy icon copies generated text', async ({ page }) => {
+    await installFlightLogFixture(page);
+    await page.reload();
+    await waitForGame(page);
+
+    await page.locator('#history-route-btn').click();
+    await page.locator('#history-flight-log-tab').click();
+    const dailyDigestPanel = page.locator('[data-flight-log-export-panel="daily-digest"]');
+    await dailyDigestPanel.locator('summary').click();
+    await dailyDigestPanel.locator('[data-flight-log-export="daily-digest"]').click();
+
+    await expect(page.locator('.flight-log-copy-status')).toContainText('Daily Digest copied');
+    await expect(dailyDigestPanel).toHaveAttribute('open', '');
+    await expect(page.locator('.flight-log-copy-status')).not.toContainText('copied.');
+    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('Daily Log work in copilot-mission-control');
+    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('## Daily Digest - 2026-05-21');
+    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('### AI usage');
+    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('gpt-5.5 (2800 input tokens / 7120 output tokens)');
+    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).not.toContain('### Follow-up');
+    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).not.toContain('Yesterday/Today:');
   });
 
   test('History session filter scopes charts, lists, and token summary', async ({ page }) => {
@@ -733,6 +1030,11 @@ test.describe('Copilot Mission Control — History', () => {
     expect(all.topTools).toEqual(['view=14 · 29.8%', 'apply_patch=8 · 17%', 'bash=7 · 14.9%']);
     expect(all.models).toEqual(['gpt-5.5=6 · 75%', 'unknown=2 · 25%']);
     expect(all.eventMix).toEqual(['Reads=18 · 39.1%', 'Edits=10 · 21.7%', 'Hooks=5 · 10.9%', 'Failures=2 · 4.3%']);
+    expect(all.highActivityRows).toEqual([
+      expect.stringContaining('Build Mission Controlcopilot-mission-control / main · 82 events · 4 turns · 23 tool calls · 1,600 input tokens · 4,200 output tokens · 0 failures'),
+      expect.stringContaining('Review Testscopilot-mission-control / main · 64 events · 3 turns · 17 tool calls · 1,200 input tokens · 2,920 output tokens · 2 failures'),
+      expect.stringContaining('Research UIdocs / main · 38 events · 1 turn · 7 tool calls · 500 input tokens · 1,000 output tokens · 0 failures'),
+    ]);
     expect(all.sessionRows).toEqual([
       expect.stringContaining('82 events'),
       expect.stringContaining('64 events'),
@@ -741,10 +1043,6 @@ test.describe('Copilot Mission Control — History', () => {
     for (const sessionRow of all.sessionRows) {
       expect(sessionRow).not.toContain('failures');
     }
-    expect(all.failureRows).toEqual([
-      expect.stringContaining('Failures · bash'),
-      expect.stringContaining('Hooks · postToolUse'),
-    ]);
 
     await page.locator('#history-session-filter').selectOption('beta4567');
     const beta = await getHistoryNumbers(page);
@@ -774,15 +1072,14 @@ test.describe('Copilot Mission Control — History', () => {
     expect(beta.topTools).toEqual(['bash=7 · 63.6%', 'postToolUse=4 · 36.4%']);
     expect(beta.models).toEqual(['gpt-5.5=2 · 100%']);
     expect(beta.eventMix).toEqual(['Commands=8 · 57.1%', 'Hooks=4 · 28.6%', 'Failures=2 · 14.3%']);
+    expect(beta.highActivityRows).toEqual([
+      expect.stringContaining('Review Testscopilot-mission-control / main · 64 events · 3 turns · 17 tool calls · 1,200 input tokens · 2,920 output tokens · 2 failures'),
+    ]);
     expect(beta.sessionRows).toEqual([expect.stringContaining('64 events')]);
     expect(beta.sessionRows[0]).not.toContain('failures');
-    expect(beta.failureRows).toEqual([
-      expect.stringContaining('Failures · bash'),
-      expect.stringContaining('Hooks · postToolUse'),
-    ]);
   });
 
-  test('History list panels scroll and failure rows reveal sanitized details', async ({ page }) => {
+  test('History session list panel scrolls and truncates long titles', async ({ page }) => {
     await page.evaluate(() => {
       const fixture = (window as any).__missionControlFixture;
       const baseSession = fixture.history.recent_sessions[0];
@@ -793,25 +1090,15 @@ test.describe('Copilot Mission Control — History', () => {
         event_count: 40 + index,
         updated_at: `2026-05-21T07:${String(index).padStart(2, '0')}:00Z`,
       }));
-      fixture.history.recent_failures = Array.from({ length: 14 }, (_, index) => ({
-        session_id: `session-${index}`,
-        timestamp: `2026-05-21T07:${String(index).padStart(2, '0')}:30Z`,
-        kind: index % 2 === 0 ? 'hook.end' : 'tool.execution_complete',
-        tool: index % 2 === 0 ? 'postToolUse' : 'bash',
-        category: index % 2 === 0 ? 'hooks' : 'alert',
-      }));
       window.__cmcOnAgentActivityChanged?.();
     });
 
     await page.locator('#history-route-btn').click();
     const listSizing = await page.evaluate(() => {
       const sessions = document.querySelector('.history-session-list') as HTMLElement;
-      const failures = document.querySelector('.history-failure-list') as HTMLElement;
       return {
         sessionsScrolls: sessions.scrollHeight > sessions.clientHeight,
-        failuresScrolls: failures.scrollHeight > failures.clientHeight,
         sessionsMaxHeight: getComputedStyle(sessions).maxHeight,
-        failuresMaxHeight: getComputedStyle(failures).maxHeight,
         sessionRows: Array.from(document.querySelectorAll('.history-session-row')).slice(0, 4).map((row) => {
           const rowEl = row as HTMLElement;
           const badge = row.querySelector('.history-dossier-id') as HTMLElement;
@@ -847,9 +1134,7 @@ test.describe('Copilot Mission Control — History', () => {
       };
     });
     expect(listSizing.sessionsScrolls).toBe(true);
-    expect(listSizing.failuresScrolls).toBe(true);
     expect(listSizing.sessionsMaxHeight).toBe('560px');
-    expect(listSizing.failuresMaxHeight).toBe('560px');
     expect(new Set(listSizing.sessionRows.map((row) => row.rowHeight)).size).toBe(1);
     expect(new Set(listSizing.sessionRows.map((row) => row.badgeWidth)).size).toBe(1);
     expect(new Set(listSizing.sessionRows.map((row) => row.badgeHeight)).size).toBe(1);
@@ -868,32 +1153,6 @@ test.describe('Copilot Mission Control — History', () => {
       titleWhiteSpace: 'nowrap',
       titleTooltip: 'Investigate Extremely Long Recent Session Title That Must Truncate Consistently',
     });
-
-    const firstFailure = page.locator('.history-failure-item').first();
-    await expect(firstFailure).not.toHaveAttribute('open', '');
-    await firstFailure.locator('summary').click();
-    await expect(firstFailure).toHaveAttribute('open', '');
-    await expect(firstFailure).toContainText('Kind');
-    await expect(firstFailure).toContainText('hook.end');
-    await expect(firstFailure).toContainText('Raw error text');
-
-    await page.evaluate(() => {
-      const fixture = (window as any).__missionControlFixture;
-      fixture.history.generated_at_ms += 1000;
-      fixture.history.recent_failures = [
-        ...fixture.history.recent_failures,
-        {
-          session_id: 'session-extra',
-          timestamp: '2026-05-21T07:20:30Z',
-          kind: 'tool.execution_complete',
-          tool: 'rg',
-          category: 'alert',
-        },
-      ];
-      window.__cmcOnAgentActivityChanged?.();
-    });
-    await expect(page.locator('.history-failure-item')).toHaveCount(15);
-    await expect(firstFailure).toHaveAttribute('open', '');
   });
 
   test('hash route opens History directly on load', async ({ page }) => {
@@ -903,7 +1162,7 @@ test.describe('Copilot Mission Control — History', () => {
     await expect(page.locator('body')).toHaveClass(/history-route/);
     await expect(page.locator('#history-screen')).toBeVisible();
     await expect(page.locator('#history-route-btn')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.locator('#history-content')).toContainText('Activity, rolling 24 hours');
+    await expect(page.locator('#history-content')).toContainText('Activity, Rolling 24 Hours');
   });
 
   test('History empty state stays useful when the backend has no observed events', async ({ page }) => {
@@ -947,8 +1206,8 @@ test.describe('Copilot Mission Control — History', () => {
 
     await page.locator('#history-route-btn').click();
     await expect(page.locator('#history-content')).toContainText('Scanning Copilot CLI history');
-    await expect(page.locator('.history-loading-dialog')).toBeVisible();
-    await expect(page.locator('.history-loading-bar')).toBeVisible();
+    await expect(page.locator('#history-content .history-loading-dialog')).toBeVisible();
+    await expect(page.locator('#history-content .history-loading-bar')).toBeVisible();
     await expect(page.locator('#history-content')).not.toContainText('No observed Copilot events are available yet');
   });
 
@@ -987,7 +1246,6 @@ test.describe('Copilot Mission Control — History', () => {
       const eventMixFill = document.querySelector('[data-history-card="event-mix"] .history-bar-svg-fill') as SVGElement;
       const eventMixSvg = document.querySelector('[data-history-card="event-mix"] .history-bar-svg') as SVGElement;
       const eventMixBar = document.querySelector('[data-history-card="event-mix"] .history-bar') as HTMLElement;
-      const sessionFill = document.querySelector('[data-history-card="session-distribution"] .history-distribution-fill') as SVGElement;
       const panelTitle = document.querySelector('.cmc-panel-title') as HTMLElement;
       const historyTitle = document.querySelector('[data-history-card="models-used"] .history-card-title') as HTMLElement;
       const legendItems = Array.from(document.querySelectorAll('[data-history-card="history-24h"] .history-legend span')).map((el) => (el.textContent || '').trim());
@@ -1027,9 +1285,6 @@ test.describe('Copilot Mission Control — History', () => {
           eventMixSvgDisplay: getComputedStyle(eventMixSvg).display,
           eventMixSvgHeight: Math.round(eventMixSvg.getBoundingClientRect().height),
           eventMixSvgBottomDelta: Math.round(eventMixBar.getBoundingClientRect().bottom - eventMixSvg.getBoundingClientRect().bottom),
-          sessionShape: leftCapShape(sessionFill),
-          sessionFill: getComputedStyle(sessionFill).fill,
-          sessionInlineStyle: sessionFill.getAttribute('style'),
         },
         legendItems,
         titleStylesMatch: {
@@ -1070,13 +1325,6 @@ test.describe('Copilot Mission Control — History', () => {
         eventMixSvgDisplay: 'block',
         eventMixSvgHeight: 120,
         eventMixSvgBottomDelta: 0,
-        sessionShape: {
-          flatRight: true,
-          fillWidth: expect.any(Number),
-          viewBoxWidth: expect.any(Number),
-        },
-        sessionFill: 'rgb(15, 99, 206)',
-        sessionInlineStyle: null,
       },
       legendItems: ['Events'],
       titleStylesMatch: {
@@ -1095,8 +1343,6 @@ test.describe('Copilot Mission Control — History', () => {
     expect(colors.nonTimeChartFills.topToolShape.viewBoxWidth).toBeGreaterThan(100);
     expect(colors.nonTimeChartFills.modelShape.fillWidth).toBeGreaterThan(5);
     expect(colors.nonTimeChartFills.modelShape.viewBoxWidth).toBeGreaterThan(100);
-    expect(colors.nonTimeChartFills.sessionShape.fillWidth).toBeGreaterThan(5);
-    expect(colors.nonTimeChartFills.sessionShape.viewBoxWidth).toBeGreaterThan(100);
     expect(colors.kpiWidthRatio).toBeGreaterThan(0.92);
     expect(colors.kpiWidthRatio).toBeLessThanOrEqual(1);
   });
@@ -1211,8 +1457,12 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
     const selectedOption = page.locator('#dom-session .cmc-session-option.selected');
     await expect(selectedOption.locator('.cmc-session-option-main')).toContainText('copilot-mission-control');
+    await expect(selectedOption.locator('.cmc-session-status-label')).toHaveText('active');
     await expect(selectedOption.locator('.cmc-session-option-sub')).toContainText('Fix Missing Input Tokens Display');
     await expect(page.locator('#dom-session .cmc-session-option').filter({ hasText: 'Build Mission Control · alpha123' })).toHaveCount(1);
+    const idleOption = page.locator('#dom-session .cmc-session-option').filter({ hasText: 'Research UI · gamma890' });
+    await expect(idleOption).toHaveCount(1);
+    await expect(idleOption.locator('.cmc-session-status-label')).toHaveText('idle');
   });
 
   test('session dropdown stays open when live activity refreshes', async ({ page }) => {
@@ -1366,6 +1616,28 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await waitForGame(page);
 
     await expect(page.locator('#dom-session .cmc-session-meta')).toContainText('Tokens in/out: pending / 4,200');
+  });
+
+  test('History selected session shows pending input tokens until usage summary is emitted', async ({ page }) => {
+    const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
+    const alpha = fixture.history.recent_sessions.find((session: any) => session.id === 'alpha123');
+    alpha.input_tokens = 0;
+    alpha.output_tokens = 4200;
+    const alphaScope = fixture.history.session_scopes.find((scope: any) => scope.session_id === 'alpha123');
+    alphaScope.recent_sessions[0].input_tokens = 0;
+    alphaScope.recent_sessions[0].output_tokens = 4200;
+
+    await page.addInitScript((f) => {
+      (window as any).__missionControlFixture = f;
+    }, fixture);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await page.locator('#history-route-btn').click();
+    await page.locator('#history-session-filter').selectOption('alpha123');
+
+    await expect(page.locator('.history-token-kpi').filter({ hasText: 'Input Tokens' })).toContainText('pending');
+    await expect(page.locator('.history-token-kpi').filter({ hasText: 'Output Tokens' })).toContainText('4,200');
   });
 
   test('provider scan warnings appear in the selected session panel', async ({ page }) => {
@@ -1635,7 +1907,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     });
   });
 
-  test('stale persisted selection is ignored when a running session exists', async ({ page }) => {
+  test('persisted idle session selection is kept when another session is running', async ({ page }) => {
     const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
     fixture.sessions.push({
       id: 'stale999',
@@ -1670,11 +1942,11 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await waitForGame(page);
 
     const state = await getMissionState(page);
-    expect(state!.selectedSessionId).not.toBe('stale999');
-    expect(state!.selectedSessionId).toBe('beta4567');
+    expect(state!.selectedSessionId).toBe('stale999');
     const text = await page.locator('#dom-session').innerText();
-    expect(text).not.toContain('669k/60k');
-    expect(text).not.toContain('Age: 2h');
+    expect(text).toContain('Stale Same Repo');
+    expect(text).toContain('Tokens in/out: 669,000 / 60,000');
+    expect(text).toContain('Age: 2h');
   });
 
   test('inspector filters MCP, skills, and sub-agent calls with safe details', async ({ page }) => {

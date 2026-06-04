@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to Copilot Mission Control.
+## [0.1.11] - 2026-06-04
+
+### 🚀 Features & Improvements
+
+- Add history and chat images
+- Add analytics chat section to documentation and update build script
+
+### 📦 Updates
+
+- Update analytics chat section header for clarity
 ## [0.1.10] - 2026-06-03
 
 ### 🚀 Features & Improvements
@@ -14,6 +24,12 @@ All notable changes to Copilot Mission Control.
 ### 🐛 Bug Fixes
 
 - Update mission control fixtures
+- Fix analytics token rollups
+
+### ⚙️ CI/CD & Build
+
+- Release v0.1.10
+- Update release UI state
 ## [0.1.9] - 2026-05-30
 
 ### 🚀 Features & Improvements
