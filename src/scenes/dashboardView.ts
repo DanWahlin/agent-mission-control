@@ -149,6 +149,7 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
         totalTurns: activity.total_turns ?? 0,
       },
       providerAlerts: providerAlerts.slice(0, 3),
+      activitySignal: activity.activity_signal,
       attention: buildAttentionItems(activity),
       sessions: {
         header: activeOptions.length > 0 ? `Running sessions (${activeOptions.length})` : 'Recent sessions (none active)',

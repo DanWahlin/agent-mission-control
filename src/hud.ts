@@ -873,7 +873,7 @@
     replay: '',
     history: '',
   };
-  var RECENT_ACTIVITY_VISIBLE_ROWS = 10;
+  var RECENT_ACTIVITY_VISIBLE_ROWS = 5;
   var appRoute = routeFromHash();
   var historyFetchFrame = 0;
   var historyFetchTimer = 0;
@@ -1158,6 +1158,7 @@
       day: {
         local_day: selectedDay,
         totals: [],
+        activity_rate: [],
         repos: [],
         models: [],
         tools: [],
@@ -2110,6 +2111,225 @@
       + '</button>';
   }
 
+  function activitySignal(view) {
+    return view && view.activitySignal || null;
+  }
+
+  function selectedActivityRateSignal(view) {
+    var selected = view && view.sessions && view.sessions.selected;
+    if (!selected) return activitySignal(view) || null;
+    var selectedSignal = selected.activity_signal;
+    var selectedHasSignal = !!(
+      selectedSignal
+      && Array.isArray(selectedSignal.hourly_24h)
+      && selectedSignal.hourly_24h.length
+      && (
+        Number(selectedSignal.launches_last_5m || 0) > 0
+        || Number(selectedSignal.launches_last_hour || 0) > 0
+        || Number(selectedSignal.peak_velocity_per_hour || 0) > 0
+        || selectedSignal.hourly_24h.some(function (bucket) { return Number(bucket.event_count || 0) > 0; })
+      )
+    );
+    if (selectedHasSignal) {
+      return selected.activity_signal;
+    }
+    var globalSignal = activitySignal(view) || {};
+    var latestSelectedActivityMs = 0;
+    (selected.recent_tool_calls || []).forEach(function (call) {
+      var timestamp = Date.parse(call.timestamp || '');
+      if (Number.isFinite(timestamp)) latestSelectedActivityMs = Math.max(latestSelectedActivityMs, timestamp);
+    });
+    (selected.recent_turns || []).forEach(function (turn) {
+      var timestamp = Date.parse(turn.started_at || turn.ended_at || '');
+      if (Number.isFinite(timestamp)) latestSelectedActivityMs = Math.max(latestSelectedActivityMs, timestamp);
+    });
+    var generatedAtMs = Math.max(Number(globalSignal.generated_at_ms || 0), latestSelectedActivityMs) || Date.now();
+    var hourMs = 60 * 60 * 1000;
+    var endBucketStart = Math.floor(generatedAtMs / hourMs) * hourMs;
+    var buckets = Array.from({ length: 24 }, function (_, index) {
+      var startMs = endBucketStart - (23 - index) * hourMs;
+      var date = new Date(startMs);
+      return {
+        start: date.toISOString().replace('.000Z', 'Z'),
+        label: String(date.getUTCHours()).padStart(2, '0') + ':00Z',
+        event_count: 0,
+        launch_count: 0,
+        turn_count: 0,
+        failure_count: 0,
+        active_sessions: 0,
+        intensity: 0,
+      };
+    });
+    var bucketIndexByStart = new Map(buckets.map(function (bucket, index) { return [bucket.start, index]; }));
+    var seen = new Set();
+    var fiveMinStart = generatedAtMs - 5 * 60 * 1000;
+    var hourStart = generatedAtMs - hourMs;
+    var activityLast5m = 0;
+    var activityLastHour = 0;
+    (selected.recent_tool_calls || []).forEach(function (call) {
+      var timestamp = Date.parse(call.timestamp || '');
+      if (!Number.isFinite(timestamp)) return;
+      var key = [selected.id || '', call.timestamp || '', call.tool || '', call.category || '', call.call_id || ''].join('\u001f');
+      if (seen.has(key)) return;
+      seen.add(key);
+      var bucketStart = Math.floor(timestamp / hourMs) * hourMs;
+      var bucketKey = new Date(bucketStart).toISOString().replace('.000Z', 'Z');
+      var bucketIndex = bucketIndexByStart.get(bucketKey);
+      if (bucketIndex != null) {
+        var bucket = buckets[bucketIndex];
+        bucket.event_count += 1;
+        bucket.launch_count += 1;
+        if (!call.success) bucket.failure_count += 1;
+        if (bucket.event_count > 0) bucket.active_sessions = 1;
+      }
+      if (timestamp >= fiveMinStart && timestamp <= generatedAtMs) activityLast5m += 1;
+      if (timestamp >= hourStart && timestamp <= generatedAtMs) activityLastHour += 1;
+    });
+    (selected.recent_turns || []).forEach(function (turn) {
+      var timestamp = Date.parse(turn.started_at || turn.ended_at || '');
+      if (!Number.isFinite(timestamp)) return;
+      var key = [selected.id || '', turn.id || '', turn.started_at || '', turn.ended_at || ''].join('\u001f');
+      if (seen.has(key)) return;
+      seen.add(key);
+      var bucketStart = Math.floor(timestamp / hourMs) * hourMs;
+      var bucketKey = new Date(bucketStart).toISOString().replace('.000Z', 'Z');
+      var bucketIndex = bucketIndexByStart.get(bucketKey);
+      if (bucketIndex != null) {
+        var bucket = buckets[bucketIndex];
+        bucket.event_count += 1;
+        bucket.turn_count += 1;
+        bucket.failure_count += Number(turn.failure_count || 0) > 0 ? 1 : 0;
+        if (bucket.event_count > 0) bucket.active_sessions = 1;
+      }
+      if (timestamp >= fiveMinStart && timestamp <= generatedAtMs) activityLast5m += 1;
+      if (timestamp >= hourStart && timestamp <= generatedAtMs) activityLastHour += 1;
+    });
+    var peakActivity = buckets.reduce(function (max, bucket) { return Math.max(max, bucket.event_count); }, 0);
+    buckets.forEach(function (bucket) {
+      bucket.intensity = peakActivity > 0 && bucket.event_count > 0 ? bucket.event_count / peakActivity : 0;
+    });
+    return {
+      generated_at_ms: generatedAtMs,
+      launches_last_5m: activityLast5m,
+      launches_last_hour: activityLastHour,
+      velocity_per_hour: activityLastHour,
+      peak_velocity_per_hour: peakActivity,
+      active_hours_24h: buckets.filter(function (bucket) { return bucket.event_count > 0; }).length,
+      hourly_24h: buckets,
+    };
+  }
+
+  function formatRate(value) {
+    var numeric = Number(value || 0);
+    if (!Number.isFinite(numeric) || numeric <= 0) return 'idle';
+    var label = numeric >= 10 ? Math.round(numeric).toLocaleString() : numeric.toFixed(1).replace(/\.0$/, '');
+    return label + ' activit' + (Number(label) === 1 ? 'y' : 'ies') + '/hr';
+  }
+
+  function tempoIntensityLevel(value) {
+    var numeric = Number(value || 0);
+    if (numeric <= 0) return 0;
+    if (numeric < 0.25) return 1;
+    if (numeric < 0.5) return 2;
+    if (numeric < 0.75) return 3;
+    return 4;
+  }
+
+  function tempoBucketLocalLabel(bucket) {
+    var local = bucket && bucket.start ? formatHistoryAxisTime(Date.parse(bucket.start)) : '';
+    return local || (bucket && bucket.label) || '';
+  }
+
+  function tempoBucketLocalRange(bucket) {
+    var startMs = bucket && bucket.start ? Date.parse(bucket.start) : NaN;
+    if (!Number.isFinite(startMs)) return tempoBucketLocalLabel(bucket);
+    var endMs = startMs + 60 * 60 * 1000;
+    var start = formatHistoryAxisTime(startMs);
+    var end = formatHistoryAxisTime(endMs);
+    if (!start || !end) return tempoBucketLocalLabel(bucket);
+    return start + ' - ' + end;
+  }
+
+  function tempoBucketReadout(bucket, index, mode) {
+    var label = tempoBucketLocalRange(bucket);
+    var base = (label || 'Hour ' + (index + 1)) + ': ';
+    if (mode === 'activity') {
+      return base
+        + countLabel(Number(bucket && bucket.event_count || 0), 'activity item', 'activity items') + ', '
+        + countLabel(Number(bucket && bucket.launch_count || 0), 'tool call', 'tool calls') + ', '
+        + countLabel(Number(bucket && bucket.turn_count || 0), 'turn', 'turns');
+    }
+    var failures = Number(bucket && bucket.failure_count || 0);
+    if (mode === false) {
+      return base
+        + countLabel(Number(bucket && bucket.event_count || 0), 'event', 'events') + ', '
+        + countLabel(Number(bucket && bucket.active_sessions || 0), 'session', 'sessions')
+        + (failures > 0 ? ', ' + countLabel(failures, 'failure', 'failures') : '');
+    }
+    return base
+      + countLabel(Number(bucket && bucket.launch_count || 0), 'agent start', 'agent starts') + ', '
+      + countLabel(Number(bucket && bucket.event_count || 0), 'event', 'events')
+      + (failures > 0 ? ', ' + countLabel(failures, 'failure', 'failures') : '');
+  }
+
+  function renderTempoHeatStrip(buckets, className, mode) {
+    var rows = Array.isArray(buckets) ? buckets.slice(-24) : [];
+    if (!rows.length) return '';
+    return '<div class="' + escapeHtml(className || 'cmc-tempo-heat-strip') + '" aria-label="Recent activity density">'
+      + rows.map(function (bucket, index) {
+        var level = tempoIntensityLevel(bucket && bucket.intensity);
+        var title = tempoBucketReadout(bucket, index, mode || true);
+        return '<span class="cmc-tempo-heat-cell" data-intensity="' + level + '" data-tempo-readout="' + escapeHtml(title) + '" title="' + escapeHtml(title) + '" tabindex="0" aria-label="' + escapeHtml(title) + '"></span>';
+      }).join('')
+      + '</div>';
+  }
+
+  function renderOpsTempo(view) {
+    var signal = selectedActivityRateSignal(view) || {};
+    var activity5m = Number(signal.launches_last_5m || 0);
+    var activityHour = Number(signal.launches_last_hour || 0);
+    var velocity = Number(signal.velocity_per_hour || activityHour || 0);
+    var peak = Number(signal.peak_velocity_per_hour || 0);
+    var activeHours = Number(signal.active_hours_24h || 0);
+    var state = activity5m >= 5 ? 'hot' : (activity5m > 0 ? 'active' : 'quiet');
+    var velocityLabel = formatRate(velocity);
+    var startsLabel = exactNumber(activity5m) + ' activit' + (activity5m === 1 ? 'y' : 'ies');
+    var peakHtml = peak > 0 ? '<span class="cmc-ops-tempo-note">Peak hour ' + escapeHtml(formatRate(peak)) + '</span>' : '';
+    return '<div class="cmc-ops-tempo ' + escapeHtml(state) + '" aria-label="Live operations tempo">'
+      + '<div class="cmc-ops-tempo-head"><span>Activity Rate</span><strong>' + (state === 'hot' ? 'High activity' : state === 'active' ? 'Active' : 'Idle') + '</strong></div>'
+      + '<div class="cmc-ops-tempo-grid">'
+      + '<div class="cmc-ops-tempo-metric"><span>Past hour</span><strong>' + escapeHtml(velocityLabel) + '</strong></div>'
+      + '<div class="cmc-ops-tempo-metric"><span>Past 5 min</span><strong>' + escapeHtml(startsLabel) + '</strong></div>'
+      + '</div>'
+      + renderTempoHeatStrip(signal.hourly_24h, 'cmc-tempo-heat-strip', 'activity')
+      + '<div class="cmc-tempo-readout" aria-live="polite">Hover an hour for tool calls and turns.</div>'
+      + '<div class="cmc-ops-tempo-foot">' + peakHtml + '<span class="cmc-ops-tempo-note">' + escapeHtml(exactNumber(activeHours) + '/24 active hours') + '</span></div>'
+      + '</div>';
+  }
+
+  function updateTempoReadout(target) {
+    if (!target || typeof target.closest !== 'function') return;
+    var point = target.closest('[data-tempo-readout]');
+    if (!point) return;
+    var card = point.closest('.cmc-ops-tempo');
+    var readout = card && card.querySelector('.cmc-tempo-readout');
+    var text = point.getAttribute('data-tempo-readout') || '';
+    if (readout && text) {
+      readout.textContent = text;
+      readout.classList.add('visible');
+    }
+  }
+
+  function hideTempoReadout(target) {
+    if (!target || typeof target.closest !== 'function') return;
+    var card = target.closest('.cmc-ops-tempo');
+    var readout = card && card.querySelector('.cmc-tempo-readout');
+    if (readout) {
+      readout.textContent = 'Hover an hour for tool calls and turns.';
+      readout.classList.remove('visible');
+    }
+  }
+
   function renderSession(view) {
     var body = panelBody(domSession);
     if (!body) return;
@@ -2123,7 +2343,7 @@
         }).join('')
       : '';
     if (!options.length) {
-      body.innerHTML = alertsHtml + '<div class="cmc-label">No running Copilot sessions found. Start Copilot CLI and this panel will show the active task.</div>';
+      body.innerHTML = alertsHtml + renderOpsTempo(view) + '<div class="cmc-label">No running Copilot sessions found. Start Copilot CLI and this panel will show the active task.</div>';
       return;
     }
     var selectedId = selected && selected.id;
@@ -2163,15 +2383,13 @@
         + '<span class="cmc-meta-label">Tool: ' + escapeHtml(activity.tool) + '</span>'
         + '<span class="cmc-meta-label">Age: ' + escapeHtml(activity.age) + '</span>'
         + '<span class="cmc-meta-label">Tokens in/out: ' + tokenLabel(inTok, outTok, inputPending) + '</span>'
+        + '<span class="cmc-meta-label cmc-model-meta">Model: <span id="model-chip" class="' + (model ? '' : 'empty') + '" title="Active model for the selected session">' + escapeHtml(model) + '</span></span>'
         + '</div>'
         + '</div>'
+        + renderOpsTempo(view)
         + '<div class="cmc-actions">'
         + '<button class="cmc-button accent ' + (hasGitRoot ? '' : 'disabled') + '" aria-label="Open selected session in editor" ' + (hasGitRoot ? 'data-cmc-action="editor"' : 'disabled aria-disabled="true"') + '>↗ Open in Editor</button>'
         + '<button class="cmc-button ' + (tcalls > 0 ? '' : 'disabled') + '" aria-label="Open inspector for selected session" ' + (tcalls > 0 ? 'data-cmc-action="inspector"' : 'disabled aria-disabled="true"') + '>Inspector</button>'
-        + '</div>'
-        + '<div class="cmc-session-model-row">'
-        + '<span class="cmc-model-label">Model</span>'
-        + '<span id="model-chip" class="' + (model ? '' : 'empty') + '" title="Active model for the selected session">' + escapeHtml(model) + '</span>'
         + '</div>';
     }
     body.innerHTML = alertsHtml + picker + selectedHtml;
@@ -3040,7 +3258,9 @@
       var y = top + plotH - totalH;
       var bucketLabel = useRelativeHours ? historyHourReadoutLabel(index, data.length, bucket) : bucket.label;
       var axisLabel = useRelativeHours ? hourAxisLabels.get(index) : bucket.label;
-      var readout = bucketLabel + ': ' + exactNumber(total) + ' events, ' + exactNumber(Number(bucket.active_sessions || 0)) + ' sessions';
+      var agentStarts = Number(bucket.launch_count || 0);
+      var readout = bucketLabel + ': ' + exactNumber(total) + ' events, ' + exactNumber(Number(bucket.active_sessions || 0)) + ' sessions'
+        + (useRelativeHours ? ', ' + countLabel(agentStarts, 'agent start', 'agent starts') : '');
       var readoutAttr = ' data-history-readout="' + escapeHtml(readout) + '" tabindex="0" aria-label="' + escapeHtml(readout) + '"';
       var markerX = x + barW / 2;
       if (axisLabel) {
@@ -3422,6 +3642,42 @@
       + '</div>';
   }
 
+  function renderFlightLogActivityRate(buckets) {
+    var rows = Array.isArray(buckets) ? buckets : [];
+    if (!rows.length || !rows.some(function (bucket) { return Number(bucket.event_count || 0) > 0; })) {
+      return '<section class="flight-log-section flight-log-activity-rate"><h3>Activity Rate</h3><div class="history-empty">No hourly activity is indexed for this day.</div></section>';
+    }
+    var peak = rows.reduce(function (max, bucket) { return Math.max(max, Number(bucket.event_count || 0)); }, 0);
+    var activeHours = rows.filter(function (bucket) { return Number(bucket.event_count || 0) > 0; }).length;
+    var busiest = rows.reduce(function (best, bucket) {
+      if (!best || Number(bucket.event_count || 0) >= Number(best.event_count || 0)) return bucket;
+      return best;
+    }, null);
+    var totalEvents = rows.reduce(function (sum, bucket) { return sum + Number(bucket.event_count || 0); }, 0);
+    var totalToolCalls = rows.reduce(function (sum, bucket) { return sum + Number(bucket.tool_call_count || 0); }, 0);
+    var totalTurns = rows.reduce(function (sum, bucket) { return sum + Number(bucket.turn_count || 0); }, 0);
+    var cells = rows.map(function (bucket, index) {
+      var level = tempoIntensityLevel(bucket && bucket.intensity);
+      var label = bucket && bucket.start_ms ? tempoBucketLocalRange({ start: new Date(Number(bucket.start_ms || 0)).toISOString() }) : (bucket && bucket.label || ('Hour ' + (index + 1)));
+      var readout = label + ': '
+        + countLabel(bucket.event_count, 'activity item', 'activity items') + ', '
+        + countLabel(bucket.tool_call_count, 'tool call', 'tool calls') + ', '
+        + countLabel(bucket.turn_count, 'turn', 'turns')
+        + (Number(bucket.failure_count || 0) > 0 ? ', ' + countLabel(bucket.failure_count, 'failure', 'failures') : '');
+      return '<span class="flight-log-activity-cell" data-intensity="' + level + '" data-history-readout="' + escapeHtml(readout) + '" tabindex="0" aria-label="' + escapeHtml(readout) + '"></span>';
+    }).join('');
+    return '<section class="flight-log-section flight-log-activity-rate"><h3>Activity Rate</h3>'
+      + '<p class="flight-log-section-copy">Hourly activity across all sessions for this day.</p>'
+      + '<div class="flight-log-activity-strip" aria-label="Daily activity rate by hour">' + cells + '</div>'
+      + '<div class="history-chart-readout" aria-live="polite">Hover an hour for tool calls, turns, and failures.</div>'
+      + '<div class="flight-log-activity-stats">'
+      + '<div><span>Peak hour</span><strong>' + escapeHtml(countLabel(peak, 'activity item', 'activity items')) + '</strong></div>'
+      + '<div><span>Busiest</span><strong>' + escapeHtml(busiest && busiest.event_count > 0 ? busiest.label || 'Active' : 'No activity') + '</strong></div>'
+      + '<div><span>Active hours</span><strong>' + escapeHtml(exactNumber(activeHours) + '/24') + '</strong></div>'
+      + '<div><span>Day total</span><strong>' + escapeHtml(exactNumber(totalEvents) + ' events · ' + exactNumber(totalToolCalls) + ' tools · ' + exactNumber(totalTurns) + ' turns') + '</strong></div>'
+      + '</div></section>';
+  }
+
   function renderFlightLogDebrief(digest) {
     var day = digest.day || defaultEngineeringDigest({ selected_day: digest.selected_day, month: digest.month }).day;
     var exports = day.exports || [];
@@ -3430,6 +3686,7 @@
       + '<div class="history-card-title"><span>Daily Debrief - ' + escapeHtml(localDateLabel(debriefDate)) + '</span><span>selected day</span></div>'
       + renderFlightLogSummary(day)
       + '<section class="flight-log-section flight-log-narrative"><h3>Mission Summary</h3>' + escapeHtml(day.narrative || '') + '</section>'
+      + renderFlightLogActivityRate(day.activity_rate)
       + '<div class="flight-log-debrief-grid">'
       + '<section class="flight-log-section"><h3>What I Worked On</h3>'
       + renderFlightLogRows(day.repos, 'No project activity is indexed for this day.', function (repo) {
@@ -3611,10 +3868,10 @@
     setPanelRect(domSession, { x: l.leftX, y: l.topY, w: l.panelW });
     renderSession(view);
     var naturalSessionH = naturalPanelHeight(domSession, l.compact ? 140 : 160);
-    var sessionExtraH = l.compact ? 34 : 68;
+    var sessionExtraH = 0;
     var sessionMainH = Math.max(0, Math.min(naturalSessionH + sessionExtraH, maxSessionH));
     var feedY = (l.topY || 0) + sessionMainH + columnGap;
-    var feedH = Math.max(80, Math.min(feedTargetH, columnBottom - feedY));
+    var feedH = Math.max(80, columnBottom - feedY);
     setPanelRect(domSession, { x: l.leftX, y: l.topY, w: l.panelW, h: sessionMainH });
     if (domSession) domSession.classList.toggle('constrained', naturalSessionH > sessionMainH + 1);
     setPanelRect(domFeed, { x: l.leftX, y: feedY, w: l.panelW, h: feedH });
@@ -3707,6 +3964,22 @@
       var rect = action.getBoundingClientRect();
       window.__cmcSeekReplayRatio((event.clientX - rect.left) / rect.width);
     }
+  });
+
+  document.addEventListener('pointerover', function (event) {
+    updateTempoReadout(event.target);
+  });
+  document.addEventListener('pointermove', function (event) {
+    updateTempoReadout(event.target);
+  });
+  document.addEventListener('focusin', function (event) {
+    updateTempoReadout(event.target);
+  });
+  document.addEventListener('pointerout', function (event) {
+    if (event.target && event.target.closest && event.target.closest('[data-tempo-readout]')) hideTempoReadout(event.target);
+  });
+  document.addEventListener('focusout', function (event) {
+    hideTempoReadout(event.target);
   });
 
   [schemaDriftClose, schemaDriftDismiss].forEach(function (button) {
@@ -3906,6 +4179,18 @@
       if (!kind) return;
       flightLogExpandedExports[kind] = !!target.open;
     }, true);
+    historyFlightLogContent.addEventListener('pointerover', function (event) {
+      updateHistoryChartReadout(event.target, event);
+    });
+    historyFlightLogContent.addEventListener('pointermove', function (event) {
+      updateHistoryChartReadout(event.target, event);
+    });
+    historyFlightLogContent.addEventListener('focusin', function (event) {
+      updateHistoryChartReadout(event.target, event);
+    });
+    historyFlightLogContent.addEventListener('focusout', function (event) {
+      hideHistoryChartReadout(event.target);
+    });
   }
   if (historyContent) {
     historyContent.addEventListener('pointerover', function (event) {

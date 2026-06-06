@@ -318,6 +318,90 @@ body.theme-light .flight-log-section {
   font-size: 13px;
   line-height: 1.55;
 }
+.flight-log-activity-rate {
+  grid-column: 1 / -1;
+}
+.flight-log-section-copy {
+  margin: 0 0 10px;
+  color: var(--history-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.flight-log-activity-strip {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(5px, 1fr));
+  gap: 4px;
+  align-items: stretch;
+  min-height: 44px;
+  margin: 8px 0 10px;
+  padding: 10px;
+  border: 1px solid rgba(97, 214, 255, 0.14);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(97, 214, 255, 0.1), transparent 180px),
+    rgba(2, 10, 24, 0.22);
+}
+.flight-log-activity-cell {
+  display: block;
+  min-height: 34px;
+  border-radius: 999px;
+  background: rgba(97, 214, 255, 0.08);
+  cursor: crosshair;
+  outline: none;
+  transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease;
+}
+.flight-log-activity-cell:hover,
+.flight-log-activity-cell:focus {
+  z-index: 1;
+  transform: translateY(-2px);
+  filter: brightness(1.16);
+  box-shadow: 0 8px 22px rgba(97, 214, 255, 0.18);
+}
+.flight-log-activity-cell[data-intensity="1"] { background: linear-gradient(180deg, rgba(45, 106, 79, 0.86), rgba(28, 72, 58, 0.86)); }
+.flight-log-activity-cell[data-intensity="2"] { background: linear-gradient(180deg, rgba(82, 183, 136, 0.94), rgba(45, 106, 79, 0.94)); }
+.flight-log-activity-cell[data-intensity="3"] { background: linear-gradient(180deg, rgba(255, 209, 102, 0.98), rgba(82, 183, 136, 0.94)); }
+.flight-log-activity-cell[data-intensity="4"] {
+  background: linear-gradient(180deg, #ff6b7d, #ffd166);
+  box-shadow: 0 0 18px rgba(255, 107, 125, 0.22);
+}
+.flight-log-activity-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.flight-log-activity-stats div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--history-row-border);
+  border-radius: 12px;
+  background: rgba(128, 148, 180, 0.07);
+}
+.flight-log-activity-stats span {
+  display: block;
+  color: var(--history-muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.flight-log-activity-stats strong {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--history-heading);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.theme-light .flight-log-activity-strip,
+body.theme-light .flight-log-activity-stats div {
+  border-color: rgba(46, 111, 191, 0.14);
+  background: rgba(255, 255, 255, 0.56);
+}
+body.theme-light .flight-log-activity-cell {
+  background: rgba(46, 111, 191, 0.12);
+}
 .flight-log-export-instruction {
   margin-top: 12px;
   padding-top: 12px;

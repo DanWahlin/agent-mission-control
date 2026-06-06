@@ -37,6 +37,7 @@ const RECENT_FACT_RETENTION_DAYS: u32 = 30;
 const ROLLUP_RETENTION_DAYS: u32 = 180;
 const INGEST_STALE_MS: i64 = 5 * 60 * 1000;
 const ACTIVE_EVENT_WINDOW_MS: u64 = 5 * 60 * 1000;
+const HOUR_MS: u64 = 60 * 60 * 1000;
 const SNAPSHOT_SOURCE_HASH: &str = "agent-activity-snapshot";
 const LOCAL_HISTORY_SOURCE_HASH: &str = "copilot-local-history";
 const LOCAL_HISTORY_PROVIDER: &str = "copilot";
@@ -208,6 +209,8 @@ pub struct EngineeringDigestCalendarDay {
 pub struct EngineeringDigestDay {
     pub local_day: String,
     pub totals: Vec<AnalyticsMetricValue>,
+    #[serde(default)]
+    pub activity_rate: Vec<EngineeringDigestActivityBucket>,
     pub repos: Vec<EngineeringDigestRepoGroup>,
     pub models: Vec<AnalyticsRankedItem>,
     pub tools: Vec<EngineeringDigestTool>,
@@ -216,6 +219,18 @@ pub struct EngineeringDigestDay {
     pub useful_sessions: Vec<EngineeringDigestSession>,
     pub narrative: String,
     pub exports: Vec<EngineeringDigestExport>,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct EngineeringDigestActivityBucket {
+    pub start_ms: u64,
+    pub label: String,
+    pub event_count: u64,
+    pub tool_call_count: u64,
+    pub turn_count: u64,
+    pub failure_count: u64,
+    pub session_count: u64,
+    pub intensity: f64,
 }
 
 #[derive(serde::Serialize, Default, Clone)]
@@ -3148,6 +3163,7 @@ fn engineering_digest_day(
 ) -> Result<EngineeringDigestDay, String> {
     let daily = daily_points_window(conn, selected_day, Some(&local_day_shift(selected_day, 1)))?;
     let totals = summary_metrics(&daily);
+    let activity_rate = activity_rate_for_day(conn, selected_day)?;
     let sessions = digest_sessions_for_day(conn, selected_day)?;
     let repos = group_digest_sessions(&sessions);
     let models = model_mix_for_day(conn, selected_day)?;
@@ -3183,6 +3199,7 @@ fn engineering_digest_day(
     Ok(EngineeringDigestDay {
         local_day: selected_day.to_string(),
         totals,
+        activity_rate,
         repos,
         models,
         tools,
@@ -3192,6 +3209,96 @@ fn engineering_digest_day(
         narrative,
         exports,
     })
+}
+
+fn activity_rate_for_day(
+    conn: &Connection,
+    selected_day: &str,
+) -> Result<Vec<EngineeringDigestActivityBucket>, String> {
+    let (start_ms, end_ms, _) = local_day_bounds(selected_day);
+    let mut buckets = (0..24)
+        .map(|hour| {
+            let bucket_start = start_ms.saturating_add(hour * HOUR_MS);
+            EngineeringDigestActivityBucket {
+                start_ms: bucket_start,
+                label: local_hour_label(bucket_start),
+                ..Default::default()
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut session_sets = (0..24).map(|_| BTreeSet::<String>::new()).collect::<Vec<_>>();
+
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT occurred_at_ms, session_id_hash, kind, success
+            FROM recent_event_facts
+            WHERE occurred_at_ms >= ?1 AND occurred_at_ms < ?2
+            "#,
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![start_ms as i64, end_ms as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?.max(0) as u64,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(|err| err.to_string())?;
+
+    for row in rows {
+        let (occurred_at_ms, session_hash, kind, success) = row.map_err(|err| err.to_string())?;
+        if occurred_at_ms < start_ms || occurred_at_ms >= end_ms {
+            continue;
+        }
+        let index = ((occurred_at_ms - start_ms) / HOUR_MS) as usize;
+        let Some(bucket) = buckets.get_mut(index) else {
+            continue;
+        };
+        bucket.event_count += 1;
+        if kind.starts_with("tool.") || kind.starts_with("hook.") {
+            bucket.tool_call_count += 1;
+        }
+        if kind.contains("turn") {
+            bucket.turn_count += 1;
+        }
+        if success == 0 {
+            bucket.failure_count += 1;
+        }
+        if let Some(sessions) = session_sets.get_mut(index) {
+            sessions.insert(session_hash);
+        }
+    }
+
+    let peak = buckets
+        .iter()
+        .map(|bucket| bucket.event_count)
+        .max()
+        .unwrap_or(0);
+    for (index, bucket) in buckets.iter_mut().enumerate() {
+        bucket.session_count = session_sets
+            .get(index)
+            .map(|sessions| sessions.len() as u64)
+            .unwrap_or(0);
+        bucket.intensity = if peak > 0 && bucket.event_count > 0 {
+            (bucket.event_count as f64 / peak as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    Ok(buckets)
+}
+
+fn local_hour_label(start_ms: u64) -> String {
+    let local = Utc
+        .timestamp_millis_opt(start_ms as i64)
+        .single()
+        .unwrap_or_else(Utc::now)
+        .with_timezone(&Local);
+    local.format("%-I %p").to_string()
 }
 
 fn dominant_session_labels(

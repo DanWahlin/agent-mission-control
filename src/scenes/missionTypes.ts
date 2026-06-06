@@ -52,6 +52,7 @@ export interface CopilotSessionSummary {
   recent_tool_calls?: SessionToolCall[];
   recent_turns?: SessionTurnSummary[];
   token_checkpoints?: SessionTokenCheckpoint[];
+  activity_signal?: CopilotActivitySignal;
   replay_activity?: {
     last: string;
     tool: string;
@@ -104,8 +105,27 @@ export interface CopilotHistoryBucket {
   start: string;
   label: string;
   event_count: number;
+  launch_count?: number;
   failure_count: number;
   active_sessions: number;
+}
+
+export interface CopilotActivitySignalBucket extends CopilotHistoryBucket {
+  launch_count: number;
+  turn_count?: number;
+  intensity: number;
+}
+
+export interface CopilotActivitySignal {
+  generated_at_ms: number;
+  launches_last_5m: number;
+  launches_last_hour: number;
+  velocity_per_hour: number;
+  peak_velocity_per_hour: number;
+  peak_hour_event_count_24h: number;
+  busiest_hour_label_24h: string;
+  active_hours_24h: number;
+  hourly_24h: CopilotActivitySignalBucket[];
 }
 
 export interface CopilotHistoryMetric {
@@ -182,6 +202,7 @@ export interface CopilotActivity {
   alerts: string[];
   schema_drift?: SchemaDriftReport[];
   history?: CopilotHistorySummary;
+  activity_signal?: CopilotActivitySignal;
   generated_at_ms: number;
 }
 
@@ -225,6 +246,7 @@ export interface EngineeringDigestDay {
     estimated?: boolean;
     partial?: boolean;
   }>;
+  activity_rate?: EngineeringDigestActivityBucket[];
   repos: EngineeringDigestRepoGroup[];
   models: Array<{
     label: string;
@@ -240,6 +262,17 @@ export interface EngineeringDigestDay {
   useful_sessions: EngineeringDigestSession[];
   narrative: string;
   exports: EngineeringDigestExport[];
+}
+
+export interface EngineeringDigestActivityBucket {
+  start_ms: number;
+  label: string;
+  event_count: number;
+  tool_call_count: number;
+  turn_count: number;
+  failure_count: number;
+  session_count: number;
+  intensity: number;
 }
 
 export interface EngineeringDigestRepoGroup {

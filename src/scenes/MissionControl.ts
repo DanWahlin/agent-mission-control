@@ -10,6 +10,8 @@ import { advanceReplayCursor, createReplayViewState, ingestReplayEvents, isRepla
 import { findSessionIndexById, pickSelectedSession as resolveSelectedSession, sessionPickerOptions } from './sessionSelection.js';
 import type {
   CopilotActivity,
+  CopilotActivitySignal,
+  CopilotActivitySignalBucket,
   CopilotEventSummary,
   CopilotSessionSummary,
   CopilotToolMetric,
@@ -975,6 +977,13 @@ export class MissionControlScene extends Phaser.Scene {
     const totalInputTokens = sessions.reduce((sum, session) => sum + (session.input_tokens ?? 0), 0);
     const totalOutputTokens = sessions.reduce((sum, session) => sum + session.output_tokens, 0);
     const totalTurns = sessions.reduce((sum, session) => sum + (session.turn_count ?? 0), 0);
+    const signalEvents = [
+      ...recentEvents,
+      ...sessions.flatMap((session) =>
+        (session.recent_tool_calls ?? []).map((call) => toolCallSignalEvent(session.id, call)),
+      ),
+    ];
+    const generatedAtMs = normalized.activity_signal?.generated_at_ms ?? normalized.generated_at_ms ?? Date.now();
 
     return {
       ...normalized,
@@ -986,6 +995,7 @@ export class MissionControlScene extends Phaser.Scene {
       total_input_tokens: totalInputTokens,
       total_output_tokens: totalOutputTokens,
       total_turns: totalTurns,
+      activity_signal: buildActivitySignalFromEvents(signalEvents, generatedAtMs),
     };
   }
 
@@ -1025,6 +1035,7 @@ export class MissionControlScene extends Phaser.Scene {
       recent_tool_calls: recentToolCalls,
       recent_turns: recentTurns,
       token_checkpoints: tokenCheckpoints,
+      activity_signal: createEmptyActivitySignal(this.rawActivity.activity_signal?.generated_at_ms ?? Date.now()),
     };
   }
 
@@ -2205,12 +2216,14 @@ function createEmptyActivity(): CopilotActivity {
     tools: [],
     recent_events: [],
     alerts: ['Waiting for GitHub Copilot CLI telemetry.'],
+    activity_signal: createEmptyActivitySignal(),
     generated_at_ms: Date.now(),
   };
 }
 
 function createDemoActivity(): CopilotActivity {
   const recentEvents = createDemoEvents(36);
+  const generatedAtMs = Date.now();
   return {
     available: true,
     source: 'demo-fixture',
@@ -2236,7 +2249,8 @@ function createDemoActivity(): CopilotActivity {
     ],
     recent_events: recentEvents,
     alerts: ['2 recent command failures need review.'],
-    generated_at_ms: Date.now(),
+    activity_signal: buildActivitySignalFromEvents(recentEvents, generatedAtMs),
+    generated_at_ms: generatedAtMs,
   };
 }
 
@@ -2270,6 +2284,7 @@ function applyDemoEvent(activity: CopilotActivity, event: CopilotEventSummary): 
   const quarterKey = quarterKeyForEvent(event);
   const toolCategory = quarterKey ?? event.category;
   const toolName = event.tool || event.kind;
+  const generatedAtMs = Date.now();
   const tools = [...activity.tools];
   const tool = tools.find(metric => metric.name === toolName && metric.category === toolCategory);
   if (tool) {
@@ -2315,7 +2330,8 @@ function applyDemoEvent(activity: CopilotActivity, event: CopilotEventSummary): 
     sessions,
     tools,
     recent_events: [event, ...activity.recent_events].slice(0, 40),
-    generated_at_ms: Date.now(),
+    activity_signal: buildActivitySignalFromEvents([event, ...activity.recent_events], generatedAtMs),
+    generated_at_ms: generatedAtMs,
   };
 }
 
@@ -2328,10 +2344,160 @@ function normalizeActivity(activity: CopilotActivity): CopilotActivity {
       recent_tool_calls: session.recent_tool_calls ?? [],
       recent_turns: session.recent_turns ?? [],
       token_checkpoints: session.token_checkpoints ?? [],
+      activity_signal: normalizeActivitySignal(session.activity_signal),
     })),
     tools: activity.tools ?? [],
     recent_events: activity.recent_events ?? [],
     alerts: activity.alerts ?? [],
+    activity_signal: normalizeActivitySignal(activity.activity_signal),
+  };
+}
+
+function createEmptyActivitySignal(generatedAtMs = Date.now()): CopilotActivitySignal {
+  return {
+    generated_at_ms: generatedAtMs,
+    launches_last_5m: 0,
+    launches_last_hour: 0,
+    velocity_per_hour: 0,
+    peak_velocity_per_hour: 0,
+    peak_hour_event_count_24h: 0,
+    busiest_hour_label_24h: 'No activity',
+    active_hours_24h: 0,
+    hourly_24h: createEmptySignalBuckets(generatedAtMs),
+  };
+}
+
+function normalizeActivitySignal(signal?: CopilotActivitySignal): CopilotActivitySignal {
+  if (!signal) return createEmptyActivitySignal();
+  const generatedAtMs = Number(signal.generated_at_ms || Date.now());
+  const hourly = Array.isArray(signal.hourly_24h) && signal.hourly_24h.length
+    ? signal.hourly_24h.map(normalizeSignalBucket)
+    : createEmptySignalBuckets(generatedAtMs);
+  const peakHour = Math.max(0, ...hourly.map(bucket => Number(bucket.event_count || 0)));
+  const peakLaunch = Math.max(0, ...hourly.map(bucket => Number(bucket.launch_count || 0)));
+  const activeLaunchHours = hourly.filter(bucket => bucket.launch_count > 0).length;
+  return {
+    generated_at_ms: generatedAtMs,
+    launches_last_5m: Number(signal.launches_last_5m || 0),
+    launches_last_hour: Number(signal.launches_last_hour || 0),
+    velocity_per_hour: Number(signal.velocity_per_hour || 0),
+    peak_velocity_per_hour: signal.peak_velocity_per_hour == null ? peakLaunch : Number(signal.peak_velocity_per_hour),
+    peak_hour_event_count_24h: signal.peak_hour_event_count_24h == null ? peakHour : Number(signal.peak_hour_event_count_24h),
+    busiest_hour_label_24h: signal.busiest_hour_label_24h || busiestSignalBucketLabel(hourly),
+    active_hours_24h: signal.active_hours_24h == null ? activeLaunchHours : Number(signal.active_hours_24h),
+    hourly_24h: hourly,
+  };
+}
+
+function normalizeSignalBucket(bucket: CopilotActivitySignalBucket): CopilotActivitySignalBucket {
+  return {
+    start: bucket.start || '',
+    label: bucket.label || '',
+    event_count: Number(bucket.event_count || 0),
+    launch_count: Number(bucket.launch_count || 0),
+    turn_count: Number(bucket.turn_count || 0),
+    failure_count: Number(bucket.failure_count || 0),
+    active_sessions: Number(bucket.active_sessions || 0),
+    intensity: Number(bucket.intensity || 0),
+  };
+}
+
+function createEmptySignalBuckets(generatedAtMs: number): CopilotActivitySignalBucket[] {
+  const hourMs = 60 * 60 * 1000;
+  const endBucketStart = Math.floor(generatedAtMs / hourMs) * hourMs;
+  return Array.from({ length: 24 }, (_, index) => {
+    const startMs = endBucketStart - (23 - index) * hourMs;
+    return {
+      start: new Date(startMs).toISOString().replace('.000Z', 'Z'),
+      label: signalHourLabel(startMs),
+      event_count: 0,
+      launch_count: 0,
+      turn_count: 0,
+      failure_count: 0,
+      active_sessions: 0,
+      intensity: 0,
+    };
+  });
+}
+
+function buildActivitySignalFromEvents(events: CopilotEventSummary[], generatedAtMs: number): CopilotActivitySignal {
+  const hourMs = 60 * 60 * 1000;
+  const buckets = createEmptySignalBuckets(generatedAtMs);
+  const indexByStart = new Map(buckets.map((bucket, index) => [bucket.start, index]));
+  const sessionSets = buckets.map(() => new Set<string>());
+  const seen = new Set<string>();
+  const endMs = generatedAtMs;
+  const fiveMinStart = endMs - 5 * 60 * 1000;
+  const hourStart = endMs - hourMs;
+  let launchesLast5m = 0;
+  let launchesLastHour = 0;
+
+  for (const event of events) {
+    const timestamp = Date.parse(event.timestamp || '');
+    if (!Number.isFinite(timestamp)) continue;
+    const key = `${event.session_id}\u001f${event.timestamp}\u001f${event.kind}\u001f${event.tool}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const bucketStart = Math.floor(timestamp / hourMs) * hourMs;
+    const bucketKey = new Date(bucketStart).toISOString().replace('.000Z', 'Z');
+    const bucketIndex = indexByStart.get(bucketKey);
+    if (bucketIndex != null) {
+      const bucket = buckets[bucketIndex];
+      bucket.event_count += 1;
+      if (isLaunchSignal(event)) bucket.launch_count += 1;
+      if (!event.success) bucket.failure_count += 1;
+      if (event.session_id) sessionSets[bucketIndex].add(event.session_id);
+    }
+    if (isLaunchSignal(event) && timestamp >= fiveMinStart && timestamp <= endMs) launchesLast5m += 1;
+    if (isLaunchSignal(event) && timestamp >= hourStart && timestamp <= endMs) launchesLastHour += 1;
+  }
+
+  buckets.forEach((bucket, index) => {
+    bucket.active_sessions = sessionSets[index].size;
+  });
+  const peakHour = Math.max(0, ...buckets.map(bucket => bucket.event_count));
+  const peakLaunch = Math.max(0, ...buckets.map(bucket => bucket.launch_count));
+  buckets.forEach(bucket => {
+    bucket.intensity = peakLaunch > 0 && bucket.launch_count > 0 ? Math.min(1, bucket.launch_count / peakLaunch) : 0;
+  });
+  return {
+    generated_at_ms: generatedAtMs,
+    launches_last_5m: launchesLast5m,
+    launches_last_hour: launchesLastHour,
+    velocity_per_hour: launchesLastHour,
+    peak_velocity_per_hour: peakLaunch,
+    peak_hour_event_count_24h: peakHour,
+    busiest_hour_label_24h: busiestSignalBucketLabel(buckets),
+    active_hours_24h: buckets.filter(bucket => bucket.launch_count > 0).length,
+    hourly_24h: buckets,
+  };
+}
+
+function busiestSignalBucketLabel(buckets: CopilotActivitySignalBucket[]): string {
+  const busiest = buckets.reduce<CopilotActivitySignalBucket | null>((best, bucket) => {
+    if (!best || bucket.launch_count >= best.launch_count) return bucket;
+    return best;
+  }, null);
+  return busiest && busiest.launch_count > 0 ? busiest.label : 'No activity';
+}
+
+function signalHourLabel(startMs: number): string {
+  const date = new Date(startMs);
+  return `${String(date.getUTCHours()).padStart(2, '0')}:00Z`;
+}
+
+function isLaunchSignal(event: CopilotEventSummary): boolean {
+  return event.kind === 'tool.execution_start' && event.category === 'delegates';
+}
+
+function toolCallSignalEvent(sessionId: string, call: SessionToolCall): CopilotEventSummary {
+  return {
+    session_id: sessionId,
+    timestamp: call.timestamp,
+    kind: call.category === 'hooks' ? 'hook.start' : 'tool.execution_start',
+    tool: call.tool,
+    category: call.category,
+    success: true,
   };
 }
 

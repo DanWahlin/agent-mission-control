@@ -2,6 +2,33 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { GAME_URL, waitForGame } from './helpers';
 
+function signalBuckets() {
+  const starts = [0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 2, 0, 2, 4, 7, 11];
+  return starts.map((launches, index) => {
+    const startMs = Date.parse('2026-05-20T08:00:00Z') + index * 60 * 60 * 1000;
+    const events = launches * 8 + (index % 3);
+    return {
+      start: new Date(startMs).toISOString().replace('.000Z', 'Z'),
+      label: `${String(new Date(startMs).getUTCHours()).padStart(2, '0')}:00Z`,
+      event_count: events,
+      launch_count: launches,
+      failure_count: index === 21 || index === 23 ? 1 : 0,
+      active_sessions: launches > 0 ? Math.min(3, Math.max(1, Math.ceil(launches / 4))) : 0,
+      intensity: launches ? launches / 11 : 0,
+    };
+  });
+}
+
+function agentStart(timestamp: string, id: string) {
+  return {
+    tool: 'task',
+    category: 'delegates',
+    timestamp,
+    success: true,
+    call_id: id,
+  };
+}
+
 const MISSION_FIXTURE = {
   available: true,
   source: 'playwright-fixture',
@@ -12,12 +39,20 @@ const MISSION_FIXTURE = {
   total_input_tokens: 3300,
   total_output_tokens: 8120,
   sessions: [
-    { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 3, delegates_count: 1, skills_count: 2, court_count: 4, mcp_count: 1, hooks_count: 3, error_count: 0, input_tokens: 1600, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 12, token_checkpoints: [
+    { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 3, delegates_count: 1, skills_count: 2, court_count: 4, mcp_count: 1, hooks_count: 3, error_count: 0, input_tokens: 1600, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 12, recent_tool_calls: [
+      agentStart('2026-05-21T07:18:00Z', 'alpha-agent-1'),
+    ], token_checkpoints: [
       { timestamp: '2026-05-21T07:11:00Z', input_tokens: 100, output_tokens: 200 },
       { timestamp: '2026-05-21T07:13:00Z', input_tokens: 400, output_tokens: 900 },
       { timestamp: '2026-05-21T07:15:00Z', input_tokens: 1600, output_tokens: 4200 },
     ] },
-    { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, write_count: 2, read_count: 7, command_count: 6, web_count: 0, task_count: 5, delegates_count: 2, skills_count: 3, court_count: 1, mcp_count: 4, hooks_count: 2, error_count: 1, input_tokens: 1200, output_tokens: 2920, last_tool: 'bash', last_event_kind: 'tool.execution_complete', last_event_category: 'alert', stale_seconds: 25, token_checkpoints: [
+    { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, write_count: 2, read_count: 7, command_count: 6, web_count: 0, task_count: 5, delegates_count: 2, skills_count: 3, court_count: 1, mcp_count: 4, hooks_count: 2, error_count: 1, input_tokens: 1200, output_tokens: 2920, last_tool: 'bash', last_event_kind: 'tool.execution_complete', last_event_category: 'alert', stale_seconds: 25, recent_tool_calls: [
+      agentStart('2026-05-21T07:16:00Z', 'beta-agent-1'),
+      agentStart('2026-05-21T07:17:00Z', 'beta-agent-2'),
+      agentStart('2026-05-21T07:18:00Z', 'beta-agent-3'),
+      agentStart('2026-05-21T07:19:00Z', 'beta-agent-4'),
+      agentStart('2026-05-21T06:45:00Z', 'beta-agent-5'),
+    ], token_checkpoints: [
       { timestamp: '2026-05-21T07:14:00Z', input_tokens: 1200, output_tokens: 2920 },
     ] },
     { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '', is_active: false, status: 'idle', event_count: 38, tool_count: 7, write_count: 0, read_count: 3, command_count: 0, web_count: 4, task_count: 0, delegates_count: 0, skills_count: 0, court_count: 0, mcp_count: 0, hooks_count: 0, error_count: 0, input_tokens: 500, output_tokens: 1000, last_tool: 'web_fetch', last_event_kind: 'tool.execution_start', last_event_category: 'signal', stale_seconds: 900 },
@@ -44,10 +79,10 @@ const MISSION_FIXTURE = {
     tool_count: 47,
     failure_count: 2,
     activity_24h: [
-      { start: '2026-05-21T04:00:00Z', label: '4a', event_count: 12, failure_count: 0, active_sessions: 1 },
-      { start: '2026-05-21T05:00:00Z', label: '5a', event_count: 31, failure_count: 1, active_sessions: 2 },
-      { start: '2026-05-21T06:00:00Z', label: '6a', event_count: 54, failure_count: 0, active_sessions: 2 },
-      { start: '2026-05-21T07:00:00Z', label: '7a', event_count: 87, failure_count: 1, active_sessions: 3 },
+      { start: '2026-05-21T04:00:00Z', label: '4a', event_count: 12, launch_count: 0, failure_count: 0, active_sessions: 1 },
+      { start: '2026-05-21T05:00:00Z', label: '5a', event_count: 31, launch_count: 1, failure_count: 1, active_sessions: 2 },
+      { start: '2026-05-21T06:00:00Z', label: '6a', event_count: 54, launch_count: 2, failure_count: 0, active_sessions: 2 },
+      { start: '2026-05-21T07:00:00Z', label: '7a', event_count: 87, launch_count: 3, failure_count: 1, active_sessions: 3 },
     ],
     activity_7d: [
       { start: '2026-05-18T00:00:00Z', label: 'Mon', event_count: 42, failure_count: 0, active_sessions: 1 },
@@ -94,9 +129,9 @@ const MISSION_FIXTURE = {
         tool_count: 23,
         failure_count: 0,
         activity_24h: [
-          { start: '2026-05-21T05:00:00Z', label: '5a', event_count: 12, failure_count: 0, active_sessions: 1 },
-          { start: '2026-05-21T06:00:00Z', label: '6a', event_count: 24, failure_count: 0, active_sessions: 1 },
-          { start: '2026-05-21T07:00:00Z', label: '7a', event_count: 46, failure_count: 0, active_sessions: 1 },
+          { start: '2026-05-21T05:00:00Z', label: '5a', event_count: 12, launch_count: 0, failure_count: 0, active_sessions: 1 },
+          { start: '2026-05-21T06:00:00Z', label: '6a', event_count: 24, launch_count: 1, failure_count: 0, active_sessions: 1 },
+          { start: '2026-05-21T07:00:00Z', label: '7a', event_count: 46, launch_count: 1, failure_count: 0, active_sessions: 1 },
         ],
         activity_7d: [
           { start: '2026-05-19T00:00:00Z', label: 'Tue', event_count: 16, failure_count: 0, active_sessions: 1 },
@@ -129,9 +164,9 @@ const MISSION_FIXTURE = {
         tool_count: 17,
         failure_count: 2,
         activity_24h: [
-          { start: '2026-05-21T05:00:00Z', label: '5a', event_count: 19, failure_count: 1, active_sessions: 1 },
-          { start: '2026-05-21T06:00:00Z', label: '6a', event_count: 30, failure_count: 0, active_sessions: 1 },
-          { start: '2026-05-21T07:00:00Z', label: '7a', event_count: 41, failure_count: 1, active_sessions: 1 },
+          { start: '2026-05-21T05:00:00Z', label: '5a', event_count: 19, launch_count: 1, failure_count: 1, active_sessions: 1 },
+          { start: '2026-05-21T06:00:00Z', label: '6a', event_count: 30, launch_count: 2, failure_count: 0, active_sessions: 1 },
+          { start: '2026-05-21T07:00:00Z', label: '7a', event_count: 41, launch_count: 1, failure_count: 1, active_sessions: 1 },
         ],
         activity_7d: [
           { start: '2026-05-19T00:00:00Z', label: 'Tue', event_count: 45, failure_count: 1, active_sessions: 1 },
@@ -160,10 +195,26 @@ const MISSION_FIXTURE = {
       },
     ],
   },
+  activity_signal: {
+    generated_at_ms: Date.parse('2026-05-21T07:20:00Z'),
+    launches_last_5m: 4,
+    launches_last_hour: 11,
+    velocity_per_hour: 11,
+    peak_velocity_per_hour: 11,
+    peak_hour_event_count_24h: 90,
+    busiest_hour_label_24h: '07:00Z',
+    active_hours_24h: 10,
+    hourly_24h: signalBuckets(),
+  },
   generated_at_ms: Date.now(),
 };
 
 const LONG_TOOL_NAME = 'bash-command-with-a-very-long-safe-label-for-turn-story-truncation';
+
+function expectedJuneSelectedDay() {
+  const day = Math.min(new Date().getDate(), 30);
+  return `2026-06-${String(day).padStart(2, '0')}`;
+}
 
 async function installFixture(page: Page, fixture = MISSION_FIXTURE) {
   await page.addInitScript((fixtureArg) => {
@@ -198,6 +249,20 @@ async function installFlightLogFixture(page: Page) {
         { label: 'Input tokens', value: 3300, exact: true },
         { label: 'Output tokens', value: 8120, exact: true },
       ],
+      activity_rate: Array.from({ length: 24 }, (_, hour) => {
+        const active = hour === 7 || hour === 12 || hour === 15;
+        const eventCount = hour === 12 ? 88 : hour === 7 ? 64 : hour === 15 ? 32 : 0;
+        return {
+          start_ms: Date.parse(`2026-05-21T${String(hour).padStart(2, '0')}:00:00Z`),
+          label: `${hour % 12 || 12} ${hour < 12 ? 'AM' : 'PM'}`,
+          event_count: eventCount,
+          tool_call_count: active ? Math.round(eventCount * 0.6) : 0,
+          turn_count: active ? Math.max(1, Math.round(eventCount / 20)) : 0,
+          failure_count: hour === 12 ? 1 : 0,
+          session_count: active ? 2 : 0,
+          intensity: eventCount / 88,
+        };
+      }),
       repos: [
         {
           repository: 'copilot-mission-control',
@@ -765,12 +830,16 @@ test.describe('Copilot Mission Control — History', () => {
       return {
         session: rect('#dom-session'),
         actions: rect('#dom-session .cmc-actions'),
-        model: rect('#dom-session .cmc-session-model-row'),
+        summary: rect('#dom-session .cmc-session-summary'),
+        pulse: rect('#dom-session .cmc-ops-tempo'),
         feed: rect('#dom-feed'),
+        constrained: document.querySelector('#dom-session')?.classList.contains('constrained') ?? true,
       };
     });
-    expect(dashboardLayout.session.height).toBeLessThan(460);
-    expect(dashboardLayout.session.bottom).toBeLessThanOrEqual(dashboardLayout.model.bottom + 24);
+    expect(dashboardLayout.constrained).toBe(false);
+    expect(dashboardLayout.pulse.top).toBeGreaterThanOrEqual(dashboardLayout.summary.bottom);
+    expect(dashboardLayout.actions.top).toBeGreaterThanOrEqual(dashboardLayout.pulse.bottom);
+    expect(dashboardLayout.session.bottom).toBeGreaterThanOrEqual(dashboardLayout.actions.bottom);
     expect(dashboardLayout.feed.top).toBeGreaterThanOrEqual(dashboardLayout.session.bottom + 8);
   });
 
@@ -791,7 +860,7 @@ test.describe('Copilot Mission Control — History', () => {
     await page.getByRole('button', { name: 'Next month' }).click();
     await expect.poll(async () => page.evaluate(() => (window as any).__lastFlightLogRequest)).toMatchObject({
       month: '2026-06',
-      selected_day: '2026-06-03',
+      selected_day: expectedJuneSelectedDay(),
     });
     await page.locator('[data-flight-log-day="2026-05-21"]').click();
     await expect(page.locator('[data-flight-log-day="2026-05-21"] .flight-log-day-number')).toBeVisible();
@@ -809,6 +878,16 @@ test.describe('Copilot Mission Control — History', () => {
     await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('copilot-mission-control / main');
     await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('gpt-5.5');
     await expect(page.locator('[data-history-card="flight-log-debrief"]')).toContainText('github-mcp-server-get_file_contents');
+    const activityRate = page.locator('.flight-log-activity-rate');
+    await expect(activityRate).toContainText('Activity Rate');
+    await expect(activityRate.locator('.flight-log-activity-cell')).toHaveCount(24);
+    await expect(activityRate).toContainText('Peak hour');
+    await expect(activityRate).toContainText('88 activity items');
+    await activityRate.locator('.flight-log-activity-cell').nth(12).hover();
+    await expect(activityRate.locator('.history-chart-readout')).toContainText('88 activity items');
+    await expect(activityRate.locator('.history-chart-readout')).toContainText('tool calls');
+    await expect(activityRate.locator('.history-chart-readout')).toContainText('-');
+    await expect(activityRate.locator('.history-chart-readout')).not.toContainText('Z');
     const toolsPanel = page.locator('.flight-log-section').filter({ hasText: 'Tools / MCP' });
     await expect(toolsPanel).toContainText('bash');
     await expect(toolsPanel).toContainText('Commands · 7 calls · 1 failure');
@@ -841,8 +920,8 @@ test.describe('Copilot Mission Control — History', () => {
     await expect(resumePreview).toHaveValue('Continue from Daily Log 2026-05-21.');
     await expect(page.getByRole('heading', { name: 'Models' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Token Hotspots' })).toBeVisible();
-    const models = page.locator('.flight-log-section').filter({ hasText: 'Models' });
-    const tokenHotspots = page.locator('.flight-log-section').filter({ hasText: 'Token Hotspots' });
+    const models = page.locator('.flight-log-section').filter({ has: page.getByRole('heading', { name: 'Models' }) });
+    const tokenHotspots = page.locator('.flight-log-section').filter({ has: page.getByRole('heading', { name: 'Token Hotspots' }) });
     await expect(models).toContainText('gpt-5.5');
     await expect(models).not.toContainText('Token hotspot');
     await expect(tokenHotspots).toContainText('Build Mission Control');
@@ -892,7 +971,7 @@ test.describe('Copilot Mission Control — History', () => {
 
     await expect.poll(async () => page.evaluate(() => (window as any).__lastFlightLogRequest)).toMatchObject({
       month: '2026-06',
-      selected_day: '2026-06-03',
+      selected_day: expectedJuneSelectedDay(),
     });
     await page.locator('[data-flight-log-day="2026-06-02"]').click();
     await expect.poll(async () => page.evaluate(() => (window as any).__lastFlightLogRequest)).toMatchObject({
@@ -1016,10 +1095,10 @@ test.describe('Copilot Mission Control — History', () => {
     expect(all.weekChartDesc).toBe('326 events across observed buckets.');
     const allHourClocks = await Promise.all(MISSION_FIXTURE.history.activity_24h.map((bucket) => expectedHistoryClock(page, bucket.start)));
     expect(all.hourReadouts).toEqual([
-      `${allHourClocks[0]} · 24h ago: 12 events, 1 sessions`,
-      `${allHourClocks[1]} · 16h ago: 31 events, 2 sessions`,
-      `${allHourClocks[2]} · 8h ago: 54 events, 2 sessions`,
-      `${allHourClocks[3]} · Current hour: 87 events, 3 sessions`,
+      `${allHourClocks[0]} · 24h ago: 12 events, 1 sessions, 0 agent starts`,
+      `${allHourClocks[1]} · 16h ago: 31 events, 2 sessions, 1 agent start`,
+      `${allHourClocks[2]} · 8h ago: 54 events, 2 sessions, 2 agent starts`,
+      `${allHourClocks[3]} · Current hour: 87 events, 3 sessions, 3 agent starts`,
     ]);
     expect(all.weekReadouts).toEqual([
       'Mon: 42 events, 1 sessions',
@@ -1061,9 +1140,9 @@ test.describe('Copilot Mission Control — History', () => {
     expect(beta.weekChartDesc).toBe('90 events across observed buckets.');
     const betaHourClocks = await Promise.all(MISSION_FIXTURE.history.session_scopes[1].activity_24h.map((bucket) => expectedHistoryClock(page, bucket.start)));
     expect(beta.hourReadouts).toEqual([
-      `${betaHourClocks[0]} · 24h ago: 19 events, 1 sessions`,
-      `${betaHourClocks[1]} · 12h ago: 30 events, 1 sessions`,
-      `${betaHourClocks[2]} · Current hour: 41 events, 1 sessions`,
+      `${betaHourClocks[0]} · 24h ago: 19 events, 1 sessions, 1 agent start`,
+      `${betaHourClocks[1]} · 12h ago: 30 events, 1 sessions, 2 agent starts`,
+      `${betaHourClocks[2]} · Current hour: 41 events, 1 sessions, 1 agent start`,
     ]);
     expect(beta.weekReadouts).toEqual([
       'Tue: 45 events, 1 sessions',
@@ -1218,7 +1297,7 @@ test.describe('Copilot Mission Control — History', () => {
     await expect(page.locator('body')).toHaveClass(/theme-light/);
     await page.locator('[data-history-card="history-24h"] rect.activity[data-history-readout]').nth(1).hover();
     const secondHourClock = await expectedHistoryClock(page, MISSION_FIXTURE.history.activity_24h[1].start);
-    await expect(page.locator('[data-history-card="history-24h"] .history-chart-readout')).toContainText(`${secondHourClock} · 16h ago: 31 events, 2 sessions`);
+    await expect(page.locator('[data-history-card="history-24h"] .history-chart-readout')).toContainText(`${secondHourClock} · 16h ago: 31 events, 2 sessions, 1 agent start`);
     await expect(page.locator('[data-history-card="history-24h"] .history-chart-readout')).toHaveClass(/visible/);
     const hourAxisLabels = await page.locator('[data-history-card="history-24h"] .history-chart-axis span').allTextContents();
     expect(hourAxisLabels.length).toBeGreaterThanOrEqual(4);
@@ -1397,17 +1476,23 @@ test.describe('Copilot Mission Control — Dashboard', () => {
       return {
         session: rect('#dom-session'),
         actions: rect('#dom-session .cmc-actions'),
-        model: rect('#dom-session .cmc-session-model-row'),
+        summary: rect('#dom-session .cmc-session-summary'),
+        pulse: rect('#dom-session .cmc-ops-tempo'),
         feed: rect('#dom-feed'),
         replay: rect('#dom-replay'),
+        constrained: document.querySelector('#dom-session')?.classList.contains('constrained') ?? true,
       };
     });
     expect(layout.session).toBeTruthy();
     expect(layout.actions).toBeTruthy();
-    expect(layout.model).toBeTruthy();
+    expect(layout.summary).toBeTruthy();
+    expect(layout.pulse).toBeTruthy();
     expect(layout.feed).toBeTruthy();
     expect(layout.replay).toBeTruthy();
-    expect(layout.session!.bottom).toBeLessThanOrEqual(layout.model!.bottom + 24);
+    expect(layout.constrained).toBe(false);
+    expect(layout.pulse!.top).toBeGreaterThanOrEqual(layout.summary!.bottom);
+    expect(layout.actions!.top).toBeGreaterThanOrEqual(layout.pulse!.bottom);
+    expect(layout.session!.bottom).toBeGreaterThanOrEqual(layout.actions!.bottom);
     expect(layout.feed!.top).toBeGreaterThanOrEqual(layout.session!.bottom + 8);
     expect(layout.feed!.bottom).toBeLessThanOrEqual(layout.replay!.top - 8);
 
@@ -1415,6 +1500,114 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     expect(sectorText).not.toContain('failed');
     expect(sectorText).not.toContain('!');
     expect(sectorText).not.toContain('Selected:');
+  });
+
+  test('dashboard Activity Rate renders selected-session activity density', async ({ page }) => {
+    const tempo = page.locator('#dom-session .cmc-ops-tempo');
+    await expect(tempo).toBeVisible();
+    await expect(tempo).toContainText('Activity Rate');
+    await expect(tempo).toContainText('Past hour');
+    await expect(tempo).toContainText('5 activities/hr');
+    await expect(tempo).toContainText('Past 5 min');
+    await expect(tempo).toContainText('4 activities');
+    await expect(tempo.locator('.cmc-tempo-heat-cell')).toHaveCount(24);
+    await expect(tempo.locator('.cmc-tempo-heat-cell.has-failure')).toHaveCount(0);
+    await tempo.locator('.cmc-tempo-heat-cell').last().hover();
+    await expect(tempo.locator('.cmc-tempo-readout')).toContainText('4 activity items');
+    await expect(tempo.locator('.cmc-tempo-readout')).toContainText('4 tool calls');
+    await expect(tempo.locator('.cmc-tempo-readout')).toContainText('-');
+    await expect(tempo.locator('.cmc-tempo-readout')).not.toContainText('failure');
+    await expect(tempo.locator('.cmc-tempo-readout')).not.toContainText('Z');
+  });
+
+  test('dashboard Activity Rate is scoped to the selected session', async ({ page }) => {
+    const tempo = page.locator('#dom-session .cmc-ops-tempo');
+    await expect(tempo).toContainText('5 activities/hr');
+    await expect(tempo).toContainText('4 activities');
+
+    await selectSession(page, 'alpha123');
+
+    await expect(tempo).toContainText('1 activity/hr');
+    await expect(tempo).toContainText('1 activity');
+  });
+
+  test('dashboard Activity Rate status reflects the last five minutes', async ({ page }) => {
+    const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
+    const selected = fixture.sessions.find((session: any) => session.id === 'beta4567');
+    selected.activity_signal = {
+      generated_at_ms: Date.parse('2026-05-21T07:20:00Z'),
+      launches_last_5m: 0,
+      launches_last_hour: 18,
+      velocity_per_hour: 18,
+      peak_velocity_per_hour: 18,
+      peak_hour_event_count_24h: 18,
+      busiest_hour_label_24h: '07:00Z',
+      active_hours_24h: 4,
+      hourly_24h: signalBuckets(),
+    };
+    await page.addInitScript((fixtureArg) => {
+      (window as any).__missionControlFixture = fixtureArg;
+    }, fixture);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    const tempo = page.locator('#dom-session .cmc-ops-tempo');
+    await expect(tempo).toContainText('Past hour');
+    await expect(tempo).toContainText('18 activities/hr');
+    await expect(tempo).toContainText('Past 5 min');
+    await expect(tempo).toContainText('0 activities');
+    await expect(tempo.locator('.cmc-ops-tempo-head strong')).toHaveText('Idle');
+    await expect(tempo.locator('.cmc-ops-tempo-head strong')).not.toHaveText('High activity');
+  });
+
+  test('dashboard Activity Rate handles activity without a signal payload', async ({ page }) => {
+    const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
+    delete fixture.activity_signal;
+    await page.addInitScript((fixtureArg) => {
+      (window as any).__missionControlFixture = fixtureArg;
+    }, fixture);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    const tempo = page.locator('#dom-session .cmc-ops-tempo');
+    await expect(tempo).toBeVisible();
+    await expect(tempo).toContainText('Past hour');
+    await expect(tempo).toContainText('idle');
+    await expect(tempo.locator('.cmc-tempo-heat-cell')).toHaveCount(24);
+  });
+
+  test('Recent Activity Feed fills remaining vertical space and scrolls overflow', async ({ page }) => {
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = Array.from({ length: 12 }, (_, index) => ({
+        session_id: 'alpha123',
+        timestamp: new Date(Date.parse('2026-05-21T07:00:00Z') + index * 1000).toISOString(),
+        kind: 'tool.execution_start',
+        tool: `view-${index}`,
+        category: 'library',
+        success: true,
+      })).reverse();
+      window.__cmcOnAgentActivityChanged?.();
+    });
+
+    await expect.poll(async () => page.locator('#dom-feed .cmc-feed-row').count()).toBeGreaterThanOrEqual(12);
+    const feedMetrics = await page.evaluate(() => {
+      const panel = document.querySelector('#dom-feed') as HTMLElement;
+      const body = document.querySelector('#dom-feed .cmc-panel-body') as HTMLElement;
+      const replay = document.querySelector('#dom-replay') as HTMLElement;
+      const panelRect = panel.getBoundingClientRect();
+      const replayRect = replay.getBoundingClientRect();
+      return {
+        panelHeight: Math.round(panelRect.height),
+        panelBottom: Math.round(panelRect.bottom),
+        replayTop: Math.round(replayRect.top),
+        clientHeight: Math.round(body.clientHeight),
+        scrollHeight: Math.round(body.scrollHeight),
+      };
+    });
+    expect(feedMetrics.panelHeight).toBeGreaterThan(260);
+    expect(feedMetrics.panelBottom).toBeLessThanOrEqual(feedMetrics.replayTop - 8);
+    expect(feedMetrics.scrollHeight).toBeGreaterThan(feedMetrics.clientHeight);
   });
 
   test('sector details omit secondary tool summary text', async ({ page }) => {
@@ -1501,6 +1694,8 @@ test.describe('Copilot Mission Control — Dashboard', () => {
       forge: 0,
       library: 0,
     });
+    await expect(page.locator('#dom-session .cmc-ops-tempo')).toContainText('idle');
+    await expect(page.locator('#dom-session .cmc-ops-tempo')).toContainText('0 activities');
 
     await page.evaluate(() => {
       const fixture = (window as any).__missionControlFixture;
@@ -1539,6 +1734,8 @@ test.describe('Copilot Mission Control — Dashboard', () => {
       forge: 1,
       library: 0,
     });
+    await expect(page.locator('#dom-session .cmc-ops-tempo')).toContainText('1 activity/hr');
+    await expect(page.locator('#dom-session .cmc-ops-tempo')).toContainText('1 activity');
   });
 
   test('selected session summary uses recent meaningful tool activity', async ({ page }) => {
@@ -1593,8 +1790,8 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     const labelTops = await page.locator('#dom-session .cmc-meta-label').evaluateAll((labels) =>
       labels.map((label) => Math.round((label as HTMLElement).getBoundingClientRect().top)),
     );
-    expect(labelTops).toHaveLength(4);
-    expect(new Set(labelTops).size).toBe(4);
+    expect(labelTops).toHaveLength(5);
+    expect(new Set(labelTops).size).toBe(5);
     expect(labelTops).toEqual([...labelTops].sort((a, b) => a - b));
   });
 

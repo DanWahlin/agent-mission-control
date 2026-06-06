@@ -54,7 +54,35 @@ pub struct AgentActivity {
     pub schema_drift: Vec<SchemaDriftReport>,
     #[serde(default)]
     pub history: AgentHistorySummary,
+    #[serde(default)]
+    pub activity_signal: AgentActivitySignal,
     pub generated_at_ms: u64,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct AgentActivitySignal {
+    pub generated_at_ms: u64,
+    pub launches_last_5m: usize,
+    pub launches_last_hour: usize,
+    pub velocity_per_hour: f64,
+    pub peak_velocity_per_hour: usize,
+    pub peak_hour_event_count_24h: usize,
+    pub busiest_hour_label_24h: String,
+    pub active_hours_24h: usize,
+    pub hourly_24h: Vec<AgentActivitySignalBucket>,
+}
+
+#[derive(serde::Serialize, Default, Clone)]
+pub struct AgentActivitySignalBucket {
+    pub start: String,
+    pub label: String,
+    pub event_count: usize,
+    pub launch_count: usize,
+    #[serde(default)]
+    pub turn_count: usize,
+    pub failure_count: usize,
+    pub active_sessions: usize,
+    pub intensity: f64,
 }
 
 #[derive(serde::Serialize, Default, Clone)]
@@ -83,6 +111,8 @@ pub struct AgentHistoryBucket {
     pub start: String,
     pub label: String,
     pub event_count: usize,
+    #[serde(default)]
+    pub launch_count: usize,
     pub failure_count: usize,
     pub active_sessions: usize,
 }
@@ -261,6 +291,13 @@ pub struct AgentSessionSummary {
     /// display without exposing prompt, response, args, paths, or diffs.
     #[serde(default)]
     pub token_checkpoints: Vec<SessionTokenCheckpoint>,
+    /// Privacy-safe selected-session 24h activity signal. Unlike
+    /// `recent_tool_calls` and `recent_turns`, this is computed from the
+    /// full event stream with an allowlisted aggregate only, so the
+    /// selected session panel can show the whole rolling day without
+    /// surfacing prompts, args, command output, paths, or diffs.
+    #[serde(default)]
+    pub activity_signal: AgentActivitySignal,
 }
 
 #[derive(serde::Serialize, Default, Clone)]
@@ -1573,6 +1610,8 @@ fn merge_scans(scans: Vec<ProviderScan>, include_history: bool) -> AgentActivity
     activity.tools = survivors;
 
     all_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    activity.activity_signal =
+        build_activity_signal(&all_events, &all_sessions, activity.generated_at_ms);
     if include_history {
         activity.history = build_history_summary(
             &all_sessions,
@@ -1609,6 +1648,304 @@ fn merge_scans(scans: Vec<ProviderScan>, include_history: bool) -> AgentActivity
     }
 
     activity
+}
+
+fn build_activity_signal(
+    events: &[AgentEventSummary],
+    sessions: &[AgentSessionSummary],
+    generated_at_ms: u64,
+) -> AgentActivitySignal {
+    let mut signal_events = events.to_vec();
+    append_recent_tool_call_launch_events(&mut signal_events, sessions);
+    signal_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+    let mut hourly = build_activity_signal_buckets(&signal_events, generated_at_ms);
+    let peak_hour_event_count_24h = hourly
+        .iter()
+        .map(|bucket| bucket.event_count)
+        .max()
+        .unwrap_or(0);
+    let peak_velocity_per_hour = hourly
+        .iter()
+        .map(|bucket| bucket.launch_count)
+        .max()
+        .unwrap_or(0);
+    let active_hours_24h = hourly
+        .iter()
+        .filter(|bucket| bucket.launch_count > 0)
+        .count();
+    for bucket in &mut hourly {
+        bucket.intensity = activity_signal_intensity(bucket.launch_count, peak_velocity_per_hour);
+    }
+
+    let busiest_hour_label_24h = hourly
+        .iter()
+        .max_by(|a, b| {
+            a.launch_count
+                .cmp(&b.launch_count)
+                .then_with(|| a.start.cmp(&b.start))
+        })
+        .filter(|bucket| bucket.launch_count > 0)
+        .map(|bucket| bucket.label.clone())
+        .unwrap_or_else(|| "No activity".to_string());
+
+    let five_min_start = generated_at_ms.saturating_sub(5 * 60 * 1000);
+    let hour_start = generated_at_ms.saturating_sub(HOUR_MS);
+    let launches_last_5m = count_launches_since(&signal_events, five_min_start, generated_at_ms);
+    let launches_last_hour = count_launches_since(&signal_events, hour_start, generated_at_ms);
+
+    AgentActivitySignal {
+        generated_at_ms,
+        launches_last_5m,
+        launches_last_hour,
+        velocity_per_hour: launches_last_hour as f64,
+        peak_velocity_per_hour,
+        peak_hour_event_count_24h,
+        busiest_hour_label_24h,
+        active_hours_24h,
+        hourly_24h: hourly,
+    }
+}
+
+fn append_recent_tool_call_launch_events(
+    signal_events: &mut Vec<AgentEventSummary>,
+    sessions: &[AgentSessionSummary],
+) {
+    let mut seen = signal_events
+        .iter()
+        .map(activity_signal_event_key)
+        .collect::<HashSet<_>>();
+
+    for session in sessions {
+        for call in &session.recent_tool_calls {
+            if call.timestamp.is_empty() {
+                continue;
+            }
+            let event = AgentEventSummary {
+                provider: session.provider.clone(),
+                session_id: session.id.chars().take(8).collect(),
+                timestamp: call.timestamp.clone(),
+                kind: if call.category == "hooks" {
+                    "hook.start".to_string()
+                } else {
+                    "tool.execution_start".to_string()
+                },
+                tool: call.tool.clone(),
+                category: call.category.clone(),
+                success: true,
+                input_tokens: None,
+                output_tokens: None,
+            };
+            let key = activity_signal_event_key(&event);
+            if seen.insert(key) {
+                signal_events.push(event);
+            }
+        }
+    }
+}
+
+fn activity_signal_event_key(event: &AgentEventSummary) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        event.session_id, event.timestamp, event.kind, event.tool
+    )
+}
+
+fn build_activity_signal_buckets(
+    events: &[AgentEventSummary],
+    generated_at_ms: u64,
+) -> Vec<AgentActivitySignalBucket> {
+    let history_buckets = build_history_buckets(
+        events,
+        generated_at_ms,
+        HOUR_MS,
+        HISTORY_HOUR_BUCKETS,
+    );
+    let mut buckets: Vec<AgentActivitySignalBucket> = history_buckets
+        .into_iter()
+        .map(|bucket| AgentActivitySignalBucket {
+            start: bucket.start,
+            label: bucket.label,
+            event_count: bucket.event_count,
+            failure_count: bucket.failure_count,
+            active_sessions: bucket.active_sessions,
+            ..Default::default()
+        })
+        .collect();
+    let index_by_start = buckets
+        .iter()
+        .enumerate()
+        .map(|(index, bucket)| (bucket.start.clone(), index))
+        .collect::<HashMap<_, _>>();
+
+    for event in events {
+        if !is_launch_signal(event) {
+            continue;
+        }
+        let Some(event_ms) = parse_iso_ms(&event.timestamp) else {
+            continue;
+        };
+        let bucket_start = (event_ms / HOUR_MS) * HOUR_MS;
+        let start = format_bucket_start(bucket_start, HOUR_MS);
+        if let Some(index) = index_by_start.get(&start) {
+            buckets[*index].launch_count += 1;
+        }
+    }
+
+    buckets
+}
+
+fn activity_signal_intensity(event_count: usize, peak: usize) -> f64 {
+    if event_count == 0 || peak == 0 {
+        return 0.0;
+    }
+    (event_count as f64 / peak as f64).clamp(0.0, 1.0)
+}
+
+fn count_launches_since(events: &[AgentEventSummary], start_ms: u64, end_ms: u64) -> usize {
+    events
+        .iter()
+        .filter(|event| is_launch_signal(event))
+        .filter_map(|event| parse_iso_ms(&event.timestamp))
+        .filter(|timestamp| *timestamp >= start_ms && *timestamp <= end_ms)
+        .count()
+}
+
+fn is_launch_signal(event: &AgentEventSummary) -> bool {
+    event.kind == "tool.execution_start" && event.category == "delegates"
+}
+
+fn build_session_activity_signal_from_path(
+    path: &Path,
+    schema: &ProviderSchema,
+    generated_at_ms: u64,
+) -> AgentActivitySignal {
+    let mut buckets = empty_activity_signal_buckets(generated_at_ms);
+    let index_by_start = buckets
+        .iter()
+        .enumerate()
+        .map(|(index, bucket)| (bucket.start.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let five_min_start = generated_at_ms.saturating_sub(5 * 60 * 1000);
+    let hour_start = generated_at_ms.saturating_sub(HOUR_MS);
+    let mut activity_last_5m = 0usize;
+    let mut activity_last_hour = 0usize;
+
+    let Ok(file) = fs::File::open(path) else {
+        return AgentActivitySignal {
+            generated_at_ms,
+            hourly_24h: buckets,
+            ..Default::default()
+        };
+    };
+    let reader = BufReader::new(file);
+    for line in reader.lines().map_while(Result::ok) {
+        if !line.contains("tool.execution_")
+            && !line.contains("assistant.turn_start")
+            && !line.contains("hook.end")
+        {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let event_type =
+            string_from_paths(&value, &schema.events.event_type_paths).unwrap_or_default();
+        let timestamp =
+            string_from_paths(&value, &schema.events.timestamp_paths).unwrap_or_default();
+        let Some(event_ms) = parse_iso_ms(&timestamp) else {
+            continue;
+        };
+        let bucket_start = (event_ms / HOUR_MS) * HOUR_MS;
+        let start = format_bucket_start(bucket_start, HOUR_MS);
+        let Some(index) = index_by_start.get(&start).copied() else {
+            continue;
+        };
+        let bucket = &mut buckets[index];
+        match event_type.as_str() {
+            event if event == schema.events.tool_start => {
+                bucket.event_count += 1;
+                bucket.launch_count += 1;
+            }
+            event if event == schema.events.assistant_turn_start => {
+                bucket.event_count += 1;
+                bucket.turn_count += 1;
+            }
+            event if event == schema.events.tool_complete => {
+                let success =
+                    bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
+                if !success {
+                    bucket.failure_count += 1;
+                }
+                continue;
+            }
+            event if event == schema.events.hook_complete => {
+                let success =
+                    bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
+                if !success {
+                    bucket.failure_count += 1;
+                }
+                continue;
+            }
+            _ => continue,
+        }
+        bucket.active_sessions = 1;
+        if event_ms >= five_min_start && event_ms <= generated_at_ms {
+            activity_last_5m += 1;
+        }
+        if event_ms >= hour_start && event_ms <= generated_at_ms {
+            activity_last_hour += 1;
+        }
+    }
+
+    let peak_activity = buckets
+        .iter()
+        .map(|bucket| bucket.event_count)
+        .max()
+        .unwrap_or(0);
+    for bucket in &mut buckets {
+        bucket.intensity = activity_signal_intensity(bucket.event_count, peak_activity);
+    }
+
+    AgentActivitySignal {
+        generated_at_ms,
+        launches_last_5m: activity_last_5m,
+        launches_last_hour: activity_last_hour,
+        velocity_per_hour: activity_last_hour as f64,
+        peak_velocity_per_hour: peak_activity,
+        peak_hour_event_count_24h: peak_activity,
+        busiest_hour_label_24h: buckets
+            .iter()
+            .max_by(|a, b| {
+                a.event_count
+                    .cmp(&b.event_count)
+                    .then_with(|| a.start.cmp(&b.start))
+            })
+            .filter(|bucket| bucket.event_count > 0)
+            .map(|bucket| bucket.label.clone())
+            .unwrap_or_else(|| "No activity".to_string()),
+        active_hours_24h: buckets
+            .iter()
+            .filter(|bucket| bucket.event_count > 0)
+            .count(),
+        hourly_24h: buckets,
+    }
+}
+
+fn empty_activity_signal_buckets(generated_at_ms: u64) -> Vec<AgentActivitySignalBucket> {
+    let end_bucket_start = (generated_at_ms / HOUR_MS) * HOUR_MS;
+    let first_bucket_start =
+        end_bucket_start.saturating_sub((HISTORY_HOUR_BUCKETS as u64 - 1) * HOUR_MS);
+    (0..HISTORY_HOUR_BUCKETS)
+        .map(|index| {
+            let start_ms = first_bucket_start + index as u64 * HOUR_MS;
+            AgentActivitySignalBucket {
+                start: format_bucket_start(start_ms, HOUR_MS),
+                label: format_bucket_label(start_ms, HOUR_MS),
+                ..Default::default()
+            }
+        })
+        .collect()
 }
 
 struct HistoryBucketAccumulator {
@@ -1814,6 +2151,9 @@ fn build_history_buckets(
             continue;
         }
         buckets[index].bucket.event_count += 1;
+        if is_launch_signal(event) {
+            buckets[index].bucket.launch_count += 1;
+        }
         if is_failure_event(event) {
             buckets[index].bucket.failure_count += 1;
         }
@@ -2393,6 +2733,11 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
                     &token_prefix_cache_context,
                     include_history,
                 );
+                summary.activity_signal = build_session_activity_signal_from_path(
+                    &events_path,
+                    &schema,
+                    unix_ms(SystemTime::now()),
+                );
                 store_copilot_session_scan(
                     key.clone(),
                     CachedCopilotSessionScan {
@@ -2405,7 +2750,7 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
                 stats
             }
         } else {
-            summarize_events_with_mode(
+            let stats = summarize_events_with_mode(
                 provider,
                 &events_path,
                 &session_id,
@@ -2417,7 +2762,13 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
                 &schema,
                 &token_prefix_cache_context,
                 include_history,
-            )
+            );
+            summary.activity_signal = build_session_activity_signal_from_path(
+                &events_path,
+                &schema,
+                unix_ms(SystemTime::now()),
+            );
+            stats
         };
         for ((name, category), count) in session_tool_counts {
             *scan.tool_counts.entry((name, category)).or_insert(0) += count;
@@ -2518,6 +2869,8 @@ fn copilot_session_cache_context(
     include_history: bool,
 ) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(b"session-activity-signal-v1");
+    hasher.update([0]);
     hasher.update(schema_version.as_bytes());
     hasher.update([0]);
     hasher.update(if include_history {
@@ -5128,6 +5481,243 @@ mod tests {
         assert_eq!(history.recent_failures[0].tool, "postToolUse");
         assert_eq!(history.recent_failures[1].kind, "tool.execution_complete");
         assert_eq!(history.recent_failures[1].tool, "bash");
+    }
+
+    #[test]
+    fn activity_signal_counts_launch_windows() {
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:00:00Z").expect("valid fixture time");
+        let events = vec![
+            history_event(
+                "alpha123",
+                "2026-05-28T11:56:00Z",
+                "tool.execution_start",
+                "task",
+                "delegates",
+                true,
+            ),
+            history_event(
+                "alpha123",
+                "2026-05-28T11:30:00Z",
+                "tool.execution_start",
+                "task",
+                "delegates",
+                true,
+            ),
+            history_event(
+                "alpha123",
+                "2026-05-28T11:57:00Z",
+                "tool.execution_complete",
+                "bash",
+                "terminal",
+                true,
+            ),
+            history_event(
+                "beta4567",
+                "2026-05-28T10:59:00Z",
+                "tool.execution_start",
+                "rg",
+                "library",
+                true,
+            ),
+        ];
+
+        let signal = build_activity_signal(&events, &[], generated_at_ms);
+
+        assert_eq!(signal.launches_last_5m, 1);
+        assert_eq!(signal.launches_last_hour, 2);
+        assert_eq!(signal.velocity_per_hour, 2.0);
+        assert_eq!(signal.peak_velocity_per_hour, 2);
+    }
+
+    #[test]
+    fn activity_signal_builds_24h_intensity() {
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:34:00Z").expect("valid fixture time");
+        let events = vec![
+            history_event(
+                "alpha123",
+                "2026-05-28T10:05:00Z",
+                "tool.execution_start",
+                "task",
+                "delegates",
+                true,
+            ),
+            history_event(
+                "alpha123",
+                "2026-05-28T11:05:00Z",
+                "tool.execution_start",
+                "task",
+                "delegates",
+                true,
+            ),
+            history_event(
+                "beta4567",
+                "2026-05-28T11:15:00Z",
+                "tool.execution_start",
+                "task",
+                "delegates",
+                true,
+            ),
+            history_event(
+                "beta4567",
+                "2026-05-28T11:25:00Z",
+                "tool.execution_complete",
+                "bash",
+                "alert",
+                false,
+            ),
+        ];
+
+        let signal = build_activity_signal(&events, &[], generated_at_ms);
+        let ten_hour = signal
+            .hourly_24h
+            .iter()
+            .find(|bucket| bucket.start == "2026-05-28T10:00:00Z")
+            .expect("10am bucket");
+        let eleven_hour = signal
+            .hourly_24h
+            .iter()
+            .find(|bucket| bucket.start == "2026-05-28T11:00:00Z")
+            .expect("11am bucket");
+
+        assert_eq!(signal.hourly_24h.len(), HISTORY_HOUR_BUCKETS);
+        assert_eq!(signal.peak_hour_event_count_24h, 3);
+        assert_eq!(signal.peak_velocity_per_hour, 2);
+        assert_eq!(signal.active_hours_24h, 2);
+        assert_eq!(signal.busiest_hour_label_24h, "11:00Z");
+        assert_eq!(ten_hour.event_count, 1);
+        assert_eq!(ten_hour.launch_count, 1);
+        assert_eq!(ten_hour.intensity, 0.5);
+        assert_eq!(eleven_hour.event_count, 3);
+        assert_eq!(eleven_hour.launch_count, 2);
+        assert_eq!(eleven_hour.failure_count, 1);
+        assert_eq!(eleven_hour.active_sessions, 2);
+        assert_eq!(eleven_hour.intensity, 1.0);
+    }
+
+    #[test]
+    fn activity_signal_ignores_non_launch_events_for_velocity() {
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:00:00Z").expect("valid fixture time");
+        let events = vec![
+            history_event(
+                "alpha123",
+                "2026-05-28T11:55:00Z",
+                "assistant.turn_start",
+                "thinking",
+                "thinking",
+                true,
+            ),
+            history_event(
+                "alpha123",
+                "2026-05-28T11:56:00Z",
+                "tool.execution_complete",
+                "bash",
+                "alert",
+                false,
+            ),
+            history_event(
+                "alpha123",
+                "2026-05-28T11:57:00Z",
+                "assistant.message",
+                "",
+                "complete",
+                true,
+            ),
+        ];
+
+        let signal = build_activity_signal(&events, &[], generated_at_ms);
+        let previous_hour = signal
+            .hourly_24h
+            .iter()
+            .find(|bucket| bucket.start == "2026-05-28T11:00:00Z")
+            .expect("previous hour bucket");
+
+        assert_eq!(signal.launches_last_5m, 0);
+        assert_eq!(signal.launches_last_hour, 0);
+        assert_eq!(signal.velocity_per_hour, 0.0);
+        assert_eq!(previous_hour.event_count, 3);
+        assert_eq!(previous_hour.launch_count, 0);
+        assert_eq!(previous_hour.failure_count, 1);
+    }
+
+    #[test]
+    fn activity_signal_handles_unparseable_timestamps() {
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:00:00Z").expect("valid fixture time");
+        let events = vec![history_event(
+            "alpha123",
+            "not-a-date",
+            "tool.execution_start",
+            "bash",
+            "terminal",
+            true,
+        )];
+
+        let signal = build_activity_signal(&events, &[], generated_at_ms);
+
+        assert_eq!(signal.hourly_24h.len(), HISTORY_HOUR_BUCKETS);
+        assert_eq!(signal.launches_last_5m, 0);
+        assert_eq!(signal.launches_last_hour, 0);
+        assert_eq!(signal.peak_hour_event_count_24h, 0);
+        assert_eq!(signal.peak_velocity_per_hour, 0);
+        assert_eq!(signal.active_hours_24h, 0);
+        assert_eq!(signal.busiest_hour_label_24h, "No activity");
+        assert!(signal
+            .hourly_24h
+            .iter()
+            .all(|bucket| bucket.intensity == 0.0));
+    }
+
+    #[test]
+    fn session_activity_signal_counts_full_24h_file() {
+        use std::io::Write;
+
+        let schema = test_schema();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cmc_session_activity_signal_{}_{}.jsonl",
+            std::process::id(),
+            unix_ms(SystemTime::now())
+        ));
+        let mut file = std::fs::File::create(&path).expect("create activity signal test file");
+        writeln!(
+            file,
+            r#"{{"type":"tool.execution_start","timestamp":"2026-05-28T10:05:00.000Z","data":{{"toolName":"view","toolCallId":"call-view"}}}}"#
+        )
+        .expect("write tool start");
+        writeln!(
+            file,
+            r#"{{"type":"assistant.turn_start","timestamp":"2026-05-28T10:06:00.000Z","data":{{"turnId":"turn-one"}}}}"#
+        )
+        .expect("write turn start");
+        writeln!(
+            file,
+            r#"{{"type":"tool.execution_complete","timestamp":"2026-05-28T10:07:00.000Z","data":{{"toolCallId":"call-view","success":false}}}}"#
+        )
+        .expect("write failed complete");
+        writeln!(
+            file,
+            r#"{{"type":"tool.execution_start","timestamp":"2026-05-28T12:01:00.000Z","data":{{"toolName":"bash","toolCallId":"call-bash"}}}}"#
+        )
+        .expect("write current tool start");
+        drop(file);
+
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:34:00Z").expect("valid fixture time");
+        let signal = build_session_activity_signal_from_path(&path, &schema, generated_at_ms);
+        let ten_hour = signal
+            .hourly_24h
+            .iter()
+            .find(|bucket| bucket.start == "2026-05-28T10:00:00Z")
+            .expect("10am bucket");
+        let current_hour = signal.hourly_24h.last().expect("current bucket");
+
+        assert_eq!(ten_hour.event_count, 2);
+        assert_eq!(ten_hour.launch_count, 1);
+        assert_eq!(ten_hour.turn_count, 1);
+        assert_eq!(ten_hour.failure_count, 1);
+        assert_eq!(current_hour.launch_count, 1);
+        assert_eq!(signal.active_hours_24h, 2);
+        assert_eq!(signal.launches_last_hour, 1);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

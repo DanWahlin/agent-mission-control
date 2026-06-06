@@ -1,6 +1,6 @@
 {
   "name": "copilot-mission-control",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Copilot Mission Control — a live dashboard for the GitHub Copilot CLI",
   "scripts": {
     "build:frontend": "node scripts/build-frontend.ts",
