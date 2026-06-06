@@ -1531,12 +1531,12 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await expect(tempo).toContainText('1 activity');
   });
 
-  test('dashboard Activity Rate status reflects the last five minutes', async ({ page }) => {
+  test('dashboard Activity Rate omits duplicate status label', async ({ page }) => {
     const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
     const selected = fixture.sessions.find((session: any) => session.id === 'beta4567');
     selected.activity_signal = {
       generated_at_ms: Date.parse('2026-05-21T07:20:00Z'),
-      launches_last_5m: 0,
+      launches_last_5m: 14,
       launches_last_hour: 18,
       velocity_per_hour: 18,
       peak_velocity_per_hour: 18,
@@ -1555,9 +1555,9 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await expect(tempo).toContainText('Past hour');
     await expect(tempo).toContainText('18 activities/hr');
     await expect(tempo).toContainText('Past 5 min');
-    await expect(tempo).toContainText('0 activities');
-    await expect(tempo.locator('.cmc-ops-tempo-head strong')).toHaveText('Idle');
-    await expect(tempo.locator('.cmc-ops-tempo-head strong')).not.toHaveText('High activity');
+    await expect(tempo).toContainText('14 activities');
+    await expect(tempo.locator('.cmc-ops-tempo-head strong')).toHaveCount(0);
+    await expect(tempo).not.toContainText('High activity');
   });
 
   test('dashboard Activity Rate handles activity without a signal payload', async ({ page }) => {

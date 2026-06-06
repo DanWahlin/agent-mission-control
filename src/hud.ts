@@ -2291,12 +2291,12 @@
     var velocity = Number(signal.velocity_per_hour || activityHour || 0);
     var peak = Number(signal.peak_velocity_per_hour || 0);
     var activeHours = Number(signal.active_hours_24h || 0);
-    var state = activity5m >= 5 ? 'hot' : (activity5m > 0 ? 'active' : 'quiet');
+    var state = activity5m > 0 ? 'active' : 'quiet';
     var velocityLabel = formatRate(velocity);
     var startsLabel = exactNumber(activity5m) + ' activit' + (activity5m === 1 ? 'y' : 'ies');
     var peakHtml = peak > 0 ? '<span class="cmc-ops-tempo-note">Peak hour ' + escapeHtml(formatRate(peak)) + '</span>' : '';
     return '<div class="cmc-ops-tempo ' + escapeHtml(state) + '" aria-label="Live operations tempo">'
-      + '<div class="cmc-ops-tempo-head"><span>Activity Rate</span><strong>' + (state === 'hot' ? 'High activity' : state === 'active' ? 'Active' : 'Idle') + '</strong></div>'
+      + '<div class="cmc-ops-tempo-head"><span>Activity Rate</span></div>'
       + '<div class="cmc-ops-tempo-grid">'
       + '<div class="cmc-ops-tempo-metric"><span>Past hour</span><strong>' + escapeHtml(velocityLabel) + '</strong></div>'
       + '<div class="cmc-ops-tempo-metric"><span>Past 5 min</span><strong>' + escapeHtml(startsLabel) + '</strong></div>'
