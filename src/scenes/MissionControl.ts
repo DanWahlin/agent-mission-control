@@ -68,6 +68,7 @@ declare global {
     keys: {
       theme: string;
       appTheme: string;
+      agentProvider: string;
       panelsHidden: string;
       missionPrefs: string;
     };
@@ -82,6 +83,9 @@ declare global {
     __missionControlFixture?: CopilotActivity;
     __missionControlAutoFixture?: boolean;
     __cmcOnAgentActivityChanged?: () => void;
+    __cmcGetSelectedProvider?: () => string;
+    __cmcIsProviderSelectionReady?: () => boolean;
+    __cmcSetSelectedProvider?: (provider: string) => boolean;
     __cmcSetTheme?: (mode: 'dark' | 'light') => void;
     __cmcSetAppTheme?: (theme: AppTheme) => void;
     __cmcUpdateModel?: (model: string) => void;
@@ -447,6 +451,20 @@ export class MissionControlScene extends Phaser.Scene {
     super('mission-control');
   }
 
+  private handleProviderChange = () => {
+    this.eventLog = [];
+    this.seenEventKeys.clear();
+    this.replayCursor = 0;
+    this.replayPaused = false;
+    this.selectedSessionIndex = 0;
+    this.userSelectedSession = false;
+    void this.refreshActivity(true, this.isHistoryRouteActive());
+  };
+
+  private handleProviderReady = () => {
+    void this.refreshActivity(true, this.isHistoryRouteActive());
+  };
+
   get displayName() {
     return 'Copilot Mission Control';
   }
@@ -534,6 +552,8 @@ export class MissionControlScene extends Phaser.Scene {
       if (!this.scene?.isActive?.()) return;
       this.schedulePushRefresh();
     };
+    window.addEventListener('cmc-provider-change', this.handleProviderChange as EventListener);
+    window.addEventListener('cmc-provider-ready', this.handleProviderReady as EventListener);
     window.__cmcSetTheme = (mode: ThemeMode) => {
       if (!this.scene?.isActive?.()) return;
       if (!setActiveTheme(mode)) return;
@@ -768,6 +788,8 @@ export class MissionControlScene extends Phaser.Scene {
     if (window.__cmcOnAgentActivityChanged) {
       window.__cmcOnAgentActivityChanged = undefined;
     }
+    window.removeEventListener('cmc-provider-change', this.handleProviderChange as EventListener);
+    window.removeEventListener('cmc-provider-ready', this.handleProviderReady as EventListener);
     if (window.__cmcSetTheme) {
       window.__cmcSetTheme = undefined;
     }
@@ -980,17 +1002,18 @@ export class MissionControlScene extends Phaser.Scene {
     const signalEvents = [
       ...recentEvents,
       ...sessions.flatMap((session) =>
-        (session.recent_tool_calls ?? []).map((call) => toolCallSignalEvent(session.id, call)),
+        (session.recent_tool_calls ?? []).map((call) => toolCallSignalEvent(session, call)),
       ),
     ];
+    const displayEvents = eventsWithToolCallLaunches(recentEvents, sessions);
     const generatedAtMs = normalized.activity_signal?.generated_at_ms ?? normalized.generated_at_ms ?? Date.now();
 
     return {
       ...normalized,
       sessions,
       tools,
-      recent_events: recentEvents,
-      total_events: recentEvents.length,
+      recent_events: displayEvents,
+      total_events: displayEvents.length,
       total_tool_calls: recentToolCalls.length,
       total_input_tokens: totalInputTokens,
       total_output_tokens: totalOutputTokens,
@@ -1100,8 +1123,21 @@ export class MissionControlScene extends Phaser.Scene {
         const ti = (window as any).__TAURI_INTERNALS__;
         if (ti?.invoke) {
           try {
-            const command = includeHistory ? 'get_agent_activity_with_history' : 'get_agent_activity';
-            this.setActivity(await ti.invoke(command) as CopilotActivity);
+            const selectedProvider = typeof window.__cmcGetSelectedProvider === 'function'
+              ? window.__cmcGetSelectedProvider()
+              : '';
+            const providerSelectionReady = typeof window.__cmcIsProviderSelectionReady === 'function'
+              ? window.__cmcIsProviderSelectionReady()
+              : true;
+            if (!providerSelectionReady) return;
+            if (!selectedProvider) {
+              this.setActivity(createEmptyActivity());
+            } else {
+              const command = includeHistory
+                ? 'get_agent_activity_for_provider_with_history'
+                : 'get_agent_activity_for_provider';
+              this.setActivity(await ti.invoke(command, { provider: selectedProvider }) as CopilotActivity);
+            }
           } catch {
             this.setActivity(createEmptyActivity());
           }
@@ -2162,18 +2198,18 @@ export class MissionControlScene extends Phaser.Scene {
 
   private openSelectedSessionInEditor() {
     const session = this.selectedSession;
-    if (!session?.git_root) return;
+    if (!session?.id) return;
     const ti = (window as any).__TAURI_INTERNALS__;
     // Use our own command (not the opener plugin's open_url) because
     // the plugin's default scope rejects custom schemes like vscode://.
     // Falls back to window.open for the playwright fixture which has no
     // Tauri bridge.
     if (ti?.invoke) {
-      ti.invoke('open_in_editor', { path: session.git_root, scheme: 'vscode' }).catch((err: any) => {
-        console.warn('open_in_editor failed', err);
+      ti.invoke('open_session_in_editor', { provider: session.provider || 'copilot', sessionId: session.id, scheme: 'vscode' }).catch((err: any) => {
+        console.warn('open_session_in_editor failed', err);
       });
     } else {
-      try { window.open(`vscode://file/${session.git_root}`, '_blank'); } catch { /* ignore */ }
+      console.warn('open_session_in_editor requires the Tauri app.');
     }
   }
 
@@ -2336,21 +2372,43 @@ function applyDemoEvent(activity: CopilotActivity, event: CopilotEventSummary): 
 }
 
 function normalizeActivity(activity: CopilotActivity): CopilotActivity {
+  const sessions = (activity.sessions ?? []).map(session => ({
+    ...session,
+    recent_tool_calls: session.recent_tool_calls ?? [],
+    recent_turns: session.recent_turns ?? [],
+    token_checkpoints: session.token_checkpoints ?? [],
+    activity_signal: normalizeActivitySignal(session.activity_signal),
+  }));
   return {
     ...createEmptyActivity(),
     ...activity,
-    sessions: (activity.sessions ?? []).map(session => ({
-      ...session,
-      recent_tool_calls: session.recent_tool_calls ?? [],
-      recent_turns: session.recent_turns ?? [],
-      token_checkpoints: session.token_checkpoints ?? [],
-      activity_signal: normalizeActivitySignal(session.activity_signal),
-    })),
+    sessions,
     tools: activity.tools ?? [],
-    recent_events: activity.recent_events ?? [],
+    recent_events: eventsWithToolCallLaunches(activity.recent_events ?? [], sessions),
     alerts: activity.alerts ?? [],
     activity_signal: normalizeActivitySignal(activity.activity_signal),
   };
+}
+
+function eventsWithToolCallLaunches(
+  events: CopilotEventSummary[],
+  sessions: CopilotSessionSummary[],
+): CopilotEventSummary[] {
+  const merged = [...events];
+  const seen = new Set(merged.map(replayEventKey));
+  for (const session of sessions) {
+    for (const call of session.recent_tool_calls ?? []) {
+      if (!call.timestamp) continue;
+      const event = toolCallSignalEvent(session, call);
+      const key = replayEventKey(event);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(event);
+    }
+  }
+  return merged
+    .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))
+    .slice(0, 80);
 }
 
 function createEmptyActivitySignal(generatedAtMs = Date.now()): CopilotActivitySignal {
@@ -2490,14 +2548,16 @@ function isLaunchSignal(event: CopilotEventSummary): boolean {
   return event.kind === 'tool.execution_start' && event.category === 'delegates';
 }
 
-function toolCallSignalEvent(sessionId: string, call: SessionToolCall): CopilotEventSummary {
+function toolCallSignalEvent(session: CopilotSessionSummary, call: SessionToolCall): CopilotEventSummary {
   return {
-    session_id: sessionId,
+    provider: session.provider,
+    session_id: session.id,
     timestamp: call.timestamp,
     kind: call.category === 'hooks' ? 'hook.start' : 'tool.execution_start',
     tool: call.tool,
     category: call.category,
     success: true,
+    synthetic: true,
   };
 }
 

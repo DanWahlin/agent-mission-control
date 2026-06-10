@@ -2162,7 +2162,8 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     expect(text).toContain('code-reviewer');
     expect(text).toContain('Sub-agent');
     expect(text).toContain('arguments/output hidden');
-    expect(text).toContain('Reveal raw local details');
+    expect(text).toContain('Raw arguments and output are not exposed to Mission Control.');
+    await expect(page.locator('[data-inspector-reveal]')).toHaveCount(0);
     expect(text).not.toContain('SECRET_AGENT');
     expect(text).not.toContain('SECRET_MCP');
     expect(text).not.toContain('/Users/dan/.env');
@@ -2184,35 +2185,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await expect(page.locator('#dom-session [data-cmc-action="inspector"]')).toBeFocused();
   });
 
-  test('inspector reveals raw local details only after explicit opt-in', async ({ page }) => {
-    await page.addInitScript((fixture) => {
-      (window as any).__missionControlFixture = fixture;
-      (window as any).__TAURI_INTERNALS__ = {
-        invoke: async (command: string, args: any) => {
-          if (command !== 'get_raw_tool_call_details') throw new Error(`unexpected command ${command}`);
-          if (args.eventRef === 'evt-4') {
-            return {
-              raw_args: '{"agent_type":"code-reviewer","prompt":"SECRET_AGENT"}',
-              raw_output: 'SECRET_AGENT_OUTPUT',
-            };
-          }
-          return {};
-        },
-      };
-    }, inspectorFixture());
-    await page.goto(GAME_URL);
-    await waitForGame(page);
-
-    await page.locator('#dom-session [data-cmc-action="inspector"]').click();
-    await expect(page.locator('#inspector-overlay')).toHaveClass(/visible/);
-    await expect(page.locator('#inspector-dialog')).not.toContainText('SECRET_AGENT');
-
-    await page.locator('[data-inspector-reveal]').click();
-    await expect(page.locator('#inspector-dialog')).toContainText('SECRET_AGENT');
-    await expect(page.locator('#inspector-dialog')).toContainText('SECRET_AGENT_OUTPUT');
-  });
-
-  test('inspector reveals raw local details for hook rows after explicit opt-in', async ({ page }) => {
+  test('inspector keeps hook raw local details hidden', async ({ page }) => {
     const fixture = inspectorFixture();
     const beta = fixture.sessions.find((session: any) => session.id === 'beta4567');
     beta.recent_tool_calls.push({
@@ -2235,19 +2208,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
       ],
     });
 
-    await page.addInitScript((fixtureArg) => {
-      (window as any).__missionControlFixture = fixtureArg;
-      (window as any).__TAURI_INTERNALS__ = {
-        invoke: async (command: string, args: any) => {
-          if (command !== 'get_raw_tool_call_details') throw new Error(`unexpected command ${command}`);
-          if (args.eventRef !== 'evt-hook') throw new Error(`unexpected event ref ${args.eventRef}`);
-          return {
-            raw_args: '{"prompt":"SECRET_HOOK_PROMPT"}',
-            raw_output: 'SECRET_HOOK_OUTPUT',
-          };
-        },
-      };
-    }, fixture);
+    await page.addInitScript((fixtureArg) => { (window as any).__missionControlFixture = fixtureArg; }, fixture);
     await page.goto(GAME_URL);
     await waitForGame(page);
 
@@ -2255,36 +2216,8 @@ test.describe('Copilot Mission Control — Dashboard', () => {
     await page.locator('[data-inspector-tab="hooks"]').click();
     await expect(page.locator('#inspector-dialog')).toContainText('agentStop');
     await expect(page.locator('#inspector-dialog')).not.toContainText('SECRET_HOOK_PROMPT');
-
-    await page.locator('[data-inspector-reveal]').click();
-
-    await expect(page.locator('#inspector-dialog')).toContainText('SECRET_HOOK_PROMPT');
-    await expect(page.locator('#inspector-dialog')).toContainText('SECRET_HOOK_OUTPUT');
-  });
-
-  test('inspector hides raw local details action when no local details are retained', async ({ page }) => {
-    await page.addInitScript((fixture) => {
-      (window as any).__missionControlFixture = fixture;
-      (window as any).__TAURI_INTERNALS__ = {
-        invoke: async (command: string) => {
-          if (command !== 'get_raw_tool_call_details') throw new Error(`unexpected command ${command}`);
-          return {};
-        },
-      };
-    }, inspectorFixture());
-    await page.goto(GAME_URL);
-    await waitForGame(page);
-
-    await page.locator('#dom-session [data-cmc-action="inspector"]').click();
-    await expect(page.locator('#inspector-overlay')).toHaveClass(/visible/);
-    await page.locator('[data-inspector-tab="mcp"]').click();
-    await expect(page.locator('[data-inspector-reveal]')).toBeVisible();
-
-    await page.locator('[data-inspector-reveal]').click();
-
-    await expect(page.locator('#inspector-dialog')).toContainText('No raw local details were retained for this call.');
     await expect(page.locator('[data-inspector-reveal]')).toHaveCount(0);
-    await expect(page.locator('#inspector-dialog')).not.toContainText('Refresh raw local details');
+    await expect(page.locator('#inspector-dialog')).toContainText('Raw arguments and output are not exposed to Mission Control.');
   });
 
   test('inspector turn mode shows turn-by-turn story and related tools', async ({ page }) => {

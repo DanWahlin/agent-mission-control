@@ -45,8 +45,8 @@ export function buildOpsSummary(activity: CopilotActivity): OpsSummary {
     return createOpsSummary(
       'Disconnected',
       'watch',
-      'Install or run GitHub Copilot CLI to populate live activity.',
-      'No Copilot activity source is currently available.',
+      'Install, authenticate, or select an agent provider to populate live activity.',
+      'No selected agent activity source is currently available.',
     );
   }
 
@@ -102,7 +102,7 @@ export function errorOrReview(session: CopilotSessionSummary) {
 
 export function providerAttentionAlerts(activity: CopilotActivity): string[] {
   return (activity.alerts ?? []).filter(alert =>
-    /Copilot (?:session )?state|session[- ]state|home folders?|Copilot CLI was not found|Copilot executable/i.test(alert),
+    /provider|session[- ]state|state root|home folders?|CLI|executable|not found|not ready|not authenticated|Codex|Claude|Copilot/i.test(alert),
   );
 }
 
@@ -115,8 +115,8 @@ export function buildAttentionItems(activity: CopilotActivity): AttentionSummary
       severity: 'watch',
       confidence: 'direct',
       source: 'provider',
-      title: 'Copilot activity source unavailable',
-      detail: 'The scanner did not find a usable Copilot CLI or session-state source.',
+      title:       'Agent activity source unavailable',
+      detail: 'The scanner did not find a usable selected agent provider or local session source.',
       action: 'none',
     });
   }
@@ -165,7 +165,10 @@ function detectConcreteOpsSignal(activity: CopilotActivity): OpsSummary | null {
   const sessions = activity.sessions.filter(s => s.is_active);
   const activeIds = new Set(sessions.map(s => s.id));
 
-  const trailing = events.slice(0, 10).filter(e => activeIds.has(e.session_id));
+  const trailing = events
+    .filter(e => !e.synthetic)
+    .slice(0, 10)
+    .filter(e => activeIds.has(e.session_id));
   const counts = new Map<string, number>();
   for (const e of trailing) {
     if (e.kind === 'tool.execution_start') {

@@ -147,6 +147,225 @@
   });
 
   // -------------------------------------------------------------------
+  // Agent provider selection. The first-run picker mirrors ZingIt's
+  // available-agent flow, adapted to Tauri commands and the existing CMC
+  // DOM/CSS overlay patterns.
+  // -------------------------------------------------------------------
+
+  var providerTitle = $('provider-title');
+  var providerButton = $('agent-provider-btn');
+  var providerPickerOverlay = $('provider-picker-overlay');
+  var providerPickerDialog = $('provider-picker-dialog');
+  var providerPickerBody = $('provider-picker-body');
+  var providerPickerError = $('provider-picker-error');
+  var providerPickerContinue = $('provider-picker-continue');
+  var providerPickerCancel = $('provider-picker-cancel');
+  var providerPickerClose = $('provider-picker-close');
+  var PROVIDER_KEY = STORAGE_KEYS.agentProvider;
+  var providers = [];
+  var selectedProvider = (safeGet(PROVIDER_KEY) || '').trim();
+  var pendingProvider = '';
+  var providerSelectionReady = false;
+
+  function providerById(id) {
+    return providers.find(function (provider) { return provider.id === id; }) || null;
+  }
+
+  function providerShortName(provider) {
+    return (provider && (provider.short_name || provider.display_name || provider.id)) || 'Agent';
+  }
+
+  function providerTitleText(provider) {
+    return providerShortName(provider) + ' Mission Control';
+  }
+
+  function setProviderPickerError(message) {
+    if (!providerPickerError) return;
+    if (!message) {
+      providerPickerError.hidden = true;
+      providerPickerError.textContent = '';
+      return;
+    }
+    providerPickerError.hidden = false;
+    providerPickerError.textContent = message;
+  }
+
+  function applyProviderTitle() {
+    var provider = providerById(selectedProvider) || (selectedProvider ? {
+      id: selectedProvider,
+      short_name: selectedProvider.charAt(0).toUpperCase() + selectedProvider.slice(1),
+    } : null);
+    var title = provider ? providerTitleText(provider) : 'Mission Control';
+    if (providerTitle) providerTitle.textContent = title;
+    if (providerButton) {
+      providerButton.title = provider ? 'Change agent provider: ' + providerShortName(provider) : 'Choose agent provider';
+      providerButton.setAttribute('aria-label', providerButton.title);
+    }
+    document.title = title;
+  }
+
+  function renderProviderPicker() {
+    if (!providerPickerBody || !providerPickerContinue) return;
+    var available = providers.filter(function (provider) { return provider.available; });
+    if (!pendingProvider && available.length === 1) pendingProvider = available[0].id;
+    providerPickerBody.innerHTML = providers.length
+      ? providers.map(function (provider) {
+          var selected = provider.id === pendingProvider;
+          var disabled = !provider.available;
+          var reason = provider.reason || '';
+          var install = provider.install_hint || '';
+          var version = provider.version || 'Version unavailable';
+          return '<button class="provider-card ' + (selected ? 'selected ' : '') + (disabled ? 'unavailable' : '') + '"'
+            + ' type="button" role="option" aria-selected="' + (selected ? 'true' : 'false') + '"'
+            + ' data-provider-id="' + escapeHtml(provider.id) + '"' + (disabled ? ' disabled aria-disabled="true"' : '') + '>'
+            + '<span class="provider-card-name">' + escapeHtml(provider.display_name || providerShortName(provider)) + '</span>'
+            + '<span class="provider-card-version">' + escapeHtml(version) + '</span>'
+            + '<span class="provider-status ' + (provider.available ? 'available' : 'unavailable') + '">'
+            + (provider.available ? 'Available' : 'Not available') + '</span>'
+            + (reason ? '<span class="provider-card-reason">' + escapeHtml(reason) + '</span>' : '')
+            + (!provider.available && install ? '<code class="provider-card-install">' + escapeHtml(install) + '</code>' : '')
+            + '</button>';
+        }).join('')
+      : '<div class="cmc-label">No known agent providers were detected.</div>';
+    providerPickerContinue.disabled = !pendingProvider;
+  }
+
+  function hasSelectableProvider() {
+    return providers.some(function (provider) { return provider.available; });
+  }
+
+  function openProviderPicker(message) {
+    if (!providerPickerOverlay) return;
+    setProviderPickerError(message || '');
+    pendingProvider = selectedProvider && providerById(selectedProvider)?.available ? selectedProvider : '';
+    renderProviderPicker();
+    providerPickerOverlay.classList.add('visible');
+    providerPickerOverlay.setAttribute('aria-hidden', 'false');
+    if (providerPickerDialog && providerPickerDialog.focus) providerPickerDialog.focus();
+  }
+
+  function selectedProviderIsReady() {
+    var selected = selectedProvider && providerById(selectedProvider);
+    return !!(providerSelectionReady && selected && selected.available);
+  }
+
+  function providerPickerCanClose() {
+    return selectedProviderIsReady() || (providerSelectionReady && !hasSelectableProvider());
+  }
+
+  function closeProviderPicker(force) {
+    if (!providerPickerOverlay) return;
+    if (!force && !providerPickerCanClose()) return;
+    providerPickerOverlay.classList.remove('visible');
+    providerPickerOverlay.setAttribute('aria-hidden', 'true');
+  }
+
+  function selectProvider(providerId, source) {
+    var provider = providerById(providerId);
+    if (!provider || !provider.available) {
+      setProviderPickerError(provider && provider.reason ? provider.reason : 'Selected provider is not available.');
+      return false;
+    }
+    selectedProvider = provider.id;
+    pendingProvider = provider.id;
+    providerSelectionReady = true;
+    safeSet(PROVIDER_KEY, provider.id);
+    applyProviderTitle();
+    closeProviderPicker(true);
+    window.dispatchEvent(new CustomEvent('cmc-provider-change', {
+      detail: { provider: provider.id, source: source || 'ui' },
+    }));
+    return true;
+  }
+
+  function markProviderSelectionReady() {
+    if (providerSelectionReady) return;
+    providerSelectionReady = true;
+    window.dispatchEvent(new CustomEvent('cmc-provider-ready', {
+      detail: { provider: selectedProvider || '' },
+    }));
+  }
+
+  function initializeProviderSelection() {
+    var invoke = tauriInvoke();
+    if (!invoke) {
+      if (!selectedProvider) selectedProvider = 'copilot';
+      providers = [{
+        id: 'copilot',
+        display_name: 'GitHub Copilot CLI',
+        short_name: 'Copilot',
+        available: true,
+      }];
+      safeSet(PROVIDER_KEY, selectedProvider);
+      applyProviderTitle();
+      markProviderSelectionReady();
+      return;
+    }
+    invoke('get_agent_providers').then(function (result) {
+      providers = Array.isArray(result) ? result : [];
+      var stored = selectedProvider && providerById(selectedProvider);
+      if (stored && stored.available) {
+        selectProvider(stored.id, 'stored');
+        return;
+      }
+      applyProviderTitle();
+      var available = providers.filter(function (provider) { return provider.available; });
+      var message = stored && !stored.available
+        ? (stored.reason || 'The previously selected provider is no longer available.')
+        : '';
+      if (available.length > 0) {
+        openProviderPicker(message);
+      } else if (providers.length > 0) {
+        markProviderSelectionReady();
+        openProviderPicker(message || 'No installed agent providers were detected.');
+      } else {
+        markProviderSelectionReady();
+      }
+    }).catch(function (err) {
+      providers = [];
+      applyProviderTitle();
+      openProviderPicker(err && err.message ? err.message : String(err || 'Unable to load agent providers.'));
+      markProviderSelectionReady();
+    });
+  }
+
+  window.__cmcGetSelectedProvider = function () {
+    return selectedProvider || '';
+  };
+
+  window.__cmcIsProviderSelectionReady = function () {
+    return providerSelectionReady;
+  };
+
+  window.__cmcSetSelectedProvider = function (providerId) {
+    return selectProvider(String(providerId || ''), 'api');
+  };
+
+  if (providerButton) providerButton.addEventListener('click', function () { openProviderPicker(''); });
+  if (providerPickerBody) {
+    providerPickerBody.addEventListener('click', function (event) {
+      var target = event.target && event.target.closest && event.target.closest('[data-provider-id]');
+      if (!target || target.disabled) return;
+      pendingProvider = target.getAttribute('data-provider-id') || '';
+      renderProviderPicker();
+    });
+  }
+  if (providerPickerContinue) {
+    providerPickerContinue.addEventListener('click', function () {
+      if (pendingProvider) selectProvider(pendingProvider, 'picker');
+    });
+  }
+  if (providerPickerCancel) providerPickerCancel.addEventListener('click', function () { closeProviderPicker(false); });
+  if (providerPickerClose) providerPickerClose.addEventListener('click', function () { closeProviderPicker(false); });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && providerPickerOverlay && providerPickerOverlay.classList.contains('visible')) {
+      closeProviderPicker(false);
+    }
+  });
+
+  initializeProviderSelection();
+
+  // -------------------------------------------------------------------
   // Active model chip in the topbar. The scene calls this whenever the
   // selected session changes OR when its `last_model` value changes
   // between scans (so mid-session model switches surface immediately).
@@ -208,7 +427,6 @@
   var selectedToolKey = '';
   var selectedTurnId = '';
   var inspectorReturnFocus = null;
-  var rawRevealState = null;
 
   var TOOL_TABS = [
     { id: 'all', label: 'All' },
@@ -379,54 +597,6 @@
     }).join('') + '</dl>';
   }
 
-  function activeRevealState(call) {
-    var key = toolKey(call);
-    return rawRevealState && rawRevealState.key === key ? rawRevealState : null;
-  }
-
-  function revealArgsText(state) {
-    if (!state || state.status !== 'ready') return 'hidden by privacy boundary';
-    if (!state.details || !state.details.raw_args) return 'not available in the retained event';
-    return state.details.raw_args + (state.details.raw_args_truncated ? '\n\n[truncated]' : '');
-  }
-
-  function revealOutputText(state) {
-    if (!state || state.status !== 'ready') return 'hidden by privacy boundary';
-    if (!state.details) return 'not retained by provider schema';
-    if (state.details.raw_output) {
-      return state.details.raw_output + (state.details.raw_output_truncated ? '\n\n[truncated]' : '');
-    }
-    return state.details.raw_output_scan_limited
-      ? 'not found within the retained scan window'
-      : 'not retained by provider schema';
-  }
-
-  function hasRawDetailPayload(details) {
-    return !!(details && (details.raw_args || details.raw_output));
-  }
-
-  function renderRevealPanel(call, state) {
-    if (!call.event_ref) return '';
-    if (state && state.status === 'ready' && !hasRawDetailPayload(state.details)) {
-      return '<div class="inspector-reveal"><div class="inspector-empty">No raw local details were retained for this call.</div></div>';
-    }
-    var buttonLabel = state && state.status === 'ready' ? 'Refresh raw local details' : 'Reveal raw local details';
-    var disabled = state && state.status === 'loading';
-    var status = '';
-    if (state && state.status === 'loading') {
-      status = '<div class="inspector-empty">Loading raw local details...</div>';
-    } else if (state && state.status === 'error') {
-      status = '<div class="inspector-empty">Reveal failed: ' + escapeHtml(state.error || 'unknown error') + '</div>';
-    } else if (state && state.status === 'ready') {
-      status = '<div class="inspector-empty">Raw local details are visible for this selected call only.</div>';
-    }
-    return '<div class="inspector-reveal">'
-      + '<div class="inspector-reveal-warning">Raw local details may include prompts, file paths, file contents, secrets, or command output from this machine.</div>'
-      + '<button class="cmc-button accent" type="button" data-inspector-reveal ' + (disabled ? 'disabled aria-disabled="true"' : '') + '>' + escapeHtml(buttonLabel) + '</button>'
-      + status
-      + '</div>';
-  }
-
   function renderTabs() {
     if (!inspectorTabs) return;
     if (inspectorScope === 'sector' || inspectorMode !== 'tools') {
@@ -498,10 +668,8 @@
     ];
     if (turn) rows.push(['Turn status', turn.status + (turn.partial ? ' · partial tail window' : '')]);
     (call.details || []).forEach(function (detail) { rows.push([detail.label, detail.value]); });
-    var revealState = activeRevealState(call);
-    rows.push(['Raw args', revealArgsText(revealState)]);
-    rows.push(['Output', revealOutputText(revealState)]);
-    inspectorDetail.innerHTML = '<h3>Safe details</h3>' + kvRows(rows) + renderRevealPanel(call, revealState);
+    inspectorDetail.innerHTML = '<h3>Safe details</h3>' + kvRows(rows)
+      + '<div class="inspector-empty">Raw arguments and output are not exposed to Mission Control.</div>';
   }
 
   function renderTurnList(turns, selected) {
@@ -648,7 +816,6 @@
     inspectorTab = 'all';
     selectedToolKey = '';
     selectedTurnId = '';
-    rawRevealState = null;
     inspectorOverlay.classList.add('visible');
     inspectorOverlay.setAttribute('aria-hidden', 'false');
     renderInspector();
@@ -675,7 +842,6 @@
     inspectorTab = sectorInspectorContext.category;
     selectedToolKey = '';
     selectedTurnId = '';
-    rawRevealState = null;
     inspectorOverlay.classList.add('visible');
     inspectorOverlay.setAttribute('aria-hidden', 'false');
     renderInspector();
@@ -692,7 +858,6 @@
     var wasOpen = inspectorOverlay.classList.contains('visible');
     inspectorOverlay.classList.remove('visible');
     inspectorOverlay.setAttribute('aria-hidden', 'true');
-    rawRevealState = null;
     if (wasOpen) restoreInspectorFocus();
     sectorInspectorContext = null;
     inspectorScope = 'session';
@@ -704,32 +869,6 @@
     var coreInvoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
     if (typeof coreInvoke === 'function') return coreInvoke.bind(window.__TAURI__.core);
     return null;
-  }
-
-  function revealRawDetails(call) {
-    if (!call || !call.event_ref || !inspectorSession) return;
-    var invoke = tauriInvoke();
-    var key = toolKey(call);
-    if (!invoke) {
-      rawRevealState = { key: key, status: 'error', error: 'Raw local details require the Tauri app.' };
-      renderToolDetail(call);
-      return;
-    }
-    rawRevealState = { key: key, status: 'loading' };
-    renderToolDetail(call);
-    invoke('get_raw_tool_call_details', {
-      provider: inspectorSession.provider || 'copilot',
-      sessionId: inspectorSession.id,
-      eventRef: call.event_ref,
-    }).then(function (details) {
-      if (!inspectorOverlay || !inspectorOverlay.classList.contains('visible')) return;
-      rawRevealState = { key: key, status: 'ready', details: details || {} };
-      renderToolDetail(call);
-    }).catch(function (err) {
-      if (!inspectorOverlay || !inspectorOverlay.classList.contains('visible')) return;
-      rawRevealState = { key: key, status: 'error', error: err && err.message ? err.message : String(err || 'unknown error') };
-      renderToolDetail(call);
-    });
   }
 
   window.__cmcOpenInspector = openInspector;
@@ -768,7 +907,6 @@
     var modeBtn = target.closest('[data-inspector-mode]');
     if (modeBtn) {
       inspectorMode = modeBtn.getAttribute('data-inspector-mode') || 'tools';
-      rawRevealState = null;
       renderInspector();
       return;
     }
@@ -776,21 +914,13 @@
     if (tabBtn) {
       inspectorTab = tabBtn.getAttribute('data-inspector-tab') || 'all';
       selectedToolKey = '';
-      rawRevealState = null;
       renderInspector();
       return;
     }
     var toolBtn = target.closest('[data-tool-key]');
     if (toolBtn) {
       selectedToolKey = toolBtn.getAttribute('data-tool-key') || '';
-      rawRevealState = null;
       renderInspector();
-      return;
-    }
-    var revealBtn = target.closest('[data-inspector-reveal]');
-    if (revealBtn) {
-      var call = selectedCall(filteredCalls());
-      revealRawDetails(call);
       return;
     }
     var turnBtn = target.closest('[data-turn-id]');
@@ -2367,7 +2497,7 @@
       var outTok = selected.output_tokens || 0;
       var inputPending = !selected.replay_activity && inTok <= 0 && outTok > 0;
       var tcalls = (selected.recent_tool_calls || []).length;
-      var hasGitRoot = !!selected.git_root;
+      var canOpenInEditor = (selected.provider || 'copilot') === 'copilot';
       var activity = selected.replay_activity || selectedActivity(selected);
       var heading = selectedSessionHeading(selected);
       var model = selected.last_model || '';
@@ -2388,7 +2518,7 @@
         + '</div>'
         + renderOpsTempo(view)
         + '<div class="cmc-actions">'
-        + '<button class="cmc-button accent ' + (hasGitRoot ? '' : 'disabled') + '" aria-label="Open selected session in editor" ' + (hasGitRoot ? 'data-cmc-action="editor"' : 'disabled aria-disabled="true"') + '>↗ Open in Editor</button>'
+        + '<button class="cmc-button accent ' + (canOpenInEditor ? '' : 'disabled') + '" aria-label="Open selected session in editor" ' + (canOpenInEditor ? 'data-cmc-action="editor"' : 'disabled aria-disabled="true"') + '>↗ Open in Editor</button>'
         + '<button class="cmc-button ' + (tcalls > 0 ? '' : 'disabled') + '" aria-label="Open inspector for selected session" ' + (tcalls > 0 ? 'data-cmc-action="inspector"' : 'disabled aria-disabled="true"') + '>Inspector</button>'
         + '</div>';
     }
@@ -2414,7 +2544,7 @@
 
   function recentFeedPanelHeight(view) {
     var rowCount = ((view.feed && view.feed.rows) || []).length;
-    if (!rowCount) return 110;
+    if (!rowCount) return 132;
     var visibleRows = Math.min(rowCount, RECENT_ACTIVITY_VISIBLE_ROWS);
     var panelChromeH = 64;
     var bodyPaddingH = 20;
@@ -2598,7 +2728,6 @@
       selected.title || '',
       selected.session_name || '',
       selected.repository || '',
-      selected.git_root || '',
       selected.input_tokens || 0,
       selected.output_tokens || 0,
       (selected.recent_tool_calls || []).length,
@@ -2735,11 +2864,13 @@
   }
 
   function schemaDriftIssueUrl(report) {
-    var title = 'Schema drift detected: Copilot provider';
+    var provider = report.provider || 'provider';
+    var providerTitle = provider.charAt(0).toUpperCase() + provider.slice(1);
+    var title = 'Schema drift detected: ' + providerTitle + ' provider';
     var body = schemaDriftIssueBody(report);
     return 'https://github.com/DanWahlin/copilot-mission-control/issues/new?'
       + 'title=' + encodeURIComponent(title)
-      + '&labels=' + encodeURIComponent('schema-drift,provider:copilot')
+      + '&labels=' + encodeURIComponent('schema-drift,provider:' + provider)
       + '&body=' + encodeURIComponent(body);
   }
 
@@ -2761,7 +2892,7 @@
   function renderSchemaDriftDialog(report) {
     if (!schemaDriftOverlay || !schemaDriftSubtitle || !schemaDriftBody || !report) return;
     activeSchemaDriftReport = report;
-    schemaDriftSubtitle.textContent = (report.summary || 'The Copilot provider saw unexpected event shapes.')
+    schemaDriftSubtitle.textContent = (report.summary || 'The provider saw unexpected event shapes.')
       + ' Review and report a privacy-safe issue if this looks wrong.';
     var unknown = (report.unknown_event_types || []).slice(0, 5).map(function (row) {
       return '<li><code>' + escapeHtml(row.name || 'unknown') + '</code>: ' + escapeHtml(exactNumber(row.count || 0)) + '</li>';
@@ -3871,7 +4002,8 @@
     var sessionExtraH = 0;
     var sessionMainH = Math.max(0, Math.min(naturalSessionH + sessionExtraH, maxSessionH));
     var feedY = (l.topY || 0) + sessionMainH + columnGap;
-    var feedH = Math.max(80, columnBottom - feedY);
+    var feedNaturalH = Math.min(feedTargetH, Math.max(80, columnBottom - feedY));
+    var feedH = Math.max(80, feedNaturalH);
     setPanelRect(domSession, { x: l.leftX, y: l.topY, w: l.panelW, h: sessionMainH });
     if (domSession) domSession.classList.toggle('constrained', naturalSessionH > sessionMainH + 1);
     setPanelRect(domFeed, { x: l.leftX, y: feedY, w: l.panelW, h: feedH });

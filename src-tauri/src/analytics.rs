@@ -3226,7 +3226,9 @@ fn activity_rate_for_day(
             }
         })
         .collect::<Vec<_>>();
-    let mut session_sets = (0..24).map(|_| BTreeSet::<String>::new()).collect::<Vec<_>>();
+    let mut session_sets = (0..24)
+        .map(|_| BTreeSet::<String>::new())
+        .collect::<Vec<_>>();
 
     let mut stmt = conn
         .prepare(

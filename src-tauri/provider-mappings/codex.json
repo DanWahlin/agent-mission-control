@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0.0",
+  "provider": "codex",
+  "field_mappings": [
+    {
+      "normalized_field": "AgentSessionSummary.id",
+      "ui_surfaces": ["session picker", "selected session", "recent activity", "replay"],
+      "normalized_meaning": "Stable privacy-safe session/thread identifier shown as a short id.",
+      "source": "rollout filename or session_meta.id",
+      "differences": "Codex rollouts are date-organized and may also be indexed in SQLite."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.repository",
+      "ui_surfaces": ["selected session", "history", "session picker"],
+      "normalized_meaning": "Sanitized repo/workspace display name, never a raw path.",
+      "source": "session_meta git.repository_url basename or cwd basename",
+      "differences": "Codex may expose raw cwd/url; only sanitized basename crosses into UI."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.turn_count",
+      "ui_surfaces": ["selected session", "activity rate", "history"],
+      "normalized_meaning": "Model/task round trips observed for a session.",
+      "source": "event_msg task_started / task_complete, or JSON stream turn.started / turn.completed",
+      "differences": "Current Codex uses task_* in persisted rollouts and turn.* in exec --json streams."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.tool_count and category counts",
+      "ui_surfaces": ["Phaser sectors", "selected session", "sector inspector", "history"],
+      "normalized_meaning": "Privacy-safe count of tool launches grouped into Mission Control categories.",
+      "source": "response_item function_call/custom_tool_call/web_search_call, event_msg *_begin, JSON stream item.started",
+      "differences": "Most current Codex tool starts are response_item or item.started records, not event_msg begin events."
+    },
+    {
+      "normalized_field": "AgentEventSummary.kind",
+      "ui_surfaces": ["Phaser pulses", "recent activity feed", "replay", "activity rate"],
+      "normalized_meaning": "Provider-normalized event kind consumed by Mission Control UI.",
+      "source": "event_mappings[].normalized_kind below",
+      "differences": "Raw Codex keys must be mapped to Copilot-compatible normalized names before reaching UI."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.input_tokens/output_tokens",
+      "ui_surfaces": ["selected session", "replay token display", "history"],
+      "normalized_meaning": "Cumulative privacy-safe token counters.",
+      "source": "event_msg token_count info.total_token_usage or JSON stream turn.completed usage",
+      "differences": "Use max/latest cumulative token values."
+    }
+  ],
+  "event_mappings": [
+    { "raw_key": "session_meta", "effect": "session_meta", "normalized_kind": "session.start", "default_tool": "session", "default_category": "arrival" },
+    { "raw_key": "turn_context", "effect": "model_context", "normalized_kind": "session.context", "default_tool": "context", "default_category": "activity" },
+    { "raw_key": "task_started", "effect": "turn_start", "normalized_kind": "assistant.turn_start", "default_tool": "thinking", "default_category": "thinking" },
+    { "raw_key": "turn_started", "effect": "turn_start", "normalized_kind": "assistant.turn_start", "default_tool": "thinking", "default_category": "thinking" },
+    { "raw_key": "turn_started_event", "effect": "turn_start", "normalized_kind": "assistant.turn_start", "default_tool": "thinking", "default_category": "thinking" },
+    { "raw_key": "task_complete", "effect": "turn_end", "normalized_kind": "assistant.turn_end", "default_tool": "waiting", "default_category": "waiting" },
+    { "raw_key": "turn_completed", "effect": "turn_end", "normalized_kind": "assistant.turn_end", "default_tool": "waiting", "default_category": "waiting" },
+    { "raw_key": "turn_complete", "effect": "turn_end", "normalized_kind": "assistant.turn_end", "default_tool": "waiting", "default_category": "waiting" },
+    { "raw_key": "user_message", "effect": "user_message", "normalized_kind": "user.message", "default_tool": "prompt", "default_category": "prompt" },
+    { "raw_key": "agent_message", "effect": "assistant_message", "normalized_kind": "assistant.message", "default_tool": "assistant", "default_category": "activity" },
+    { "raw_key": "turn_aborted", "effect": "error", "normalized_kind": "tool.execution_complete", "default_tool": "error", "default_category": "alert" },
+    { "raw_key": "error", "effect": "error", "normalized_kind": "tool.execution_complete", "default_tool": "error", "default_category": "alert" },
+    { "raw_key": "token_count", "effect": "token_count", "normalized_kind": "token.count", "default_tool": "tokens", "default_category": "activity" },
+    { "raw_key": "function_call", "effect": "tool_start", "normalized_kind": "tool.execution_start", "default_tool": "tool", "default_category": "function", "call_id_paths": ["/call_id", "/id", "/tool_call_id"], "tool_name_paths": ["/name", "/tool_name"] },
+    { "raw_key": "function_call_output", "effect": "tool_end", "normalized_kind": "tool.execution_complete", "default_tool": "tool", "default_category": "activity", "call_id_paths": ["/call_id", "/id", "/tool_call_id"] },
+    { "raw_key": "custom_tool_call", "effect": "tool_start", "normalized_kind": "tool.execution_start", "default_tool": "tool", "default_category": "function", "call_id_paths": ["/call_id", "/id", "/tool_call_id"], "tool_name_paths": ["/name", "/tool_name"] },
+    { "raw_key": "custom_tool_call_output", "effect": "tool_end", "normalized_kind": "tool.execution_complete", "default_tool": "tool", "default_category": "activity", "call_id_paths": ["/call_id", "/id", "/tool_call_id"] },
+    { "raw_key": "web_search_call", "effect": "tool_start", "normalized_kind": "tool.execution_start", "default_tool": "web_search", "default_category": "signal", "call_id_paths": ["/call_id", "/id", "/tool_call_id"] },
+    { "raw_key": "web_search_end", "effect": "tool_end", "normalized_kind": "tool.execution_complete", "default_tool": "web_search", "default_category": "signal", "call_id_paths": ["/call_id", "/id", "/tool_call_id"] },
+    { "raw_key": "item_started", "effect": "tool_start", "normalized_kind": "tool.execution_start", "default_tool": "tool", "default_category": "function", "call_id_paths": ["/item/id", "/id"], "tool_name_paths": ["/item/type", "/type"] },
+    { "raw_key": "item_completed", "effect": "tool_end", "normalized_kind": "tool.execution_complete", "default_tool": "tool", "default_category": "activity", "call_id_paths": ["/item/id", "/id"], "tool_name_paths": ["/item/type", "/type"] },
+    { "raw_key": "exec_command_begin", "effect": "tool_start", "normalized_kind": "tool.execution_start", "default_tool": "bash", "default_category": "terminal", "call_id_paths": ["/call_id", "/id", "/tool_call_id"] },
+    { "raw_key": "exec_command_end", "effect": "tool_end", "normalized_kind": "tool.execution_complete", "default_tool": "bash", "default_category": "terminal", "call_id_paths": ["/call_id", "/id", "/tool_call_id"] },
+    { "raw_key": "patch_apply_begin", "effect": "tool_start", "normalized_kind": "tool.execution_start", "default_tool": "apply_patch", "default_category": "forge", "call_id_paths": ["/call_id", "/id", "/tool_call_id"] },
+    { "raw_key": "patch_apply_end", "effect": "tool_end", "normalized_kind": "tool.execution_complete", "default_tool": "apply_patch", "default_category": "forge", "call_id_paths": ["/call_id", "/id", "/tool_call_id"] },
+    { "raw_key": "mcp_tool_call_begin", "effect": "tool_start", "normalized_kind": "tool.execution_start", "default_tool": "mcp", "default_category": "mcp", "call_id_paths": ["/call_id", "/id", "/tool_call_id"], "tool_name_paths": ["/tool_name", "/name"] },
+    { "raw_key": "mcp_tool_call_end", "effect": "tool_end", "normalized_kind": "tool.execution_complete", "default_tool": "mcp", "default_category": "mcp", "call_id_paths": ["/call_id", "/id", "/tool_call_id"], "tool_name_paths": ["/tool_name", "/name"] },
+    { "raw_key": "context_compacted", "effect": "ignore", "normalized_kind": "session.compaction_complete", "default_tool": "compact", "default_category": "activity" },
+    { "raw_key": "compacted", "effect": "ignore", "normalized_kind": "session.compaction_complete", "default_tool": "compact", "default_category": "activity" }
+  ],
+  "tool_category_mappings": [
+    { "raw_names": ["shell", "shell_command", "exec_command", "command_execution", "bash", "exec"], "normalized_category": "terminal" },
+    { "raw_names": ["apply_patch", "patch_apply", "file_change"], "normalized_category": "forge" },
+    { "raw_names": ["web_search", "web_fetch"], "normalized_category": "signal" },
+    { "contains": ["plan"], "normalized_category": "court" },
+    { "prefix": ["mcp__"], "normalized_category": "mcp" }
+  ]
+}

@@ -22,6 +22,7 @@
   var keys = Object.freeze({
     theme: 'cmc_theme',
     appTheme: 'cmc_app_theme',
+    agentProvider: 'cmc_agent_provider',
     analyticsPromptPanelCollapsed: 'cmc_analytics_prompt_panel_collapsed',
     analyticsTokenNoticeSeen: 'cmc_analytics_token_notice_seen',
     panelsHidden: 'cmc_panels_hidden',

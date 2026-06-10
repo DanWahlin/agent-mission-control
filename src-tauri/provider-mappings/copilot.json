@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "provider": "copilot",
+  "field_mappings": [
+    {
+      "normalized_field": "AgentSessionSummary.id",
+      "ui_surfaces": ["session picker", "selected session", "recent activity", "replay"],
+      "normalized_meaning": "Stable privacy-safe session/thread identifier shown as a short id.",
+      "source": "session directory / workspace session id",
+      "differences": "Copilot stores one directory per local session."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.repository",
+      "ui_surfaces": ["selected session", "history", "session picker"],
+      "normalized_meaning": "Sanitized repo/workspace display name, never a raw path.",
+      "source": "workspace.yaml repository or git_root basename",
+      "differences": "Copilot has workspace.yaml sidecar metadata."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.turn_count",
+      "ui_surfaces": ["selected session", "activity rate", "history"],
+      "normalized_meaning": "Model/task round trips observed for a session.",
+      "source": "assistant.turn_start",
+      "differences": "Copilot has explicit assistant turn events."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.tool_count and category counts",
+      "ui_surfaces": ["Phaser sectors", "selected session", "sector inspector", "history"],
+      "normalized_meaning": "Privacy-safe count of tool launches grouped into Mission Control categories.",
+      "source": "tool.execution_start classified by provider schema",
+      "differences": "Copilot tool categorization is schema-driven by provider-schemas/copilot.json."
+    },
+    {
+      "normalized_field": "AgentEventSummary.kind",
+      "ui_surfaces": ["Phaser pulses", "recent activity feed", "replay", "activity rate"],
+      "normalized_meaning": "Provider-normalized event kind consumed by Mission Control UI.",
+      "source": "raw event type, e.g. tool.execution_start",
+      "differences": "Copilot already emits the normalized event names the UI understands."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.input_tokens/output_tokens",
+      "ui_surfaces": ["selected session", "replay token display", "history"],
+      "normalized_meaning": "Cumulative privacy-safe token counters.",
+      "source": "session.shutdown/session.compaction_complete token details",
+      "differences": "Copilot records full token totals through shutdown and compaction events."
+    }
+  ]
+}

@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread;
@@ -83,6 +84,196 @@ pub struct AgentActivitySignalBucket {
     pub failure_count: usize,
     pub active_sessions: usize,
     pub intensity: f64,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct AgentProviderInfo {
+    pub id: String,
+    pub display_name: String,
+    pub short_name: String,
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_hint: Option<String>,
+    #[serde(default)]
+    pub state_roots: Vec<String>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct AgentActivityFieldMapping {
+    pub normalized_field: String,
+    pub ui_surfaces: Vec<String>,
+    pub normalized_meaning: String,
+    pub copilot_source: String,
+    pub codex_source: String,
+    pub claude_source: String,
+    pub differences: String,
+}
+
+pub fn list_agent_activity_field_mappings() -> Vec<AgentActivityFieldMapping> {
+    build_agent_activity_field_mappings()
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct ProviderMappingFile {
+    schema_version: String,
+    provider: String,
+    #[serde(default)]
+    field_mappings: Vec<ProviderFieldMappingEntry>,
+    #[serde(default)]
+    event_mappings: Vec<ProviderRawEventMappingConfig>,
+    #[serde(default)]
+    record_mappings: Vec<ProviderRawEventMappingConfig>,
+    #[serde(default)]
+    tool_category_mappings: Vec<ToolCategoryMappingConfig>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct ProviderFieldMappingEntry {
+    normalized_field: String,
+    #[serde(default)]
+    ui_surfaces: Vec<String>,
+    normalized_meaning: String,
+    source: String,
+    #[serde(default)]
+    differences: String,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct ProviderRawEventMappingConfig {
+    raw_key: String,
+    effect: NormalizedEventEffect,
+    normalized_kind: String,
+    default_tool: String,
+    default_category: String,
+    #[serde(default)]
+    call_id_paths: Vec<String>,
+    #[serde(default)]
+    tool_name_paths: Vec<String>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct ToolCategoryMappingConfig {
+    #[serde(default)]
+    raw_names: Vec<String>,
+    #[serde(default)]
+    contains: Vec<String>,
+    #[serde(default)]
+    prefix: Vec<String>,
+    normalized_category: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum NormalizedEventEffect {
+    SessionMeta,
+    ModelContext,
+    TurnStart,
+    TurnEnd,
+    UserMessage,
+    AssistantMessage,
+    Error,
+    TokenCount,
+    ToolStart,
+    ToolEnd,
+    Ignore,
+}
+
+const BUNDLED_COPILOT_MAPPING: &str = include_str!("../provider-mappings/copilot.json");
+const BUNDLED_CODEX_MAPPING: &str = include_str!("../provider-mappings/codex.json");
+const BUNDLED_CLAUDE_MAPPING: &str = include_str!("../provider-mappings/claude.json");
+
+static COPILOT_MAPPING: OnceLock<ProviderMappingFile> = OnceLock::new();
+static CODEX_MAPPING: OnceLock<ProviderMappingFile> = OnceLock::new();
+static CLAUDE_MAPPING: OnceLock<ProviderMappingFile> = OnceLock::new();
+
+fn copilot_provider_mapping() -> &'static ProviderMappingFile {
+    COPILOT_MAPPING.get_or_init(|| parse_provider_mapping(BUNDLED_COPILOT_MAPPING))
+}
+
+fn codex_provider_mapping() -> &'static ProviderMappingFile {
+    CODEX_MAPPING.get_or_init(|| parse_provider_mapping(BUNDLED_CODEX_MAPPING))
+}
+
+fn claude_provider_mapping() -> &'static ProviderMappingFile {
+    CLAUDE_MAPPING.get_or_init(|| parse_provider_mapping(BUNDLED_CLAUDE_MAPPING))
+}
+
+fn parse_provider_mapping(raw: &str) -> ProviderMappingFile {
+    let mapping: ProviderMappingFile =
+        serde_json::from_str(raw).expect("bundled provider mapping parses");
+    validate_provider_mapping(&mapping).expect("bundled provider mapping validates");
+    mapping
+}
+
+fn validate_provider_mapping(mapping: &ProviderMappingFile) -> Result<(), String> {
+    if !matches!(mapping.provider.as_str(), "copilot" | "codex" | "claude") {
+        return Err(format!(
+            "unsupported provider mapping '{}'",
+            mapping.provider
+        ));
+    }
+    if mapping.schema_version.split('.').next() != Some(SUPPORTED_SCHEMA_MAJOR) {
+        return Err(format!(
+            "unsupported provider mapping version '{}' (expected major {})",
+            mapping.schema_version, SUPPORTED_SCHEMA_MAJOR
+        ));
+    }
+    if mapping.field_mappings.is_empty() {
+        return Err(format!(
+            "provider mapping '{}' has no field mappings",
+            mapping.provider
+        ));
+    }
+    Ok(())
+}
+
+fn build_agent_activity_field_mappings() -> Vec<AgentActivityFieldMapping> {
+    let providers = [
+        copilot_provider_mapping(),
+        codex_provider_mapping(),
+        claude_provider_mapping(),
+    ];
+    let mut by_field: BTreeMap<String, AgentActivityFieldMapping> = BTreeMap::new();
+    for provider in providers {
+        for entry in &provider.field_mappings {
+            let mapping = by_field
+                .entry(entry.normalized_field.clone())
+                .or_insert_with(|| AgentActivityFieldMapping {
+                    normalized_field: entry.normalized_field.clone(),
+                    ui_surfaces: entry.ui_surfaces.clone(),
+                    normalized_meaning: entry.normalized_meaning.clone(),
+                    copilot_source: String::new(),
+                    codex_source: String::new(),
+                    claude_source: String::new(),
+                    differences: String::new(),
+                });
+            if mapping.ui_surfaces.is_empty() {
+                mapping.ui_surfaces = entry.ui_surfaces.clone();
+            }
+            if mapping.normalized_meaning.is_empty() {
+                mapping.normalized_meaning = entry.normalized_meaning.clone();
+            }
+            match provider.provider.as_str() {
+                "copilot" => mapping.copilot_source = entry.source.clone(),
+                "codex" => mapping.codex_source = entry.source.clone(),
+                "claude" => mapping.claude_source = entry.source.clone(),
+                _ => {}
+            }
+            if !entry.differences.is_empty() {
+                if !mapping.differences.is_empty() {
+                    mapping.differences.push_str(" | ");
+                }
+                mapping
+                    .differences
+                    .push_str(&format!("{}: {}", provider.provider, entry.differences));
+            }
+        }
+    }
+    by_field.into_values().collect()
 }
 
 #[derive(serde::Serialize, Default, Clone)]
@@ -270,10 +461,8 @@ pub struct AgentSessionSummary {
     /// navbar and update it when the user switches models mid-session.
     #[serde(default)]
     pub last_model: String,
-    /// Absolute path to the session's git root. Exposed so the
-    /// renderer can offer "open in editor" deep links. Empty when the
-    /// workspace.yaml didn't record one.
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub git_root: String,
     /// Most recent tool calls for this session (newest last), capped at
     /// [`MAX_SESSION_TOOL_CALLS`]. Each entry is the privacy-safe
@@ -332,20 +521,6 @@ pub struct SafeDetail {
     pub value: String,
 }
 
-#[derive(serde::Serialize, Default)]
-pub struct RawToolCallDetails {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw_args: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw_output: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub raw_args_truncated: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub raw_output_truncated: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub raw_output_scan_limited: bool,
-}
-
 #[derive(serde::Serialize, Default, Clone)]
 pub struct SessionTurnSummary {
     pub id: String,
@@ -391,6 +566,8 @@ pub struct AgentEventSummary {
     pub tool: String,
     pub category: String,
     pub success: bool,
+    #[serde(default)]
+    pub synthetic: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -454,7 +631,37 @@ pub trait AgentProvider: Send + Sync {
 }
 
 pub fn default_providers() -> Vec<Box<dyn AgentProvider>> {
-    vec![Box::new(CopilotProvider)]
+    vec![
+        Box::new(CopilotProvider),
+        Box::new(CodexProvider),
+        Box::new(ClaudeCodeProvider),
+    ]
+}
+
+pub fn list_agent_providers() -> Vec<AgentProviderInfo> {
+    vec![
+        copilot_provider_info(),
+        codex_provider_info(),
+        claude_provider_info(),
+    ]
+}
+
+pub fn collect_agent_activity_for_provider(
+    provider: &str,
+    include_history: bool,
+) -> Result<AgentActivity, String> {
+    let normalized = normalize_provider_id(provider);
+    let scan = match normalized.as_str() {
+        "copilot" => CopilotProvider.scan(include_history),
+        "codex" => CodexProvider.scan(include_history),
+        "claude" => ClaudeCodeProvider.scan(include_history),
+        _ => return Err(format!("Unknown agent provider '{}'", provider)),
+    };
+    Ok(merge_scans(vec![scan], include_history))
+}
+
+fn normalize_provider_id(provider: &str) -> String {
+    provider.trim().to_ascii_lowercase()
 }
 
 // ── Top-level merge ───────────────────────────────────────────────────
@@ -508,8 +715,6 @@ static COPILOT_TOKEN_PREFIX_CACHE: OnceLock<
 const MAX_COPILOT_SESSION_SCAN_CACHE_ENTRIES: usize = 256;
 const MAX_COPILOT_TOKEN_PREFIX_CACHE_ENTRIES: usize = 256;
 const MAX_EVENT_TAIL_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_RAW_DETAIL_SCAN_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_RAW_DETAIL_VALUE_BYTES: usize = 512 * 1024;
 const TOKEN_PREFIX_HEAD_SIGNATURE_BYTES: usize = 4096;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1609,6 +1814,15 @@ fn merge_scans(scans: Vec<ProviderScan>, include_history: bool) -> AgentActivity
     survivors.truncate(MAX_TOOLS.max(category_floor));
     activity.tools = survivors;
 
+    // The UI binds to the normalized Mission Control event stream,
+    // not directly to provider-specific raw log records. Some providers
+    // (Codex especially) can expose complete tool metrics through
+    // normalized session tool calls even when their raw "recent event"
+    // records are sparse or oddly shaped. Promote those normalized tool
+    // calls into the global event stream so Recent Activity Feed, replay,
+    // Activity Rate, and Phaser pulses all consume the same app-level
+    // contract.
+    append_recent_tool_call_launch_events(&mut all_events, &all_sessions);
     all_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     activity.activity_signal =
         build_activity_signal(&all_events, &all_sessions, activity.generated_at_ms);
@@ -1733,6 +1947,7 @@ fn append_recent_tool_call_launch_events(
                 tool: call.tool.clone(),
                 category: call.category.clone(),
                 success: true,
+                synthetic: true,
                 input_tokens: None,
                 output_tokens: None,
             };
@@ -1755,12 +1970,8 @@ fn build_activity_signal_buckets(
     events: &[AgentEventSummary],
     generated_at_ms: u64,
 ) -> Vec<AgentActivitySignalBucket> {
-    let history_buckets = build_history_buckets(
-        events,
-        generated_at_ms,
-        HOUR_MS,
-        HISTORY_HOUR_BUCKETS,
-    );
+    let history_buckets =
+        build_history_buckets(events, generated_at_ms, HOUR_MS, HISTORY_HOUR_BUCKETS);
     let mut buckets: Vec<AgentActivitySignalBucket> = history_buckets
         .into_iter()
         .map(|bucket| AgentActivitySignalBucket {
@@ -1872,16 +2083,14 @@ fn build_session_activity_signal_from_path(
                 bucket.turn_count += 1;
             }
             event if event == schema.events.tool_complete => {
-                let success =
-                    bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
+                let success = bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
                 if !success {
                     bucket.failure_count += 1;
                 }
                 continue;
             }
             event if event == schema.events.hook_complete => {
-                let success =
-                    bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
+                let success = bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
                 if !success {
                     bucket.failure_count += 1;
                 }
@@ -2514,6 +2723,8 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 // ── Copilot CLI provider ──────────────────────────────────────────────
 
 pub struct CopilotProvider;
+struct CodexProvider;
+struct ClaudeCodeProvider;
 
 impl AgentProvider for CopilotProvider {
     fn id(&self) -> &'static str {
@@ -2536,6 +2747,1146 @@ impl AgentProvider for CopilotProvider {
     fn scan(&self, include_history: bool) -> ProviderScan {
         scan_copilot(include_history)
     }
+}
+
+impl AgentProvider for CodexProvider {
+    fn id(&self) -> &'static str {
+        "codex"
+    }
+    fn label(&self) -> &'static str {
+        "OpenAI Codex"
+    }
+    fn is_available(&self) -> bool {
+        codex_home_dir().is_some_and(|home| home.exists())
+            || is_agent_executable_available(&agent_executable_names("codex"))
+    }
+    fn state_roots(&self) -> Vec<PathBuf> {
+        codex_state_roots()
+    }
+    fn scan(&self, include_history: bool) -> ProviderScan {
+        scan_codex(include_history)
+    }
+}
+
+impl AgentProvider for ClaudeCodeProvider {
+    fn id(&self) -> &'static str {
+        "claude"
+    }
+    fn label(&self) -> &'static str {
+        "Claude Code"
+    }
+    fn is_available(&self) -> bool {
+        claude_projects_root().is_some_and(|root| root.exists())
+            || is_agent_executable_available(&agent_executable_names("claude"))
+    }
+    fn state_roots(&self) -> Vec<PathBuf> {
+        claude_projects_root().into_iter().collect()
+    }
+    fn scan(&self, include_history: bool) -> ProviderScan {
+        scan_claude(include_history)
+    }
+}
+
+/// Provider field mapping (Codex-first):
+/// - Copilot `workspace.yaml` session metadata maps to Codex `session_meta` and
+///   later SQLite `threads` rows.
+/// - Copilot `tool.execution_start` maps to Codex `*_begin` EventMsg variants.
+/// - Copilot `tool.execution_complete` maps to Codex `*_end` EventMsg variants.
+/// - Copilot explicit turn events map to Codex `turn_started` / `turn_complete`.
+/// - Copilot shutdown/compaction token totals map to Codex `token_count`
+///   cumulative `total_token_usage`.
+/// - Claude will differ: its tool lifecycle is embedded in assistant/user
+///   message content blocks and its input tokens are max/latest while output is
+///   additive. Keep those differences explicit in Claude tests when added.
+fn scan_codex(include_history: bool) -> ProviderScan {
+    let provider = "codex";
+    let mut scan = ProviderScan::unavailable(provider);
+    let roots = codex_session_roots();
+    let existing_roots = roots
+        .iter()
+        .filter(|root| root.is_dir())
+        .cloned()
+        .collect::<Vec<_>>();
+    if existing_roots.is_empty() {
+        scan.alerts.push(
+            "No Codex session state found yet. Run Codex to create local rollout files."
+                .to_string(),
+        );
+        return scan;
+    }
+
+    scan.available = true;
+    let mut rollouts = existing_roots
+        .iter()
+        .flat_map(|root| discover_codex_rollout_files(root))
+        .collect::<Vec<_>>();
+    rollouts.sort_by(|a, b| b.1.cmp(&a.1));
+    if !include_history {
+        let now = SystemTime::now();
+        rollouts.retain(|(_, modified)| {
+            now.duration_since(*modified)
+                .map(|age| age.as_secs() <= STALE_SESSION_CUTOFF_SECS)
+                .unwrap_or(true)
+        });
+    }
+    rollouts.truncate(MAX_SCANNED_SESSIONS);
+    scan.scanned_sessions = rollouts.len();
+
+    let mut recent_events = Vec::new();
+    for (path, modified) in rollouts {
+        let summary =
+            summarize_codex_rollout(&path, modified, &mut scan.tool_counts, &mut recent_events);
+        scan.total_events += summary.event_count;
+        scan.total_tool_calls += summary.tool_count;
+        scan.total_output_tokens += summary.output_tokens;
+        scan.total_input_tokens += summary.input_tokens;
+        scan.total_turns += summary.turn_count;
+        if summary.is_active {
+            scan.active_sessions += 1;
+        }
+        scan.sessions.push(summary);
+    }
+    scan.recent_events = recent_events;
+    scan
+}
+
+fn summarize_codex_rollout(
+    path: &Path,
+    modified: SystemTime,
+    tool_counts: &mut BTreeMap<(String, String), usize>,
+    recent_events: &mut Vec<AgentEventSummary>,
+) -> AgentSessionSummary {
+    let session_id = codex_session_id_from_path(path);
+    let age_seconds = SystemTime::now()
+        .duration_since(modified)
+        .map(|age| age.as_secs())
+        .unwrap_or(0);
+    let mut summary = AgentSessionSummary {
+        provider: "codex".to_string(),
+        id: session_id.chars().take(8).collect(),
+        title: codex_title_from_path(path),
+        repository: "codex".to_string(),
+        branch: "unknown".to_string(),
+        updated_at: DateTime::<Utc>::from(modified).to_rfc3339(),
+        is_active: age_seconds < 10 * 60,
+        status: if age_seconds < 10 * 60 {
+            "working"
+        } else {
+            "idle"
+        }
+        .to_string(),
+        stale_seconds: age_seconds,
+        ..Default::default()
+    };
+
+    let Ok(file) = fs::File::open(path) else {
+        summary.status = "needs-attention".to_string();
+        summary.error_count = 1;
+        return summary;
+    };
+    let reader = BufReader::new(file);
+    let mut pending_tools: BTreeMap<String, SessionToolCall> = BTreeMap::new();
+    let mut last_model = String::new();
+    let modified_ms = modified
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_else(|_| unix_ms(SystemTime::now()));
+    for (line_index, line) in reader.lines().map_while(Result::ok).enumerate() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        summary.event_count += 1;
+        let envelope_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let payload = value.get("payload").unwrap_or(&serde_json::Value::Null);
+        let timestamp = codex_timestamp(&value, payload)
+            .unwrap_or_else(|| synthetic_codex_line_timestamp(modified_ms, line_index));
+
+        let raw_key = codex_event_key(envelope_type, payload);
+        let Some(mapping) = codex_mapping_for(&raw_key) else {
+            continue;
+        };
+
+        match mapping.effect {
+            NormalizedEventEffect::SessionMeta => apply_codex_session_meta(payload, &mut summary),
+            NormalizedEventEffect::ModelContext => {
+                if let Some(model) = codex_string(payload, &["/model"]) {
+                    last_model = sanitize_identifier(&model, "model");
+                    summary.last_model = last_model.clone();
+                }
+            }
+            NormalizedEventEffect::TurnStart => {
+                summary.turn_count += 1;
+                summary.status = "thinking".to_string();
+                record_last_event(
+                    &mut summary,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_category,
+                );
+                push_codex_event(
+                    recent_events,
+                    &summary.id,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_tool,
+                    &mapping.default_category,
+                    true,
+                    &summary,
+                );
+            }
+            NormalizedEventEffect::TurnEnd => {
+                summary.status = "idle".to_string();
+                record_last_event(
+                    &mut summary,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_category,
+                );
+                push_codex_event(
+                    recent_events,
+                    &summary.id,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_tool,
+                    &mapping.default_category,
+                    true,
+                    &summary,
+                );
+            }
+            NormalizedEventEffect::UserMessage => {
+                record_last_event(
+                    &mut summary,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_category,
+                );
+                push_codex_event(
+                    recent_events,
+                    &summary.id,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_tool,
+                    &mapping.default_category,
+                    true,
+                    &summary,
+                );
+            }
+            NormalizedEventEffect::AssistantMessage => {
+                record_last_event(
+                    &mut summary,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_category,
+                );
+                push_codex_event(
+                    recent_events,
+                    &summary.id,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_tool,
+                    &mapping.default_category,
+                    true,
+                    &summary,
+                );
+            }
+            NormalizedEventEffect::Error => {
+                summary.error_count += 1;
+                summary.status = "needs-attention".to_string();
+                record_last_event(
+                    &mut summary,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_category,
+                );
+                push_codex_event(
+                    recent_events,
+                    &summary.id,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_tool,
+                    &mapping.default_category,
+                    false,
+                    &summary,
+                );
+            }
+            NormalizedEventEffect::TokenCount => {
+                apply_codex_token_count(payload, &mut summary);
+                push_token_checkpoint(&mut summary, &timestamp);
+            }
+            NormalizedEventEffect::ToolStart => {
+                if let Some((tool, category, call_id)) = codex_tool_start(mapping, payload) {
+                    increment_codex_tool(&mut summary, tool_counts, &tool, &category);
+                    let event_ref = if call_id.is_empty() {
+                        String::new()
+                    } else {
+                        safe_ref_id("codex", &call_id)
+                    };
+                    let call = SessionToolCall {
+                        tool: tool.clone(),
+                        category: category.clone(),
+                        timestamp: timestamp.clone(),
+                        success: true,
+                        model: last_model.clone(),
+                        call_id: event_ref.clone(),
+                        event_ref,
+                        details: vec![
+                            safe_detail("Type", detail_kind(&category)),
+                            safe_detail("Provider", "codex"),
+                            safe_detail("Privacy", "arguments/output hidden"),
+                        ],
+                        ..Default::default()
+                    };
+                    if !call_id.is_empty() {
+                        pending_tools.insert(call_id, call.clone());
+                    }
+                    push_session_tool_call(&mut summary.recent_tool_calls, call);
+                    record_last_event(
+                        &mut summary,
+                        &timestamp,
+                        &mapping.normalized_kind,
+                        &category,
+                    );
+                    push_codex_event(
+                        recent_events,
+                        &summary.id,
+                        &timestamp,
+                        &mapping.normalized_kind,
+                        &tool,
+                        &category,
+                        true,
+                        &summary,
+                    );
+                }
+            }
+            NormalizedEventEffect::ToolEnd => {
+                if let Some((tool, category, call_id, success)) = codex_tool_end(mapping, payload) {
+                    if !success {
+                        summary.error_count += 1;
+                        summary.status = "needs-attention".to_string();
+                    }
+                    let mut event_tool = tool;
+                    let mut event_category = category;
+                    if let Some(mut pending) = pending_tools.remove(&call_id) {
+                        pending.completed_at = timestamp.clone();
+                        pending.success = success;
+                        if let (Some(start), Some(end)) =
+                            (parse_iso_ms(&pending.timestamp), parse_iso_ms(&timestamp))
+                        {
+                            pending.duration_ms = end.checked_sub(start);
+                        }
+                        event_tool = pending.tool.clone();
+                        event_category = pending.category.clone();
+                        upsert_session_tool_call(&mut summary.recent_tool_calls, pending);
+                    }
+                    record_last_event(
+                        &mut summary,
+                        &timestamp,
+                        &mapping.normalized_kind,
+                        if success { &event_category } else { "alert" },
+                    );
+                    push_codex_event(
+                        recent_events,
+                        &summary.id,
+                        &timestamp,
+                        &mapping.normalized_kind,
+                        &event_tool,
+                        if success { &event_category } else { "alert" },
+                        success,
+                        &summary,
+                    );
+                }
+            }
+            NormalizedEventEffect::Ignore => {
+                record_last_event(
+                    &mut summary,
+                    &timestamp,
+                    &mapping.normalized_kind,
+                    &mapping.default_category,
+                );
+            }
+        }
+    }
+    if summary.title.is_empty() {
+        summary.title = format!("Codex {}", summary.id);
+    }
+    if summary.last_model.is_empty() && !last_model.is_empty() {
+        summary.last_model = last_model;
+    }
+    summary
+}
+
+fn codex_home_dir() -> Option<PathBuf> {
+    env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".codex")))
+}
+
+fn codex_session_roots() -> Vec<PathBuf> {
+    codex_home_dir()
+        .map(|home| vec![home.join("sessions"), home.join("archived_sessions")])
+        .unwrap_or_default()
+}
+
+fn codex_state_roots() -> Vec<PathBuf> {
+    codex_home_dir().into_iter().collect()
+}
+
+fn discover_codex_rollout_files(root: &Path) -> Vec<(PathBuf, SystemTime)> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !is_codex_rollout_file_name(name) {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            files.push((path, modified));
+        }
+    }
+    files
+}
+
+fn codex_session_id_from_path(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("codex-session")
+        .trim_end_matches(".zst")
+        .trim_end_matches(".jsonl");
+    if name.len() >= 36 {
+        let candidate = &name[name.len() - 36..];
+        if candidate.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return candidate.to_string();
+        }
+    }
+    name.trim_start_matches("rollout-").to_string()
+}
+
+fn codex_title_from_path(path: &Path) -> String {
+    format!(
+        "Codex {}",
+        codex_session_id_from_path(path)
+            .chars()
+            .take(8)
+            .collect::<String>()
+    )
+}
+
+fn codex_timestamp(value: &serde_json::Value, payload: &serde_json::Value) -> Option<String> {
+    codex_string(value, &["/timestamp", "/ts"])
+        .or_else(|| codex_string(payload, &["/timestamp", "/ts", "/meta/timestamp"]))
+        .or_else(|| codex_epoch_ms_string(payload, &["/started_at", "/completed_at"]))
+}
+
+fn codex_event_key(envelope_type: &str, payload: &serde_json::Value) -> String {
+    let envelope = normalize_codex_name(envelope_type);
+    if envelope == "event_msg" || envelope == "response_item" {
+        codex_string(payload, &["/type", "/event", "/name"])
+            .map(|value| normalize_codex_name(&value))
+            .unwrap_or(envelope)
+    } else {
+        envelope
+    }
+}
+
+fn codex_mapping_for(raw_key: &str) -> Option<&'static ProviderRawEventMappingConfig> {
+    codex_provider_mapping()
+        .event_mappings
+        .iter()
+        .find(|mapping| mapping.raw_key == raw_key)
+}
+
+fn claude_mapping_for(raw_key: &str) -> Option<&'static ProviderRawEventMappingConfig> {
+    claude_provider_mapping()
+        .record_mappings
+        .iter()
+        .find(|mapping| mapping.raw_key == raw_key)
+}
+
+fn normalize_codex_name(raw: &str) -> String {
+    let mut out = String::new();
+    let mut prev_lower_or_digit = false;
+    for ch in raw.chars() {
+        if ch == '-' || ch == '.' || ch == ' ' {
+            if !out.ends_with('_') {
+                out.push('_');
+            }
+            prev_lower_or_digit = false;
+            continue;
+        }
+        if ch.is_ascii_uppercase() {
+            if prev_lower_or_digit && !out.ends_with('_') {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+            prev_lower_or_digit = false;
+        } else {
+            out.push(ch.to_ascii_lowercase());
+            prev_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
+fn codex_string(value: &serde_json::Value, paths: &[&str]) -> Option<String> {
+    paths.iter().find_map(|path| {
+        value
+            .pointer(path)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    })
+}
+
+fn codex_epoch_ms_string(value: &serde_json::Value, paths: &[&str]) -> Option<String> {
+    let raw = codex_u64(value, paths)?;
+    let ms = if raw < 10_000_000_000 {
+        raw.saturating_mul(1000)
+    } else {
+        raw
+    };
+    let time = UNIX_EPOCH.checked_add(Duration::from_millis(ms))?;
+    Some(DateTime::<Utc>::from(time).to_rfc3339())
+}
+
+fn synthetic_codex_line_timestamp(modified_ms: u64, line_index: usize) -> String {
+    let offset_ms = u64::try_from(line_index).unwrap_or(0);
+    let time = UNIX_EPOCH
+        .checked_add(Duration::from_millis(modified_ms.saturating_add(offset_ms)))
+        .unwrap_or(UNIX_EPOCH);
+    DateTime::<Utc>::from(time).to_rfc3339()
+}
+
+fn codex_u64(value: &serde_json::Value, paths: &[&str]) -> Option<u64> {
+    paths.iter().find_map(|path| {
+        value.pointer(path).and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
+        })
+    })
+}
+
+fn apply_codex_session_meta(payload: &serde_json::Value, summary: &mut AgentSessionSummary) {
+    if let Some(id) = codex_string(payload, &["/meta/id", "/id"]) {
+        summary.id = id.chars().take(8).collect();
+    }
+    if let Some(model_provider) =
+        codex_string(payload, &["/meta/model_provider", "/model_provider"])
+    {
+        summary.last_model = sanitize_identifier(&model_provider, "model");
+    }
+    if let Some(branch) = codex_string(payload, &["/git/branch", "/git_branch"]) {
+        summary.branch = sanitize_identifier(&branch, "unknown");
+    }
+    if let Some(repo) = codex_string(payload, &["/git/repository_url", "/git_origin_url"]) {
+        summary.repository = safe_repo_name_from_url(&repo);
+    } else if let Some(cwd) = codex_string(payload, &["/meta/cwd", "/cwd"]) {
+        summary.repository = Path::new(&cwd)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| sanitize_identifier(name, "codex"))
+            .unwrap_or_else(|| "codex".to_string());
+    }
+    if summary.title.starts_with("Codex ") && summary.repository != "codex" {
+        summary.title = format!("Codex {}", summary.repository);
+    }
+}
+
+fn safe_repo_name_from_url(raw: &str) -> String {
+    let without_query = raw.split(['?', '#']).next().unwrap_or(raw);
+    let without_suffix = without_query.trim_end_matches('/').trim_end_matches(".git");
+    let last = without_suffix
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or("repository");
+    sanitize_identifier(last, "repository")
+}
+
+fn apply_codex_token_count(payload: &serde_json::Value, summary: &mut AgentSessionSummary) {
+    if let Some(input) = codex_u64(
+        payload,
+        &[
+            "/info/total_token_usage/input_tokens",
+            "/total_token_usage/input_tokens",
+            "/usage/input_tokens",
+        ],
+    ) {
+        summary.input_tokens = summary.input_tokens.max(input);
+    }
+    if let Some(output) = codex_u64(
+        payload,
+        &[
+            "/info/total_token_usage/output_tokens",
+            "/total_token_usage/output_tokens",
+            "/usage/output_tokens",
+        ],
+    ) {
+        summary.output_tokens = summary.output_tokens.max(output);
+    }
+}
+
+fn codex_tool_start(
+    mapping: &ProviderRawEventMappingConfig,
+    payload: &serde_json::Value,
+) -> Option<(String, String, String)> {
+    let raw_name = mapped_string(payload, &mapping.tool_name_paths)
+        .unwrap_or_else(|| mapping.default_tool.to_string());
+    let category = if mapping.default_category == "function" {
+        mapped_tool_category(
+            &raw_name,
+            &codex_provider_mapping().tool_category_mappings,
+            "activity",
+        )
+    } else {
+        mapping.default_category.to_string()
+    };
+    let call_id = mapped_string(payload, &mapping.call_id_paths).unwrap_or_default();
+    Some((
+        sanitize_identifier(&raw_name, &mapping.default_tool),
+        category,
+        call_id,
+    ))
+}
+
+fn codex_tool_end(
+    mapping: &ProviderRawEventMappingConfig,
+    payload: &serde_json::Value,
+) -> Option<(String, String, String, bool)> {
+    let tool = mapped_string(payload, &mapping.tool_name_paths)
+        .unwrap_or_else(|| mapping.default_tool.to_string());
+    let category = mapping.default_category.to_string();
+    let call_id = mapped_string(payload, &mapping.call_id_paths).unwrap_or_default();
+    let success = codex_tool_success(payload);
+    Some((
+        sanitize_identifier(&tool, &mapping.default_tool),
+        category,
+        call_id,
+        success,
+    ))
+}
+
+fn mapped_string(value: &serde_json::Value, paths: &[String]) -> Option<String> {
+    paths.iter().find_map(|path| {
+        value
+            .pointer(path)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    })
+}
+
+fn mapped_tool_category(
+    raw_name: &str,
+    mappings: &[ToolCategoryMappingConfig],
+    fallback: &str,
+) -> String {
+    let name = raw_name.to_ascii_lowercase();
+    for mapping in mappings {
+        if mapping
+            .raw_names
+            .iter()
+            .any(|candidate| name == candidate.as_str())
+            || mapping
+                .contains
+                .iter()
+                .any(|candidate| name.contains(candidate))
+            || mapping
+                .prefix
+                .iter()
+                .any(|candidate| name.starts_with(candidate))
+        {
+            return mapping.normalized_category.clone();
+        }
+    }
+    fallback.to_string()
+}
+
+fn codex_tool_success(payload: &serde_json::Value) -> bool {
+    let status = codex_string(payload, &["/status", "/result/status", "/outcome"])
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if status.contains("fail") || status.contains("error") || status.contains("declined") {
+        return false;
+    }
+    if let Some(exit_code) = payload
+        .pointer("/exit_code")
+        .and_then(|value| value.as_i64())
+    {
+        return exit_code == 0;
+    }
+    if let Some(ok) = payload
+        .pointer("/success")
+        .and_then(|value| value.as_bool())
+    {
+        return ok;
+    }
+    !payload.pointer("/error").is_some()
+}
+
+fn increment_codex_tool(
+    summary: &mut AgentSessionSummary,
+    tool_counts: &mut BTreeMap<(String, String), usize>,
+    tool: &str,
+    category: &str,
+) {
+    summary.tool_count += 1;
+    match category {
+        "forge" => summary.write_count += 1,
+        "library" => summary.read_count += 1,
+        "terminal" => summary.command_count += 1,
+        "signal" => summary.web_count += 1,
+        "delegates" => {
+            summary.task_count += 1;
+            summary.delegates_count += 1;
+        }
+        "skills" => {
+            summary.task_count += 1;
+            summary.skills_count += 1;
+        }
+        "court" => summary.court_count += 1,
+        "mcp" => summary.mcp_count += 1,
+        "hooks" => summary.hooks_count += 1,
+        _ => {}
+    }
+    summary.last_tool = tool.to_string();
+    *tool_counts
+        .entry((tool.to_string(), category.to_string()))
+        .or_insert(0) += 1;
+}
+
+fn push_codex_event(
+    recent_events: &mut Vec<AgentEventSummary>,
+    session_id: &str,
+    timestamp: &str,
+    kind: &str,
+    tool: &str,
+    category: &str,
+    success: bool,
+    summary: &AgentSessionSummary,
+) {
+    recent_events.push(AgentEventSummary {
+        provider: "codex".to_string(),
+        session_id: session_id.to_string(),
+        timestamp: timestamp.to_string(),
+        kind: kind.to_string(),
+        tool: tool.to_string(),
+        category: category.to_string(),
+        success,
+        synthetic: false,
+        input_tokens: Some(summary.input_tokens),
+        output_tokens: Some(summary.output_tokens),
+    });
+    truncate_recent_events(recent_events, MAX_RECENT_EVENTS);
+}
+
+/// Provider field mapping (Claude follows the Codex-proven path):
+/// - Copilot/Codex explicit tool events map to Claude assistant
+///   `message.content[]` blocks where `type == "tool_use"`.
+/// - Copilot/Codex tool completions map to Claude user `tool_result` blocks.
+/// - Copilot/Codex explicit turns map to inferred Claude user/assistant
+///   exchanges; use conservative counts and status.
+/// - Claude input tokens are max/latest context usage while output tokens are
+///   additive per assistant message.
+fn scan_claude(include_history: bool) -> ProviderScan {
+    let provider = "claude";
+    let mut scan = ProviderScan::unavailable(provider);
+    let Some(root) = claude_projects_root() else {
+        scan.alerts
+            .push("No Claude Code config directory was found.".to_string());
+        return scan;
+    };
+    if !root.is_dir() {
+        scan.alerts.push(
+            "No Claude Code session state found yet. Run Claude Code to create local transcripts."
+                .to_string(),
+        );
+        return scan;
+    }
+
+    scan.available = true;
+    let mut transcripts = discover_claude_transcripts(&root);
+    transcripts.sort_by(|a, b| b.1.cmp(&a.1));
+    if !include_history {
+        let now = SystemTime::now();
+        transcripts.retain(|(_, modified)| {
+            now.duration_since(*modified)
+                .map(|age| age.as_secs() <= STALE_SESSION_CUTOFF_SECS)
+                .unwrap_or(true)
+        });
+    }
+    transcripts.truncate(MAX_SCANNED_SESSIONS);
+    scan.scanned_sessions = transcripts.len();
+
+    let mut recent_events = Vec::new();
+    for (path, modified) in transcripts {
+        let summary =
+            summarize_claude_transcript(&path, modified, &mut scan.tool_counts, &mut recent_events);
+        scan.total_events += summary.event_count;
+        scan.total_tool_calls += summary.tool_count;
+        scan.total_output_tokens += summary.output_tokens;
+        scan.total_input_tokens += summary.input_tokens;
+        scan.total_turns += summary.turn_count;
+        if summary.is_active {
+            scan.active_sessions += 1;
+        }
+        scan.sessions.push(summary);
+    }
+    scan.recent_events = recent_events;
+    scan
+}
+
+fn summarize_claude_transcript(
+    path: &Path,
+    modified: SystemTime,
+    tool_counts: &mut BTreeMap<(String, String), usize>,
+    recent_events: &mut Vec<AgentEventSummary>,
+) -> AgentSessionSummary {
+    let session_id = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("claude-session")
+        .to_string();
+    let age_seconds = SystemTime::now()
+        .duration_since(modified)
+        .map(|age| age.as_secs())
+        .unwrap_or(0);
+    let mut summary = AgentSessionSummary {
+        provider: "claude".to_string(),
+        id: session_id.chars().take(8).collect(),
+        title: format!("Claude {}", session_id.chars().take(8).collect::<String>()),
+        repository: claude_repo_from_path(path),
+        branch: "unknown".to_string(),
+        updated_at: DateTime::<Utc>::from(modified).to_rfc3339(),
+        is_active: age_seconds < 10 * 60,
+        status: if age_seconds < 10 * 60 {
+            "working"
+        } else {
+            "idle"
+        }
+        .to_string(),
+        stale_seconds: age_seconds,
+        ..Default::default()
+    };
+    let Ok(file) = fs::File::open(path) else {
+        summary.status = "needs-attention".to_string();
+        summary.error_count = 1;
+        return summary;
+    };
+    let reader = BufReader::new(file);
+    let mut pending_tools: BTreeMap<String, SessionToolCall> = BTreeMap::new();
+    for line in reader.lines().map_while(Result::ok) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        summary.event_count += 1;
+        let record_type = value
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let timestamp =
+            codex_string(&value, &["/timestamp"]).unwrap_or_else(|| summary.updated_at.clone());
+        if let Some(branch) = codex_string(&value, &["/gitBranch"]) {
+            summary.branch = sanitize_identifier(&branch, "unknown");
+        }
+        if let Some(cwd) = codex_string(&value, &["/cwd"]) {
+            summary.repository = Path::new(&cwd)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| sanitize_identifier(name, "claude"))
+                .unwrap_or_else(|| summary.repository.clone());
+        }
+        if let Some(slug) = codex_string(&value, &["/slug", "/customTitle"]) {
+            let sanitized = sanitize_session_title(Some(&slug)).unwrap_or_default();
+            if !sanitized.is_empty() {
+                summary.title = sanitized.clone();
+                summary.session_name = sanitized;
+            }
+        }
+
+        let Some(mapping) = claude_mapping_for(record_type) else {
+            continue;
+        };
+        match mapping.effect {
+            NormalizedEventEffect::AssistantMessage => summarize_claude_assistant_record(
+                &value,
+                &timestamp,
+                &mut summary,
+                tool_counts,
+                recent_events,
+                &mut pending_tools,
+            ),
+            NormalizedEventEffect::UserMessage => summarize_claude_user_record(
+                &value,
+                &timestamp,
+                &mut summary,
+                recent_events,
+                &mut pending_tools,
+            ),
+            NormalizedEventEffect::Ignore if mapping.raw_key == "custom-title" => {
+                if let Some(title) = codex_string(&value, &["/customTitle"]) {
+                    if let Some(safe) = sanitize_session_title(Some(&title)) {
+                        summary.title = safe.clone();
+                        summary.session_name = safe;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    summary
+}
+
+fn summarize_claude_assistant_record(
+    value: &serde_json::Value,
+    timestamp: &str,
+    summary: &mut AgentSessionSummary,
+    tool_counts: &mut BTreeMap<(String, String), usize>,
+    recent_events: &mut Vec<AgentEventSummary>,
+    pending_tools: &mut BTreeMap<String, SessionToolCall>,
+) {
+    if let Some(model) = codex_string(value, &["/message/model"]) {
+        summary.last_model = sanitize_identifier(&model, "model");
+    }
+    apply_claude_usage(value, summary);
+    let stop_reason = codex_string(value, &["/message/stop_reason"]).unwrap_or_default();
+    if stop_reason == "end_turn" {
+        summary.turn_count += 1;
+        summary.status = "idle".to_string();
+        record_last_event(summary, timestamp, "assistant.turn_end", "waiting");
+        push_claude_event(
+            recent_events,
+            summary,
+            timestamp,
+            "assistant.turn_end",
+            "waiting",
+            "waiting",
+            true,
+        );
+    }
+    let Some(content) = value
+        .pointer("/message/content")
+        .and_then(|value| value.as_array())
+    else {
+        return;
+    };
+    for block in content {
+        if block.get("type").and_then(|value| value.as_str()) != Some("tool_use") {
+            continue;
+        }
+        let raw_name = block
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("tool");
+        let tool = sanitize_identifier(raw_name, "tool");
+        let category = claude_tool_category(&tool);
+        let call_id = block
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        increment_codex_tool(summary, tool_counts, &tool, &category);
+        let event_ref = if call_id.is_empty() {
+            String::new()
+        } else {
+            safe_ref_id("claude", &call_id)
+        };
+        let call = SessionToolCall {
+            tool: tool.clone(),
+            category: category.clone(),
+            timestamp: timestamp.to_string(),
+            success: true,
+            model: summary.last_model.clone(),
+            call_id: event_ref.clone(),
+            event_ref,
+            details: vec![
+                safe_detail("Type", detail_kind(&category)),
+                safe_detail("Provider", "claude"),
+                safe_detail("Privacy", "arguments/output hidden"),
+            ],
+            ..Default::default()
+        };
+        if !call_id.is_empty() {
+            pending_tools.insert(call_id, call.clone());
+        }
+        push_session_tool_call(&mut summary.recent_tool_calls, call);
+        record_last_event(summary, timestamp, "tool.execution_start", &category);
+        push_claude_event(
+            recent_events,
+            summary,
+            timestamp,
+            "tool.execution_start",
+            &tool,
+            &category,
+            true,
+        );
+    }
+}
+
+fn summarize_claude_user_record(
+    value: &serde_json::Value,
+    timestamp: &str,
+    summary: &mut AgentSessionSummary,
+    recent_events: &mut Vec<AgentEventSummary>,
+    pending_tools: &mut BTreeMap<String, SessionToolCall>,
+) {
+    let Some(content) = value
+        .pointer("/message/content")
+        .and_then(|value| value.as_array())
+    else {
+        if !value.pointer("/message/content").is_some() {
+            summary.turn_count += 1;
+            record_last_event(summary, timestamp, "user.message", "prompt");
+        }
+        return;
+    };
+    let mut saw_tool_result = false;
+    for block in content {
+        if block.get("type").and_then(|value| value.as_str()) != Some("tool_result") {
+            continue;
+        }
+        saw_tool_result = true;
+        let call_id = block
+            .get("tool_use_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        let success = !block
+            .get("is_error")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if !success {
+            summary.error_count += 1;
+            summary.status = "needs-attention".to_string();
+        }
+        if let Some(mut pending) = pending_tools.remove(&call_id) {
+            pending.completed_at = timestamp.to_string();
+            pending.success = success;
+            if let (Some(start), Some(end)) =
+                (parse_iso_ms(&pending.timestamp), parse_iso_ms(timestamp))
+            {
+                pending.duration_ms = end.checked_sub(start);
+            }
+            upsert_session_tool_call(&mut summary.recent_tool_calls, pending.clone());
+            push_claude_event(
+                recent_events,
+                summary,
+                timestamp,
+                "tool.execution_complete",
+                &pending.tool,
+                if success { &pending.category } else { "alert" },
+                success,
+            );
+        }
+    }
+    if !saw_tool_result {
+        summary.turn_count += 1;
+        record_last_event(summary, timestamp, "user.message", "prompt");
+    }
+}
+
+fn apply_claude_usage(value: &serde_json::Value, summary: &mut AgentSessionSummary) {
+    if let Some(input) = codex_u64(value, &["/message/usage/input_tokens"]) {
+        summary.input_tokens = summary.input_tokens.max(input);
+    }
+    if let Some(output) = codex_u64(value, &["/message/usage/output_tokens"]) {
+        summary.output_tokens = summary.output_tokens.saturating_add(output);
+    }
+    push_token_checkpoint(
+        summary,
+        &codex_string(value, &["/timestamp"]).unwrap_or_else(|| summary.updated_at.clone()),
+    );
+}
+
+fn claude_tool_category(tool: &str) -> String {
+    mapped_tool_category(
+        tool,
+        &claude_provider_mapping().tool_category_mappings,
+        "activity",
+    )
+}
+
+fn push_claude_event(
+    recent_events: &mut Vec<AgentEventSummary>,
+    summary: &AgentSessionSummary,
+    timestamp: &str,
+    kind: &str,
+    tool: &str,
+    category: &str,
+    success: bool,
+) {
+    recent_events.push(AgentEventSummary {
+        provider: "claude".to_string(),
+        session_id: summary.id.clone(),
+        timestamp: timestamp.to_string(),
+        kind: kind.to_string(),
+        tool: tool.to_string(),
+        category: category.to_string(),
+        success,
+        synthetic: false,
+        input_tokens: Some(summary.input_tokens),
+        output_tokens: Some(summary.output_tokens),
+    });
+    truncate_recent_events(recent_events, MAX_RECENT_EVENTS);
+}
+
+fn claude_projects_root() -> Option<PathBuf> {
+    env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .map(|root| root.join("projects"))
+        .or_else(|| home_dir().map(|home| home.join(".claude").join("projects")))
+}
+
+fn discover_claude_transcripts(root: &Path) -> Vec<(PathBuf, SystemTime)> {
+    let mut files = Vec::new();
+    let Ok(projects) = fs::read_dir(root) else {
+        return files;
+    };
+    for project in projects.flatten() {
+        let project_path = project.path();
+        if !project_path.is_dir() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&project_path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !path.is_file() || !is_claude_transcript_file_name(name) {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            files.push((path, modified));
+        }
+    }
+    files
+}
+
+fn claude_repo_from_path(path: &Path) -> String {
+    path.parent()
+        .and_then(|project| project.file_name())
+        .and_then(|name| name.to_str())
+        .and_then(|encoded| encoded.rsplit('-').find(|part| !part.is_empty()))
+        .map(|name| sanitize_identifier(name, "claude"))
+        .unwrap_or_else(|| "claude".to_string())
 }
 
 fn scan_copilot(include_history: bool) -> ProviderScan {
@@ -3177,6 +4528,191 @@ fn is_schema_known_event(event_type: &str, schema: &ProviderSchema) -> bool {
 
 // ── Copilot-specific helpers (kept private to this module) ────────────
 
+fn copilot_provider_info() -> AgentProviderInfo {
+    let cli_available = is_copilot_available();
+    let (schema, _) = load_copilot_schema();
+    let state_available = discover_copilot_state_roots(&schema)
+        .roots
+        .iter()
+        .any(|root| root.path.is_dir() && fs::read_dir(&root.path).is_ok());
+    let available = cli_available || state_available;
+    let version = agent_version(&agent_executable_names("copilot"));
+    AgentProviderInfo {
+        id: "copilot".to_string(),
+        display_name: "GitHub Copilot CLI".to_string(),
+        short_name: "Copilot".to_string(),
+        available,
+        version,
+        reason: if available {
+            None
+        } else {
+            Some("Copilot CLI and local Copilot session state were not found".to_string())
+        },
+        install_hint: if available {
+            None
+        } else {
+            Some("Install or run GitHub Copilot CLI".to_string())
+        },
+        state_roots: vec!["~/.copilot/session-state".to_string()],
+    }
+}
+
+fn codex_provider_info() -> AgentProviderInfo {
+    let cli_available = is_agent_executable_available(&agent_executable_names("codex"));
+    let version = agent_version(&agent_executable_names("codex"));
+    let state_available = codex_session_roots().iter().any(|root| root.is_dir());
+    let available = state_available;
+    let reason = if !available {
+        Some(if cli_available {
+            "Codex CLI was found, but no local Codex session state exists yet. Run Codex once to create rollout files.".to_string()
+        } else {
+            "Codex CLI and local Codex session state were not found".to_string()
+        })
+    } else if !cli_available {
+        Some(
+            "Local Codex session state was found, but the Codex CLI executable was not found."
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    AgentProviderInfo {
+        id: "codex".to_string(),
+        display_name: "OpenAI Codex".to_string(),
+        short_name: "Codex".to_string(),
+        available,
+        version,
+        reason,
+        install_hint: if available {
+            None
+        } else {
+            Some("Install Codex CLI and authenticate".to_string())
+        },
+        state_roots: vec!["~/.codex".to_string(), "~/.codex/sessions".to_string()],
+    }
+}
+
+fn claude_provider_info() -> AgentProviderInfo {
+    let state_available = claude_projects_root().is_some_and(|root| root.is_dir());
+    let cli_available = is_agent_executable_available(&agent_executable_names("claude"));
+    let available = state_available;
+    let version = agent_version(&agent_executable_names("claude"));
+    AgentProviderInfo {
+        id: "claude".to_string(),
+        display_name: "Claude Code".to_string(),
+        short_name: "Claude".to_string(),
+        available,
+        version,
+        reason: if available {
+            None
+        } else {
+            Some(if cli_available {
+                "Claude Code CLI was found, but no local transcript state exists yet. Run Claude Code once to create transcripts.".to_string()
+            } else {
+                "Claude Code CLI and local transcript state were not found".to_string()
+            })
+        },
+        install_hint: if available {
+            None
+        } else {
+            Some("Install Claude Code and authenticate".to_string())
+        },
+        state_roots: vec!["~/.claude/projects".to_string()],
+    }
+}
+
+fn is_agent_executable_available(names: &[&str]) -> bool {
+    candidate_agent_paths(names)
+        .iter()
+        .any(|path| path.is_file())
+}
+
+fn agent_version(names: &[&str]) -> Option<String> {
+    let executable = candidate_agent_paths(names)
+        .into_iter()
+        .find(|path| path.is_file())?;
+    let output = Command::new(executable).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let first_line = stdout
+        .lines()
+        .chain(stderr.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    Some(first_line.chars().take(80).collect())
+}
+
+fn candidate_agent_paths(names: &[&str]) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(path_value) = env::var_os("PATH") {
+        for dir in env::split_paths(&path_value) {
+            for name in names {
+                candidates.push(dir.join(name));
+            }
+        }
+    }
+
+    if let Some(home) = home_dir() {
+        for dir in [
+            home.join(".local").join("bin"),
+            home.join("bin"),
+            home.join(".npm-global").join("bin"),
+            home.join(".volta").join("bin"),
+            home.join(".yarn").join("bin"),
+        ] {
+            for name in names {
+                candidates.push(dir.join(name));
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    for dir in [
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ] {
+        for name in names {
+            candidates.push(dir.join(name));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = env::var_os("APPDATA").map(PathBuf::from) {
+            for name in names {
+                candidates.push(appdata.join("npm").join(name));
+            }
+        }
+    }
+
+    candidates
+}
+
+fn agent_executable_names(base: &'static str) -> Vec<&'static str> {
+    #[cfg(target_os = "windows")]
+    {
+        match base {
+            "codex" => vec!["codex.exe", "codex.cmd", "codex.bat", "codex.ps1", "codex"],
+            "claude" => vec![
+                "claude.exe",
+                "claude.cmd",
+                "claude.bat",
+                "claude.ps1",
+                "claude",
+            ],
+            _ => vec![base],
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        vec![base]
+    }
+}
+
 fn is_copilot_available() -> bool {
     candidate_copilot_paths().iter().any(|path| path.is_file())
 }
@@ -3619,6 +5155,7 @@ fn summarize_events_with_mode(
                 tool: hook_name.clone(),
                 category: "hooks".to_string(),
                 success: true,
+                synthetic: false,
                 input_tokens: Some(summary.input_tokens),
                 output_tokens: Some(summary.output_tokens),
             });
@@ -3668,6 +5205,7 @@ fn summarize_events_with_mode(
                 tool: hook_name.clone(),
                 category: completion_category.to_string(),
                 success,
+                synthetic: false,
                 input_tokens: Some(summary.input_tokens),
                 output_tokens: Some(summary.output_tokens),
             });
@@ -3763,6 +5301,7 @@ fn summarize_events_with_mode(
                 tool: tool_name.clone(),
                 category: category.clone(),
                 success: true,
+                synthetic: false,
                 input_tokens: Some(summary.input_tokens),
                 output_tokens: Some(summary.output_tokens),
             });
@@ -3818,6 +5357,7 @@ fn summarize_events_with_mode(
                 tool: "tool complete".to_string(),
                 category: completion_category.to_string(),
                 success,
+                synthetic: false,
                 input_tokens: Some(summary.input_tokens),
                 output_tokens: Some(summary.output_tokens),
             });
@@ -3952,6 +5492,7 @@ fn summarize_events_with_mode(
                 tool: String::new(),
                 category: categorize_event(event_type).to_string(),
                 success: true,
+                synthetic: false,
                 input_tokens: Some(summary.input_tokens),
                 output_tokens: Some(summary.output_tokens),
             });
@@ -3966,26 +5507,31 @@ fn summarize_events_with_mode(
     schema_stats
 }
 
-pub fn get_raw_tool_call_details(
+pub fn session_editor_path(
     provider: Option<String>,
     session_id: String,
-    event_ref: String,
-) -> Result<RawToolCallDetails, String> {
+) -> Result<PathBuf, String> {
     let provider = provider.unwrap_or_else(|| "copilot".to_string());
     if provider != "copilot" {
         return Err(format!(
-            "Raw inspection is not supported for provider '{}'",
+            "Open in editor is not supported for provider '{}'",
             provider
         ));
     }
     if !is_safe_public_ref(&session_id) {
         return Err("Invalid session id".to_string());
     }
-
     let (schema, _) = load_copilot_schema();
     let session_dir = resolve_copilot_session_dir(&schema, &session_id)?;
-    let events_path = first_existing_child(&session_dir, &schema.session.events_files);
-    raw_tool_call_details_from_events_path(&events_path, &schema, &event_ref)
+    let workspace_path = first_existing_child(&session_dir, &schema.session.workspace_files);
+    let workspace = parse_workspace(&workspace_path, &schema);
+    let Some(root) = workspace
+        .get("git_root")
+        .filter(|root| !root.trim().is_empty())
+    else {
+        return Err("Selected session does not have an editor path".to_string());
+    };
+    Ok(PathBuf::from(root))
 }
 
 fn resolve_copilot_session_dir(
@@ -4040,173 +5586,8 @@ fn resolve_copilot_session_dir(
     match matches.len() {
         0 => Err("No matching local session was found".to_string()),
         1 => Ok(matches.remove(0)),
-        _ => Err(
-            "Session id is ambiguous; refresh activity before revealing raw details".to_string(),
-        ),
+        _ => Err("Session id is ambiguous; refresh activity before opening it".to_string()),
     }
-}
-
-fn raw_tool_call_details_from_events_path(
-    path: &Path,
-    schema: &ProviderSchema,
-    event_ref: &str,
-) -> Result<RawToolCallDetails, String> {
-    let offset =
-        parse_event_ref(event_ref).ok_or_else(|| "Invalid tool event reference".to_string())?;
-    let mut file =
-        fs::File::open(path).map_err(|err| format!("Unable to open session events: {}", err))?;
-    let len = file
-        .metadata()
-        .map_err(|err| format!("Unable to inspect session events: {}", err))?
-        .len();
-    if offset >= len {
-        return Err("Tool event reference is no longer available".to_string());
-    }
-    file.seek(SeekFrom::Start(offset))
-        .map_err(|err| format!("Unable to read session events: {}", err))?;
-
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
-    if reader
-        .read_line(&mut line)
-        .map_err(|err| format!("Unable to read session event: {}", err))?
-        == 0
-    {
-        return Err("Tool event reference is no longer available".to_string());
-    }
-    let value = serde_json::from_str::<serde_json::Value>(&line)
-        .map_err(|_| "Tool event reference no longer points to a readable event".to_string())?;
-    let event_type = string_from_paths(&value, &schema.events.event_type_paths).unwrap_or_default();
-    let (raw_args, raw_args_truncated, raw_output) = if event_type == schema.events.tool_start {
-        let (raw_args, raw_args_truncated) =
-            value_from_paths(&value, &schema.events.arguments_paths)
-                .map(|value| raw_value_to_string(value, MAX_RAW_DETAIL_VALUE_BYTES))
-                .unwrap_or_default();
-        let raw_call_id = raw_tool_call_id(&value, schema);
-        let raw_output = find_raw_event_output(
-            &mut reader,
-            schema,
-            &schema.events.tool_complete,
-            raw_call_id.as_deref(),
-            &schema.events.output_paths,
-            raw_tool_call_id,
-        );
-        (raw_args, raw_args_truncated, raw_output)
-    } else if event_type == schema.events.hook_start {
-        let (raw_args, raw_args_truncated) =
-            value_from_paths(&value, &schema.events.hook_input_paths)
-                .map(|value| raw_value_to_string(value, MAX_RAW_DETAIL_VALUE_BYTES))
-                .unwrap_or_default();
-        let raw_hook_id = raw_hook_invocation_id(&value, schema);
-        let raw_output = find_raw_event_output(
-            &mut reader,
-            schema,
-            &schema.events.hook_complete,
-            raw_hook_id.as_deref(),
-            &schema.events.hook_output_paths,
-            raw_hook_invocation_id,
-        );
-        (raw_args, raw_args_truncated, raw_output)
-    } else {
-        return Err("Raw details are only available for tool or hook calls".to_string());
-    };
-    Ok(RawToolCallDetails {
-        raw_args,
-        raw_output: raw_output.value,
-        raw_args_truncated,
-        raw_output_truncated: raw_output.truncated,
-        raw_output_scan_limited: raw_output.scan_limited,
-    })
-}
-
-#[derive(Default)]
-struct RawOutputSearch {
-    value: Option<String>,
-    truncated: bool,
-    scan_limited: bool,
-}
-
-fn find_raw_event_output<R: BufRead, F>(
-    reader: &mut R,
-    schema: &ProviderSchema,
-    complete_event_type: &str,
-    raw_call_id: Option<&str>,
-    output_paths: &[String],
-    event_id: F,
-) -> RawOutputSearch
-where
-    F: Fn(&serde_json::Value, &ProviderSchema) -> Option<String>,
-{
-    let Some(raw_call_id) = raw_call_id else {
-        return RawOutputSearch::default();
-    };
-    if output_paths.is_empty() || complete_event_type.is_empty() {
-        return RawOutputSearch::default();
-    }
-    let mut line = String::new();
-    let mut scanned_bytes = 0u64;
-    loop {
-        line.clear();
-        let Ok(bytes_read) = reader.read_line(&mut line) else {
-            return RawOutputSearch::default();
-        };
-        if bytes_read == 0 {
-            return RawOutputSearch::default();
-        }
-        scanned_bytes = scanned_bytes.saturating_add(bytes_read as u64);
-        if scanned_bytes > MAX_RAW_DETAIL_SCAN_BYTES {
-            return RawOutputSearch {
-                scan_limited: true,
-                ..Default::default()
-            };
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        let event_type =
-            string_from_paths(&value, &schema.events.event_type_paths).unwrap_or_default();
-        if event_type != complete_event_type {
-            continue;
-        }
-        if event_id(&value, schema).as_deref() == Some(raw_call_id) {
-            let (value, truncated) = value_from_paths(&value, output_paths)
-                .map(|value| raw_value_to_string(value, MAX_RAW_DETAIL_VALUE_BYTES))
-                .unwrap_or_default();
-            return RawOutputSearch {
-                value,
-                truncated,
-                scan_limited: false,
-            };
-        }
-    }
-}
-
-fn raw_value_to_string(value: &serde_json::Value, max_bytes: usize) -> (Option<String>, bool) {
-    let rendered = if let Some(value) = value.as_str() {
-        value.to_string()
-    } else {
-        serde_json::to_string_pretty(value)
-            .or_else(|_| serde_json::to_string(value))
-            .unwrap_or_default()
-    };
-    let (rendered, truncated) = truncate_utf8(rendered, max_bytes);
-    (Some(rendered), truncated)
-}
-
-fn truncate_utf8(mut value: String, max_bytes: usize) -> (String, bool) {
-    if value.len() <= max_bytes {
-        return (value, false);
-    }
-    let mut boundary = max_bytes;
-    while boundary > 0 && !value.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    value.truncate(boundary);
-    (value, true)
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 fn is_safe_public_ref(value: &str) -> bool {
@@ -4219,14 +5600,6 @@ fn is_safe_public_ref(value: &str) -> bool {
 
 fn event_ref_from_offset(offset: u64) -> String {
     format!("evt-{offset:x}")
-}
-
-fn parse_event_ref(event_ref: &str) -> Option<u64> {
-    let suffix = event_ref.strip_prefix("evt-")?;
-    if suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    u64::from_str_radix(suffix, 16).ok()
 }
 
 fn value_at_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
@@ -4504,6 +5877,33 @@ fn push_session_tool_call(buf: &mut Vec<SessionToolCall>, call: SessionToolCall)
     }
 }
 
+fn upsert_session_tool_call(buf: &mut Vec<SessionToolCall>, call: SessionToolCall) {
+    let key = if !call.event_ref.is_empty() {
+        call.event_ref.clone()
+    } else if !call.call_id.is_empty() {
+        call.call_id.clone()
+    } else {
+        format!("{}|{}|{}", call.timestamp, call.tool, call.category)
+    };
+    if let Some(existing) = buf.iter_mut().find(|existing| {
+        let existing_key = if !existing.event_ref.is_empty() {
+            existing.event_ref.clone()
+        } else if !existing.call_id.is_empty() {
+            existing.call_id.clone()
+        } else {
+            format!(
+                "{}|{}|{}",
+                existing.timestamp, existing.tool, existing.category
+            )
+        };
+        existing_key == key
+    }) {
+        *existing = call;
+    } else {
+        push_session_tool_call(buf, call);
+    }
+}
+
 fn push_token_checkpoint(summary: &mut AgentSessionSummary, timestamp: &str) {
     let checkpoint = SessionTokenCheckpoint {
         timestamp: timestamp.to_string(),
@@ -4601,14 +6001,15 @@ fn raw_hook_invocation_id(value: &serde_json::Value, schema: &ProviderSchema) ->
 }
 
 fn safe_ref_id(prefix: &str, raw: &str) -> String {
-    let suffix = raw
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .take(8)
-        .collect::<String>();
-    if suffix.is_empty() {
+    if raw.trim().is_empty() {
         String::new()
     } else {
+        let digest = Sha256::digest(raw.as_bytes());
+        let suffix = digest
+            .iter()
+            .take(6)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         format!("{}-{}", prefix, suffix)
     }
 }
@@ -4861,18 +6262,25 @@ fn categorize_event(event_type: &str) -> &'static str {
 pub fn start_watcher(app: AppHandle) {
     let providers = default_providers();
     let (schema, _) = load_copilot_schema();
-    let relevant_files = schema.session.relevant_files.clone();
-    let mut watch_targets: Vec<(PathBuf, RecursiveMode)> = Vec::new();
+    let copilot_relevant_files = schema.session.relevant_files.clone();
+    let mut watch_targets: Vec<(PathBuf, RecursiveMode, WatchedProvider)> = Vec::new();
 
     for provider in providers {
+        let Some(watched_provider) = watched_provider_for_id(provider.id()) else {
+            continue;
+        };
         for root in provider.state_roots() {
             // Prefer the narrow state_root; fall back to its parent for
             // creation events if the root doesn't exist yet.
             if root.exists() {
-                watch_targets.push((root, RecursiveMode::Recursive));
+                watch_targets.push((root, RecursiveMode::Recursive, watched_provider));
             } else if let Some(parent) = root.parent() {
                 if parent.exists() {
-                    watch_targets.push((parent.to_path_buf(), RecursiveMode::NonRecursive));
+                    watch_targets.push((
+                        parent.to_path_buf(),
+                        RecursiveMode::NonRecursive,
+                        watched_provider,
+                    ));
                     log::info!(
                         "Watching {} non-recursively until {} exists",
                         parent.display(),
@@ -4903,7 +6311,7 @@ pub fn start_watcher(app: AppHandle) {
             }
         };
 
-        for (path, mode) in &watch_targets {
+        for (path, mode, _) in &watch_targets {
             if let Err(err) = watcher.watch(path, *mode) {
                 log::warn!("Failed to watch {}: {}", path.display(), err);
             }
@@ -4916,11 +6324,12 @@ pub fn start_watcher(app: AppHandle) {
             // Avoids needless rescans on rewind-snapshots, sqlite
             // journals, and other noise inside session dirs.
             let Ok(event) = event else { continue };
-            if !event
-                .paths
-                .iter()
-                .any(|p| is_relevant_path(p, &relevant_files))
-            {
+            if !event.paths.iter().any(|path| {
+                watch_targets.iter().any(|(root, _, provider)| {
+                    path.starts_with(root)
+                        && is_relevant_provider_path(path, *provider, &copilot_relevant_files)
+                })
+            }) {
                 continue;
             }
 
@@ -4947,15 +6356,47 @@ pub fn start_watcher(app: AppHandle) {
     });
 }
 
-/// Paths whose changes warrant a re-scan. The scan reads
-/// `events.jsonl` per session for activity and `workspace.yaml` for
-/// session metadata (title, repository, branch). Everything else in a
-/// session dir (sqlite journals, rewind snapshots, etc.) is ignored.
-fn is_relevant_path(path: &Path, relevant_files: &[String]) -> bool {
+/// Paths whose changes warrant a re-scan. Each provider has a small
+/// allowlist that mirrors the files its scanner reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WatchedProvider {
+    Copilot,
+    Codex,
+    Claude,
+}
+
+fn watched_provider_for_id(provider_id: &str) -> Option<WatchedProvider> {
+    match provider_id {
+        "copilot" => Some(WatchedProvider::Copilot),
+        "codex" => Some(WatchedProvider::Codex),
+        "claude" => Some(WatchedProvider::Claude),
+        _ => None,
+    }
+}
+
+fn is_relevant_provider_path(
+    path: &Path,
+    provider: WatchedProvider,
+    copilot_relevant_files: &[String],
+) -> bool {
     match path.file_name().and_then(|n| n.to_str()) {
-        Some(name) => relevant_files.iter().any(|candidate| candidate == name),
+        Some(name) => match provider {
+            WatchedProvider::Copilot => copilot_relevant_files
+                .iter()
+                .any(|candidate| candidate == name),
+            WatchedProvider::Codex => is_codex_rollout_file_name(name),
+            WatchedProvider::Claude => is_claude_transcript_file_name(name),
+        },
         _ => false,
     }
+}
+
+fn is_codex_rollout_file_name(name: &str) -> bool {
+    name.starts_with("rollout-") && name.ends_with(".jsonl")
+}
+
+fn is_claude_transcript_file_name(name: &str) -> bool {
+    name.ends_with(".jsonl") && !name.starts_with("agent-")
 }
 
 #[cfg(test)]
@@ -4968,6 +6409,430 @@ mod tests {
     }
 
     #[test]
+    fn normalized_mapping_contract_covers_all_ui_bound_fields_for_each_provider() {
+        let mappings = list_agent_activity_field_mappings();
+        let required = [
+            "AgentSessionSummary.id",
+            "AgentSessionSummary.repository",
+            "AgentSessionSummary.turn_count",
+            "AgentSessionSummary.tool_count and category counts",
+            "AgentEventSummary.kind",
+            "AgentSessionSummary.input_tokens/output_tokens",
+        ];
+        for field in required {
+            let mapping = mappings
+                .iter()
+                .find(|mapping| mapping.normalized_field == field)
+                .unwrap_or_else(|| panic!("missing normalized mapping for {}", field));
+            assert!(
+                !mapping.ui_surfaces.is_empty(),
+                "{} needs UI surfaces",
+                field
+            );
+            assert!(
+                !mapping.copilot_source.trim().is_empty(),
+                "{} needs Copilot mapping",
+                field
+            );
+            assert!(
+                !mapping.codex_source.trim().is_empty(),
+                "{} needs Codex mapping",
+                field
+            );
+            assert!(
+                !mapping.claude_source.trim().is_empty(),
+                "{} needs Claude mapping",
+                field
+            );
+        }
+    }
+
+    #[test]
+    fn provider_mapping_files_are_versioned_and_compatible() {
+        for mapping in [
+            copilot_provider_mapping(),
+            codex_provider_mapping(),
+            claude_provider_mapping(),
+        ] {
+            assert_eq!(
+                mapping.schema_version.split('.').next(),
+                Some(SUPPORTED_SCHEMA_MAJOR),
+                "{} mapping has incompatible version {}",
+                mapping.provider,
+                mapping.schema_version
+            );
+            validate_provider_mapping(mapping).expect("mapping validates");
+        }
+    }
+
+    #[test]
+    fn provider_mapping_rejects_unsupported_major_version() {
+        let mapping = ProviderMappingFile {
+            schema_version: "2.0.0".to_string(),
+            provider: "codex".to_string(),
+            field_mappings: vec![ProviderFieldMappingEntry {
+                normalized_field: "AgentSessionSummary.id".to_string(),
+                ui_surfaces: vec!["selected session".to_string()],
+                normalized_meaning: "id".to_string(),
+                source: "source".to_string(),
+                differences: String::new(),
+            }],
+            event_mappings: Vec::new(),
+            record_mappings: Vec::new(),
+            tool_category_mappings: Vec::new(),
+        };
+        assert!(validate_provider_mapping(&mapping).is_err());
+    }
+
+    #[test]
+    fn codex_raw_event_mapping_targets_ui_bound_normalized_kinds() {
+        let expected = [
+            ("task_started", "assistant.turn_start"),
+            ("task_complete", "assistant.turn_end"),
+            ("function_call", "tool.execution_start"),
+            ("function_call_output", "tool.execution_complete"),
+            ("custom_tool_call", "tool.execution_start"),
+            ("custom_tool_call_output", "tool.execution_complete"),
+            ("web_search_call", "tool.execution_start"),
+            ("web_search_end", "tool.execution_complete"),
+        ];
+        for (raw, normalized) in expected {
+            let mapping = codex_mapping_for(raw)
+                .unwrap_or_else(|| panic!("missing Codex mapping for {}", raw));
+            assert_eq!(mapping.normalized_kind, normalized);
+        }
+    }
+
+    #[test]
+    fn codex_rollout_maps_to_sanitized_session_summary() {
+        use std::io::Write;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "rollout-2026-06-05T10-30-00-01930abc-1111-2222-3333-444444444444-{}.jsonl",
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).expect("create codex rollout");
+        writeln!(
+            file,
+            r#"{{"type":"session_meta","payload":{{"meta":{{"id":"01930abc-1111-2222-3333-444444444444","model_provider":"openai","cwd":"/Users/dan/private/repo","cli_version":"0.118.0"}},"git":{{"branch":"main","repository_url":"https://token@github.com/example/private-repo.git"}}}}}}"#
+        )
+        .expect("write session meta");
+        writeln!(
+            file,
+            r#"{{"type":"event_msg","timestamp":"2026-06-05T10:30:01.000Z","payload":{{"type":"TurnStarted","turn_id":"turn-1"}}}}"#
+        )
+        .expect("write turn start");
+        writeln!(
+            file,
+            r#"{{"type":"event_msg","timestamp":"2026-06-05T10:30:02.000Z","payload":{{"type":"ExecCommandBegin","call_id":"call-secret","command":"SECRET_COMMAND"}}}}"#
+        )
+        .expect("write command start");
+        writeln!(
+            file,
+            r#"{{"type":"event_msg","timestamp":"2026-06-05T10:30:03.000Z","payload":{{"type":"ExecCommandEnd","call_id":"call-secret","exit_code":0,"stdout":"SECRET_OUTPUT"}}}}"#
+        )
+        .expect("write command end");
+        writeln!(
+            file,
+            r#"{{"type":"event_msg","timestamp":"2026-06-05T10:30:04.000Z","payload":{{"type":"TokenCount","info":{{"total_token_usage":{{"input_tokens":120,"output_tokens":45,"cached_input_tokens":8,"reasoning_output_tokens":3}}}}}}}}"#
+        )
+        .expect("write tokens");
+        drop(file);
+
+        let mut tool_counts = BTreeMap::new();
+        let mut recent_events = Vec::new();
+        let summary = summarize_codex_rollout(
+            &path,
+            SystemTime::now(),
+            &mut tool_counts,
+            &mut recent_events,
+        );
+        let rendered = serde_json::to_string(&summary).expect("serialize codex summary");
+
+        assert_eq!(summary.provider, "codex");
+        assert_ne!(summary.session_name, "0.118.0");
+        assert_eq!(summary.repository, "private-repo");
+        assert_eq!(summary.branch, "main");
+        assert_eq!(summary.turn_count, 1);
+        assert_eq!(summary.tool_count, 1);
+        assert_eq!(summary.recent_tool_calls.len(), 1);
+        assert_eq!(summary.command_count, 1);
+        assert_eq!(summary.input_tokens, 120);
+        assert_eq!(summary.output_tokens, 45);
+        assert_eq!(
+            tool_counts.get(&("bash".to_string(), "terminal".to_string())),
+            Some(&1)
+        );
+        assert!(recent_events.iter().any(|event| event.provider == "codex"));
+        assert!(!rendered.contains("SECRET"));
+        assert!(!rendered.contains("/Users/dan/private"));
+        assert!(!rendered.contains("token@"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn codex_current_rollout_shape_counts_tasks_and_function_calls() {
+        use std::io::Write;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "rollout-2026-06-06T12-28-24-019e9e68-6d04-7a92-b2eb-8b495eb775a4-{}.jsonl",
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).expect("create current codex rollout");
+        writeln!(
+            file,
+            r#"{{"type":"session_meta","payload":{{"id":"019e9e68-6d04-7a92-b2eb-8b495eb775a4","timestamp":"2026-06-06T12-28-24","cwd":"/Users/dan/private/codex-repo","model_provider":"openai","cli_version":"0.118.0"}}}}"#
+        )
+        .expect("write meta");
+        writeln!(
+            file,
+            r#"{{"type":"event_msg","payload":{{"type":"task_started","turn_id":"turn-1","started_at":1791300000000}}}}"#
+        )
+        .expect("write task start");
+        writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"function_call","name":"shell","call_id":"call_123","arguments":"SECRET_COMMAND"}}}}"#
+        )
+        .expect("write function call");
+        writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"function_call_output","call_id":"call_123","output":"SECRET_OUTPUT"}}}}"#
+        )
+        .expect("write function output");
+        writeln!(
+            file,
+            r#"{{"type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":12,"output_tokens":4}}}}}}}}"#
+        )
+        .expect("write token count");
+        writeln!(
+            file,
+            r#"{{"type":"event_msg","payload":{{"type":"task_complete","turn_id":"turn-1","completed_at":1791300001000,"duration_ms":1000}}}}"#
+        )
+        .expect("write task complete");
+        drop(file);
+
+        let mut tool_counts = BTreeMap::new();
+        let mut recent_events = Vec::new();
+        let summary = summarize_codex_rollout(
+            &path,
+            SystemTime::now(),
+            &mut tool_counts,
+            &mut recent_events,
+        );
+        let rendered = serde_json::to_string(&summary).expect("serialize current codex summary");
+
+        assert_eq!(summary.turn_count, 1);
+        assert_eq!(summary.tool_count, 1);
+        assert_eq!(summary.command_count, 1);
+        assert_eq!(summary.input_tokens, 12);
+        assert_eq!(summary.output_tokens, 4);
+        assert!(recent_events
+            .iter()
+            .any(|event| event.category == "terminal"));
+        assert!(recent_events
+            .iter()
+            .any(|event| event.category == "thinking"));
+        assert!(recent_events
+            .iter()
+            .any(|event| event.kind == "tool.execution_start"));
+        assert!(recent_events
+            .iter()
+            .any(|event| event.kind == "tool.execution_complete"));
+        assert!(recent_events
+            .iter()
+            .any(|event| event.kind == "assistant.turn_start"));
+        let tool_start_timestamps = recent_events
+            .iter()
+            .filter(|event| event.kind == "tool.execution_start")
+            .map(|event| event.timestamp.clone())
+            .collect::<HashSet<_>>();
+        assert_eq!(tool_start_timestamps.len(), 1);
+        assert!(recent_events
+            .iter()
+            .all(|event| event.kind != "function_call"));
+        assert!(recent_events
+            .iter()
+            .all(|event| event.kind != "task_started"));
+        assert!(summary
+            .recent_tool_calls
+            .iter()
+            .all(|call| call.call_id.is_empty() || call.call_id.starts_with("codex-")));
+        assert!(!rendered.contains("call_123"));
+        assert!(!rendered.contains("SECRET"));
+        assert!(!rendered.contains("/Users/dan/private"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn codex_mapping_table_routes_custom_tools_and_web_search_to_ui_categories() {
+        use std::io::Write;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "rollout-2026-06-06T12-40-00-019e9e68-aaaa-bbbb-cccc-444444444444-{}.jsonl",
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).expect("create codex custom rollout");
+        writeln!(
+            file,
+            r#"{{"type":"session_meta","payload":{{"id":"019e9e68-aaaa-bbbb-cccc-444444444444","cwd":"/Users/dan/private/codex-repo","model_provider":"openai"}}}}"#
+        )
+        .expect("write meta");
+        writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"custom_tool_call","name":"exec","call_id":"call_exec","input":"SECRET_COMMAND","status":"completed"}}}}"#
+        )
+        .expect("write custom call");
+        writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"custom_tool_call_output","call_id":"call_exec","output":"SECRET_OUTPUT"}}}}"#
+        )
+        .expect("write custom output");
+        writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"web_search_call","status":"completed","action":{{"query":"SECRET_QUERY"}}}}}}"#
+        )
+        .expect("write web call");
+        writeln!(
+            file,
+            r#"{{"type":"event_msg","payload":{{"type":"web_search_end","call_id":"ws_123","query":"SECRET_QUERY"}}}}"#
+        )
+        .expect("write web end");
+        drop(file);
+
+        let mut tool_counts = BTreeMap::new();
+        let mut recent_events = Vec::new();
+        let summary = summarize_codex_rollout(
+            &path,
+            SystemTime::now(),
+            &mut tool_counts,
+            &mut recent_events,
+        );
+        let rendered = serde_json::to_string(&summary).expect("serialize codex custom summary");
+
+        assert_eq!(summary.tool_count, 2);
+        assert_eq!(summary.recent_tool_calls.len(), 2);
+        assert_eq!(summary.command_count, 1);
+        assert_eq!(summary.web_count, 1);
+        assert!(recent_events
+            .iter()
+            .any(|event| event.kind == "tool.execution_start" && event.category == "terminal"));
+        assert!(recent_events
+            .iter()
+            .any(|event| event.kind == "tool.execution_start" && event.category == "signal"));
+        let tool_start_timestamps = recent_events
+            .iter()
+            .filter(|event| event.kind == "tool.execution_start")
+            .map(|event| event.timestamp.clone())
+            .collect::<HashSet<_>>();
+        assert_eq!(tool_start_timestamps.len(), 2);
+        assert!(!rendered.contains("SECRET"));
+        assert!(!rendered.contains("/Users/dan/private"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn provider_list_contains_codex_mapping_metadata() {
+        let providers = list_agent_providers();
+        let codex = providers
+            .iter()
+            .find(|provider| provider.id == "codex")
+            .expect("codex provider metadata");
+        assert_eq!(codex.display_name, "OpenAI Codex");
+        assert_eq!(codex.short_name, "Codex");
+        assert!(codex.state_roots.iter().any(|root| root.contains(".codex")));
+    }
+
+    #[test]
+    fn claude_transcript_maps_tool_blocks_and_token_semantics() {
+        use std::io::Write;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "7123f3d3-78ff-43e0-91a8-37f8861afb74-{}.jsonl",
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).expect("create claude transcript");
+        writeln!(
+            file,
+            r#"{{"type":"user","timestamp":"2026-06-05T10:30:00.000Z","cwd":"/Users/dan/private/claude-repo","gitBranch":"main","message":{{"role":"user","content":"SECRET_PROMPT"}}}}"#
+        )
+        .expect("write user");
+        writeln!(
+            file,
+            r#"{{"type":"assistant","timestamp":"2026-06-05T10:30:01.000Z","slug":"safe-session","message":{{"model":"claude-opus-4-6","stop_reason":"tool_use","usage":{{"input_tokens":100,"output_tokens":12,"cache_creation_input_tokens":50,"cache_read_input_tokens":10}},"content":[{{"type":"tool_use","id":"toolu_secret","name":"Bash","input":{{"command":"SECRET_COMMAND"}}}}]}}}}"#
+        )
+        .expect("write assistant tool");
+        writeln!(
+            file,
+            r#"{{"type":"user","timestamp":"2026-06-05T10:30:02.000Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_secret","is_error":false,"content":"SECRET_OUTPUT"}}]}}}}"#
+        )
+        .expect("write tool result");
+        writeln!(
+            file,
+            r#"{{"type":"assistant","timestamp":"2026-06-05T10:30:03.000Z","message":{{"model":"claude-opus-4-6","stop_reason":"end_turn","usage":{{"input_tokens":140,"output_tokens":30}},"content":[{{"type":"text","text":"SECRET_RESPONSE"}}]}}}}"#
+        )
+        .expect("write assistant final");
+        drop(file);
+
+        let mut tool_counts = BTreeMap::new();
+        let mut recent_events = Vec::new();
+        let summary = summarize_claude_transcript(
+            &path,
+            SystemTime::now(),
+            &mut tool_counts,
+            &mut recent_events,
+        );
+        let rendered = serde_json::to_string(&summary).expect("serialize claude summary");
+
+        assert_eq!(summary.provider, "claude");
+        assert_eq!(summary.repository, "claude-repo");
+        assert_eq!(summary.branch, "main");
+        assert_eq!(summary.last_model, "claude-opus-4-6");
+        assert_eq!(summary.tool_count, 1);
+        assert_eq!(summary.command_count, 1);
+        assert_eq!(summary.input_tokens, 140);
+        assert_eq!(summary.output_tokens, 42);
+        assert_eq!(
+            tool_counts.get(&("Bash".to_string(), "terminal".to_string())),
+            Some(&1)
+        );
+        assert!(recent_events.iter().any(|event| event.provider == "claude"));
+        assert!(recent_events
+            .iter()
+            .any(|event| event.kind == "tool.execution_start"));
+        assert!(recent_events
+            .iter()
+            .any(|event| event.kind == "tool.execution_complete"));
+        assert!(recent_events
+            .iter()
+            .any(|event| event.kind == "assistant.turn_end"));
+        assert!(recent_events
+            .iter()
+            .all(|event| event.kind != "assistant.tool_use"));
+        assert!(recent_events
+            .iter()
+            .all(|event| event.kind != "user.tool_result"));
+        assert!(recent_events
+            .iter()
+            .all(|event| event.kind != "assistant.end_turn"));
+        assert!(summary
+            .recent_tool_calls
+            .iter()
+            .all(|call| call.call_id.is_empty() || call.call_id.starts_with("claude-")));
+        assert!(!rendered.contains("toolu_secret"));
+        assert!(!rendered.contains("SECRET"));
+        assert!(!rendered.contains("/Users/dan/private"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn bundled_provider_schema_parses_and_validates() {
         let schema = test_schema();
         assert_eq!(schema.provider, "copilot");
@@ -4977,6 +6842,47 @@ mod tests {
             .relevant_files
             .contains(&"events.jsonl".to_string()));
         assert!(schema.workspace.allowed_keys.contains(&"name".to_string()));
+    }
+
+    #[test]
+    fn watcher_relevance_matches_all_provider_session_files() {
+        let copilot_relevant_files = vec!["events.jsonl".to_string(), "workspace.yaml".to_string()];
+
+        assert!(is_relevant_provider_path(
+            Path::new("/tmp/copilot/session/events.jsonl"),
+            WatchedProvider::Copilot,
+            &copilot_relevant_files
+        ));
+        assert!(is_relevant_provider_path(
+            Path::new("/tmp/copilot/session/workspace.yaml"),
+            WatchedProvider::Copilot,
+            &copilot_relevant_files
+        ));
+        assert!(is_relevant_provider_path(
+            Path::new("/tmp/.codex/sessions/2026/06/09/rollout-2026-06-09T10-30-00-session.jsonl"),
+            WatchedProvider::Codex,
+            &copilot_relevant_files
+        ));
+        assert!(is_relevant_provider_path(
+            Path::new("/tmp/.claude/projects/repo/session-123.jsonl"),
+            WatchedProvider::Claude,
+            &copilot_relevant_files
+        ));
+        assert!(!is_relevant_provider_path(
+            Path::new("/tmp/.claude/projects/repo/agent-cache.jsonl"),
+            WatchedProvider::Claude,
+            &copilot_relevant_files
+        ));
+        assert!(!is_relevant_provider_path(
+            Path::new("/tmp/.codex/sessions/2026/06/09/session.jsonl"),
+            WatchedProvider::Codex,
+            &copilot_relevant_files
+        ));
+        assert!(!is_relevant_provider_path(
+            Path::new("/tmp/.codex/sessions/2026/06/09/session.sqlite-journal"),
+            WatchedProvider::Codex,
+            &copilot_relevant_files
+        ));
     }
 
     #[test]
@@ -5265,11 +7171,6 @@ mod tests {
             .any(|event| event.kind == "hook.end" && event.category == "alert" && !event.success));
         assert!(!rendered.contains("SECRET"));
         assert!(!rendered.contains("/Users/dan/private"));
-
-        let raw = raw_tool_call_details_from_events_path(&path, &schema, &hook.event_ref)
-            .expect("raw hook details");
-        assert!(raw.raw_args.unwrap().contains("SECRET_PROMPT"));
-        assert_eq!(raw.raw_output.as_deref(), Some("SECRET_OUTPUT"));
 
         let _ = std::fs::remove_file(&path);
     }
@@ -5845,6 +7746,7 @@ mod tests {
             tool: tool.to_string(),
             category: category.to_string(),
             success,
+            synthetic: false,
             input_tokens: None,
             output_tokens: None,
         }
@@ -6336,129 +8238,6 @@ mod tests {
         assert!(!serialized.contains("SECRET_TASK"));
         assert!(!serialized.contains("SECRET_OUTPUT"));
         assert!(!serialized.contains("/Users/dan/.env"));
-
-        let raw = raw_tool_call_details_from_events_path(
-            &path,
-            &schema,
-            &summary.recent_tool_calls[0].event_ref,
-        )
-        .expect("raw tool details");
-        assert!(raw.raw_args.unwrap().contains("SECRET_PROMPT"));
-        assert_eq!(raw.raw_output.as_deref(), Some("SECRET_OUTPUT"));
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn raw_tool_call_details_truncate_large_values() {
-        use std::io::Write;
-
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "cmc_test_raw_truncate_{}.jsonl",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-
-        let huge_args = "A".repeat(MAX_RAW_DETAIL_VALUE_BYTES + 128);
-        let huge_output = "B".repeat(MAX_RAW_DETAIL_VALUE_BYTES + 128);
-        {
-            let mut f = std::fs::File::create(&path).expect("create temp jsonl");
-            let start = serde_json::json!({
-                "type": "tool.execution_start",
-                "timestamp": "2026-01-01T00:00:03.000Z",
-                "data": {
-                    "toolName": "bash",
-                    "toolCallId": "call-huge",
-                    "arguments": { "payload": huge_args }
-                }
-            });
-            let complete = serde_json::json!({
-                "type": "tool.execution_complete",
-                "timestamp": "2026-01-01T00:00:04.000Z",
-                "data": {
-                    "toolCallId": "call-huge",
-                    "success": true,
-                    "output": huge_output
-                }
-            });
-            writeln!(f, "{}", serde_json::to_string(&start).unwrap()).unwrap();
-            writeln!(f, "{}", serde_json::to_string(&complete).unwrap()).unwrap();
-        }
-
-        let schema = test_schema();
-        let mut summary = AgentSessionSummary::default();
-        let mut tool_counts = BTreeMap::new();
-        let mut recent_events = Vec::new();
-        summarize_events(
-            "test",
-            &path,
-            "test-session",
-            &mut summary,
-            &mut tool_counts,
-            &mut recent_events,
-            &HashSet::new(),
-            &HashSet::new(),
-            &schema,
-            "test",
-        );
-
-        let raw = raw_tool_call_details_from_events_path(
-            &path,
-            &schema,
-            &summary.recent_tool_calls[0].event_ref,
-        )
-        .expect("raw tool details");
-        assert!(raw.raw_args_truncated);
-        assert!(raw.raw_output_truncated);
-        assert_eq!(raw.raw_args.unwrap().len(), MAX_RAW_DETAIL_VALUE_BYTES);
-        assert_eq!(raw.raw_output.unwrap().len(), MAX_RAW_DETAIL_VALUE_BYTES);
-        assert!(!raw.raw_output_scan_limited);
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn raw_tool_call_details_stop_output_scan_after_limit() {
-        use std::io::Write;
-
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "cmc_test_raw_scan_limit_{}.jsonl",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-
-        {
-            let f = std::fs::File::create(&path).expect("create temp jsonl");
-            let mut bw = std::io::BufWriter::new(f);
-            writeln!(
-                bw,
-                r#"{{"type":"tool.execution_start","timestamp":"2026-01-01T00:00:03.000Z","data":{{"toolName":"bash","toolCallId":"call-late","arguments":{{"command":"echo secret"}}}}}}"#
-            )
-            .unwrap();
-            let filler = format!(
-                r#"{{"type":"assistant.message","timestamp":"2026-01-01T00:00:03.500Z","data":{{"content":"{}"}}}}"#,
-                "A".repeat(1024)
-            );
-            for _ in 0..((MAX_RAW_DETAIL_SCAN_BYTES / 1024) + 128) {
-                writeln!(bw, "{}", filler).unwrap();
-            }
-            writeln!(
-                bw,
-                r#"{{"type":"tool.execution_complete","timestamp":"2026-01-01T00:00:04.000Z","data":{{"toolCallId":"call-late","success":true,"output":"SECRET_OUTPUT"}}}}"#
-            )
-            .unwrap();
-        }
-
-        let schema = test_schema();
-        let raw = raw_tool_call_details_from_events_path(&path, &schema, "evt-0")
-            .expect("raw tool details");
-
-        assert!(raw.raw_args.unwrap().contains("echo secret"));
-        assert!(raw.raw_output.is_none());
-        assert!(raw.raw_output_scan_limited);
-        assert!(!raw.raw_output_truncated);
 
         let _ = std::fs::remove_file(&path);
     }

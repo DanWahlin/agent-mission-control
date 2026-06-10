@@ -10,7 +10,7 @@
 </head>
 <body>
   <div id="topbar">
-    <span class="brand">Copilot Mission Control</span>
+    <span class="brand" id="app-brand"><span id="provider-title">Copilot Mission Control</span></span>
     <span id="topbar-controls">
       <span class="topbar-route-group" role="group" aria-label="App views">
         <button id="mission-route-btn" class="topbar-button topbar-route active" type="button" title="Show Home" aria-label="Show Home" aria-current="page">
@@ -35,6 +35,17 @@
         </button>
       </span>
       <button id="panels-btn" class="topbar-button" type="button" title="Hide side panels for focus mode" aria-label="Hide side panels for focus mode"></button>
+      <button id="agent-provider-btn" class="topbar-button" type="button" title="Choose agent provider" aria-label="Choose agent provider">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path class="robot-antenna" d="M12 3v3"></path>
+          <circle class="robot-antenna-dot" cx="12" cy="2.5" r="1.2"></circle>
+          <rect class="robot-head" x="5" y="6.5" width="14" height="12" rx="3"></rect>
+          <path class="robot-ear" d="M3.5 11.5v3M20.5 11.5v3"></path>
+          <circle class="robot-eye" cx="9.2" cy="12" r="1.2"></circle>
+          <circle class="robot-eye" cx="14.8" cy="12" r="1.2"></circle>
+          <path class="robot-mouth" d="M9.2 15.5h5.6"></path>
+        </svg>
+      </button>
       <button id="settings-btn" class="topbar-button" type="button" title="Open settings" aria-label="Open settings">
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M9.41 1.05c-.41-1.4-2.4-1.4-2.81 0l-.1.34a1.46 1.46 0 0 1-2.11.87l-.31-.17c-1.28-.7-2.69.71-1.99 1.99l.17.31a1.46 1.46 0 0 1-.87 2.11l-.34.1c-1.4.41-1.4 2.4 0 2.81l.34.1a1.46 1.46 0 0 1 .87 2.11l-.17.31c-.7 1.28.71 2.69 1.99 1.99l.31-.17a1.46 1.46 0 0 1 2.11.87l.1.34c.41 1.4 2.4 1.4 2.81 0l.1-.34a1.46 1.46 0 0 1 2.11-.87l.31.17c1.28.7 2.69-.71 1.99-1.99l-.17-.31a1.46 1.46 0 0 1 .87-2.11l.34-.1c1.4-.41 1.4-2.4 0-2.81l-.34-.1a1.46 1.46 0 0 1-.87-2.11l.17-.31c.7-1.28-.71-2.69-1.99-1.99l-.31.17a1.46 1.46 0 0 1-2.11-.87l-.1-.34ZM8 10.93a2.93 2.93 0 1 1 0-5.86 2.93 2.93 0 0 1 0 5.86Z"></path>
@@ -90,7 +101,7 @@
         <div id="history-content" aria-live="polite">
           <div class="history-loading-stage" role="status" aria-live="polite">
             <div class="history-loading-dialog">
-              <div class="history-loading-title">Scanning Copilot CLI history</div>
+              <div class="history-loading-title">Scanning selected agent history</div>
               <div class="history-loading-copy">Building local session, event, tool, model, and token summaries.</div>
               <div class="history-loading-bar" aria-hidden="true"><span></span></div>
             </div>
@@ -178,6 +189,24 @@
       </div>
       <div class="cmc-actions">
         <button id="settings-done" class="cmc-button accent" type="button">Done</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="provider-picker-overlay" aria-hidden="true">
+    <div id="provider-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-picker-title" tabindex="-1">
+      <div class="inspector-header">
+        <div>
+          <h2 id="provider-picker-title" class="inspector-title">Choose your agent provider</h2>
+          <div id="provider-picker-subtitle" class="inspector-subtitle">Mission Control will show activity for the provider you select.</div>
+        </div>
+        <button id="provider-picker-close" class="inspector-close" type="button" aria-label="Close provider picker">×</button>
+      </div>
+      <div id="provider-picker-error" class="provider-picker-error" hidden></div>
+      <div id="provider-picker-body" class="provider-picker-grid" role="listbox" aria-label="Agent providers"></div>
+      <div class="cmc-actions">
+        <button id="provider-picker-cancel" class="cmc-button" type="button">Cancel</button>
+        <button id="provider-picker-continue" class="cmc-button accent" type="button" disabled>Continue</button>
       </div>
     </div>
   </section>

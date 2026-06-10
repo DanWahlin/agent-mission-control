@@ -75,6 +75,30 @@ body.theme-light #topbar .brand {
   color: #183153;
   text-shadow: none;
 }
+#agent-provider-btn {
+  color: #b8ffcf;
+}
+#agent-provider-btn .robot-head {
+  fill: rgba(184, 255, 207, 0.18);
+  stroke: currentColor;
+}
+#agent-provider-btn .robot-eye,
+#agent-provider-btn .robot-antenna-dot {
+  fill: currentColor;
+  stroke: currentColor;
+}
+#agent-provider-btn .robot-mouth,
+#agent-provider-btn .robot-ear,
+#agent-provider-btn .robot-antenna {
+  fill: none;
+  stroke: currentColor;
+}
+body.theme-light #agent-provider-btn {
+  color: #166534;
+}
+body.theme-light #agent-provider-btn .robot-head {
+  fill: rgba(22, 101, 52, 0.12);
+}
 #topbar-controls {
   margin-left: auto;
   display: inline-flex;
@@ -336,6 +360,7 @@ body.theme-light #model-chip {
    normal desktop UI. */
 #inspector-overlay,
 #attention-overlay,
+#provider-picker-overlay,
 #settings-overlay {
   position: fixed;
   inset: 40px 0 0 0;
@@ -349,6 +374,8 @@ body.theme-light #model-chip {
 }
 #inspector-overlay.visible { display: flex; }
 #attention-overlay.visible { display: flex; }
+#provider-picker-overlay.visible { display: flex; }
+#provider-picker-overlay { z-index: 36; }
 #settings-overlay { z-index: 34; }
 #settings-overlay.visible { display: flex; }
 #schema-drift-overlay {
@@ -425,6 +452,121 @@ body.theme-light #attention-dialog {
   color: #1f2937;
   border-color: #cbd5e1;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18);
+}
+#provider-picker-dialog {
+  width: min(640px, calc(100vw - 56px));
+  display: grid;
+  gap: 18px;
+  background: #0c1430;
+  color: #e8ecff;
+  border: 2px solid #61d6ff;
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62);
+  padding: 28px;
+  box-sizing: border-box;
+  font-family: var(--cmc-ui-font);
+}
+body.theme-light #provider-picker-dialog {
+  background: #ffffff;
+  color: #1f2937;
+  border-color: #b9c6d8;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18);
+}
+.provider-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+.provider-card {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  min-height: 132px;
+  padding: 18px;
+  text-align: center;
+  border: 2px solid rgba(97, 214, 255, 0.24);
+  border-radius: 12px;
+  background: rgba(21, 35, 68, 0.92);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.provider-card:hover:not(.unavailable),
+.provider-card:focus-visible:not(.unavailable) {
+  border-color: rgba(97, 214, 255, 0.72);
+  background: rgba(30, 58, 95, 0.92);
+  transform: translateY(-1px);
+  outline: none;
+}
+.provider-card.selected {
+  border-color: #3b82f6;
+  background: rgba(30, 58, 95, 0.98);
+  box-shadow: 0 0 0 1px rgba(97, 214, 255, 0.24) inset;
+}
+.provider-card.unavailable {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+body.theme-light .provider-card {
+  background: #f8fafc;
+  border-color: #d6dee9;
+}
+body.theme-light .provider-card.selected {
+  background: #fef9c3;
+  border-color: #ca8a04;
+}
+.provider-card-name {
+  color: #ffffff;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  font-size: 16px;
+}
+body.theme-light .provider-card-name { color: #183153; }
+.provider-card-version,
+.provider-card-reason,
+.provider-card-install {
+  color: rgba(232, 236, 255, 0.72);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.provider-card-version {
+  min-height: 17px;
+  color: rgba(232, 236, 255, 0.56);
+}
+body.theme-light .provider-card-version,
+body.theme-light .provider-card-reason,
+body.theme-light .provider-card-install { color: #64748b; }
+.provider-status {
+  width: fit-content;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
+}
+.provider-status.available {
+  background: rgba(54, 211, 153, 0.16);
+  color: #6ee7b7;
+}
+.provider-status.unavailable {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fca5a5;
+}
+body.theme-light .provider-status.available {
+  background: #dcfce7;
+  color: #166534;
+}
+body.theme-light .provider-status.unavailable {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.provider-picker-error {
+  padding: 10px 12px;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  border-radius: 10px;
+  background: rgba(248, 113, 113, 0.12);
+  color: #fca5a5;
+  font-size: 13px;
 }
 #settings-dialog {
   width: min(520px, calc(100vw - 56px));

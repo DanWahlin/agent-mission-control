@@ -30,7 +30,9 @@ use tauri_plugin_window_state::StateFlags;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use agent::{
-    collect_agent_activity, collect_agent_activity_with_history, AgentActivity, RawToolCallDetails,
+    collect_agent_activity, collect_agent_activity_for_provider,
+    collect_agent_activity_with_history, list_agent_activity_field_mappings, list_agent_providers,
+    AgentActivity, AgentActivityFieldMapping, AgentProviderInfo,
 };
 use analytics::{
     AnalyticsChatRequest, AnalyticsChatResponse, AnalyticsRangeRequest, AnalyticsRecommendation,
@@ -146,6 +148,29 @@ async fn get_agent_activity() -> Result<AgentActivity, String> {
         .map_err(|err| err.to_string())
 }
 
+#[tauri::command]
+async fn get_agent_providers() -> Result<Vec<AgentProviderInfo>, String> {
+    tauri::async_runtime::spawn_blocking(list_agent_providers)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn get_agent_activity_field_mappings() -> Result<Vec<AgentActivityFieldMapping>, String> {
+    tauri::async_runtime::spawn_blocking(list_agent_activity_field_mappings)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn get_agent_activity_for_provider(provider: String) -> Result<AgentActivity, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        collect_agent_activity_for_provider(&provider, false)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
 /// Full activity summary for the History route. This intentionally runs
 /// separately from the mission command so the main dashboard doesn't pay
 /// the aggregation cost while the History screen is unloaded.
@@ -154,6 +179,17 @@ async fn get_agent_activity_with_history() -> Result<AgentActivity, String> {
     tauri::async_runtime::spawn_blocking(collect_agent_activity_with_history)
         .await
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn get_agent_activity_for_provider_with_history(
+    provider: String,
+) -> Result<AgentActivity, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        collect_agent_activity_for_provider(&provider, true)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 /// Backward-compatible alias for `get_agent_activity`. Earlier renderer
@@ -257,6 +293,16 @@ async fn open_copilot_definition(
 }
 
 #[tauri::command]
+async fn open_session_in_editor(
+    provider: Option<String>,
+    session_id: String,
+    scheme: Option<String>,
+) -> Result<(), String> {
+    let path = agent::session_editor_path(provider, session_id)?;
+    open_in_editor(path.to_string_lossy().to_string(), scheme).await
+}
+
+#[tauri::command]
 async fn evaluate_skill_definition(
     definition: String,
     root: Option<String>,
@@ -309,22 +355,6 @@ async fn evaluate_definition(
         skill_evaluator::merge_judge_result(&mut evaluation, judge_result);
     }
     Ok(evaluation)
-}
-
-/// Explicit local-only raw reveal for one inspector row. The normal
-/// activity command remains privacy-safe; this only runs after the user
-/// clicks the Inspector reveal action.
-#[tauri::command]
-async fn get_raw_tool_call_details(
-    provider: Option<String>,
-    session_id: String,
-    event_ref: String,
-) -> Result<RawToolCallDetails, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        agent::get_raw_tool_call_details(provider, session_id, event_ref)
-    })
-    .await
-    .map_err(|err| err.to_string())?
 }
 
 /// Open the given filesystem path in an external editor by shelling out
@@ -479,8 +509,12 @@ pub fn run() {
             get_app_version,
             quit_app,
             hide_app,
+            get_agent_providers,
+            get_agent_activity_field_mappings,
             get_agent_activity,
+            get_agent_activity_for_provider,
             get_agent_activity_with_history,
+            get_agent_activity_for_provider_with_history,
             get_copilot_activity,
             get_analytics_status,
             run_analytics_ingestion_once,
@@ -493,8 +527,8 @@ pub fn run() {
             open_copilot_definition,
             evaluate_skill_definition,
             evaluate_agent_definition,
-            get_raw_tool_call_details,
             install_update,
+            open_session_in_editor,
             open_in_editor,
             open_external_url
         ])

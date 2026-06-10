@@ -1,7 +1,7 @@
 import { buildAttentionItems, providerAttentionAlerts } from './opsSignals.js';
 import type { MissionLayout } from './missionLayout.js';
 import type { SessionPickerOption } from './sessionSelection.js';
-import type { CopilotActivity, CopilotEventSummary, CopilotSessionSummary, MissionCategory, SessionTokenCheckpoint } from './missionTypes.js';
+import type { CopilotActivity, CopilotEventSummary, CopilotSessionSummary, MissionCategory, SessionTokenCheckpoint, SessionToolCall } from './missionTypes.js';
 
 export interface SessionPickerRow {
   id: string;
@@ -86,9 +86,10 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
   ));
   const feedY = layout.topY + layout.sessionH + (compact ? 14 : 22);
   const feedH = Math.max(140, layout.bottomY - feedY - 16);
-  const total = eventLog.length;
-  const cursor = replayCursor;
-  const visibleLog = eventLog.slice(0, cursor);
+  const replayLog = eventLog.length > 0 ? eventLog : [...(activity.recent_events ?? [])].reverse();
+  const total = replayLog.length;
+  const cursor = eventLog.length > 0 ? replayCursor : total;
+  const visibleLog = replayLog.slice(0, cursor);
   const cursorEvent = visibleLog[visibleLog.length - 1];
   const cursorTimeMs = eventTimestampMs(cursorEvent?.timestamp);
   const feedAnchorMs = atLive ? input.nowMs : (cursorTimeMs ?? input.nowMs);
@@ -163,9 +164,9 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
         rows: feed,
         empty: activity.available
           ? total === 0
-            ? 'No recent Copilot events found. Start a Copilot CLI session and this mission control will wake up.'
-            : 'No Copilot events are visible at this replay position.'
-          : 'No Copilot activity source was detected. Install or run Copilot CLI to populate this mission.',
+            ? 'No recent agent events found. Start a session with the selected provider and this mission control will wake up.'
+            : 'No agent events are visible at this replay position.'
+          : 'No selected agent activity source was detected. Install, authenticate, or switch providers to populate this mission.',
       },
       quarter,
       replay: {
@@ -222,13 +223,20 @@ function buildSelectedSessionView(
 
   const selectedEvents = visibleLog.filter(event => eventBelongsToSession(event, selected.id));
   const latestEvent = selectedEvents[selectedEvents.length - 1];
+  const latestCall = latestToolCallAtCursor(selected.recent_tool_calls, cursorTimeMs);
   const tokenEvent = [...selectedEvents]
     .reverse()
     .find(event => event.input_tokens !== undefined || event.output_tokens !== undefined);
   const tokenCheckpoint = latestTokenCheckpoint(selected.token_checkpoints, cursorTimeMs);
-  const inputTokens = tokenCheckpoint?.input_tokens ?? tokenEvent?.input_tokens ?? 0;
-  const outputTokens = tokenCheckpoint?.output_tokens ?? tokenEvent?.output_tokens ?? 0;
-  const replayActivity = latestEvent
+  const inputTokens = tokenCheckpoint?.input_tokens ?? tokenEvent?.input_tokens ?? (latestCall ? selected.input_tokens ?? 0 : 0);
+  const outputTokens = tokenCheckpoint?.output_tokens ?? tokenEvent?.output_tokens ?? (latestCall ? selected.output_tokens ?? 0 : 0);
+  const replayActivity = latestCall
+    ? {
+        last: `${latestCall.tool || 'tool'} ${latestCall.success === false ? 'failed' : latestCall.completed_at ? 'completed' : 'running'}`,
+        tool: latestCall.tool || latestEvent?.tool || 'none',
+        age: replayAgeLabel(latestCall.completed_at || latestCall.timestamp, cursorTimeMs),
+      }
+    : latestEvent
     ? {
         last: replaySessionLastLabel(latestEvent),
         tool: latestEvent.tool || 'none',
@@ -245,11 +253,28 @@ function buildSelectedSessionView(
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     last_tool: replayActivity.tool,
-    last_event_kind: latestEvent?.kind ?? '',
-    last_event_category: latestEvent?.category,
-    last_event_timestamp: latestEvent?.timestamp ?? '',
+    last_event_kind: latestEvent?.kind ?? (latestCall ? 'tool.execution_start' : ''),
+    last_event_category: latestEvent?.category ?? latestCall?.category,
+    last_event_timestamp: latestEvent?.timestamp ?? latestCall?.timestamp ?? '',
     replay_activity: replayActivity,
   };
+}
+
+function latestToolCallAtCursor(calls: SessionToolCall[] | undefined, cursorTimeMs: number | null) {
+  if (!calls?.length || cursorTimeMs === null) return null;
+  let latest: SessionToolCall | null = null;
+  let latestMs = -1;
+  for (const call of calls) {
+    const startMs = eventTimestampMs(call.timestamp);
+    const completeMs = eventTimestampMs(call.completed_at);
+    const callMs = completeMs !== null && completeMs <= cursorTimeMs ? completeMs : startMs;
+    if (callMs === null || callMs > cursorTimeMs) continue;
+    if (callMs >= latestMs) {
+      latest = call;
+      latestMs = callMs;
+    }
+  }
+  return latest;
 }
 
 function replayStatusText(total: number, cursor: number, atLive: boolean, paused: boolean, cursorLabel: string) {
@@ -299,14 +324,21 @@ function feedLabel(event: CopilotEventSummary) {
   if (event.kind === 'tool.execution_complete') return event.success ? 'tool completed' : 'tool failed';
   if (event.kind === 'hook.start') return `${event.tool || 'hook'} hook started`;
   if (event.kind === 'hook.end') return event.success ? `${event.tool || 'hook'} hook completed` : `${event.tool || 'hook'} hook failed`;
-  if (event.kind === 'assistant.turn_start') return 'Copilot started thinking';
-  if (event.kind === 'assistant.turn_end') return 'Copilot is waiting';
+  if (event.kind === 'assistant.turn_start') return `${providerDisplayName(event.provider)} started thinking`;
+  if (event.kind === 'assistant.turn_end') return `${providerDisplayName(event.provider)} is waiting`;
   if (event.kind === 'assistant.message') return 'token update';
   if (event.kind === 'session.compaction_complete') return 'compaction token checkpoint';
   if (event.kind === 'session.shutdown') return 'session token checkpoint';
   if (event.kind === 'user.message') return 'prompt received';
   if (event.kind === 'session.start') return 'session opened';
   return event.kind;
+}
+
+function providerDisplayName(provider?: string) {
+  if (provider === 'codex') return 'Codex';
+  if (provider === 'claude') return 'Claude';
+  if (provider === 'copilot') return 'Copilot';
+  return 'Agent';
 }
 
 function replaySessionLastLabel(event: CopilotEventSummary) {

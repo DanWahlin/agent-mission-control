@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0.0",
+  "provider": "claude",
+  "field_mappings": [
+    {
+      "normalized_field": "AgentSessionSummary.id",
+      "ui_surfaces": ["session picker", "selected session", "recent activity", "replay"],
+      "normalized_meaning": "Stable privacy-safe session/thread identifier shown as a short id.",
+      "source": "transcript filename or sessionId",
+      "differences": "Claude transcripts are project-organized under encoded cwd directories."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.repository",
+      "ui_surfaces": ["selected session", "history", "session picker"],
+      "normalized_meaning": "Sanitized repo/workspace display name, never a raw path.",
+      "source": "cwd basename or encoded project directory basename",
+      "differences": "Claude may not include branch/repo metadata in each transcript."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.turn_count",
+      "ui_surfaces": ["selected session", "activity rate", "history"],
+      "normalized_meaning": "Model/task round trips observed for a session.",
+      "source": "assistant end_turn and non-tool user messages",
+      "differences": "Claude turns are inferred from transcript records."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.tool_count and category counts",
+      "ui_surfaces": ["Phaser sectors", "selected session", "sector inspector", "history"],
+      "normalized_meaning": "Privacy-safe count of tool launches grouped into Mission Control categories.",
+      "source": "assistant message.content[] tool_use blocks",
+      "differences": "Claude tool starts are embedded blocks, not top-level events."
+    },
+    {
+      "normalized_field": "AgentEventSummary.kind",
+      "ui_surfaces": ["Phaser pulses", "recent activity feed", "replay", "activity rate"],
+      "normalized_meaning": "Provider-normalized event kind consumed by Mission Control UI.",
+      "source": "record_mappings[].normalized_kind below and tool_use/tool_result block mapping",
+      "differences": "Claude must synthesize normalized tool events from message content blocks."
+    },
+    {
+      "normalized_field": "AgentSessionSummary.input_tokens/output_tokens",
+      "ui_surfaces": ["selected session", "replay token display", "history"],
+      "normalized_meaning": "Cumulative privacy-safe token counters.",
+      "source": "assistant message.usage; input max/latest, output additive",
+      "differences": "Claude input must not be summed; output should be summed."
+    }
+  ],
+  "record_mappings": [
+    { "raw_key": "assistant", "effect": "assistant_message", "normalized_kind": "assistant.message", "default_tool": "assistant", "default_category": "activity" },
+    { "raw_key": "user", "effect": "user_message", "normalized_kind": "user.message", "default_tool": "prompt", "default_category": "prompt" },
+    { "raw_key": "custom-title", "effect": "ignore", "normalized_kind": "session.title", "default_tool": "title", "default_category": "activity" }
+  ],
+  "tool_category_mappings": [
+    { "raw_names": ["edit", "write", "multiedit", "notebookedit"], "normalized_category": "forge" },
+    { "raw_names": ["read", "glob", "grep", "ls", "notebookread"], "normalized_category": "library" },
+    { "raw_names": ["bash", "shell"], "normalized_category": "terminal" },
+    { "raw_names": ["webfetch", "websearch"], "normalized_category": "signal" },
+    { "raw_names": ["task", "agent"], "normalized_category": "delegates" },
+    { "contains": ["todo"], "normalized_category": "court" },
+    { "prefix": ["mcp__"], "normalized_category": "mcp" }
+  ]
+}

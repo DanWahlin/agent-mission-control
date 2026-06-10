@@ -6,18 +6,32 @@ export interface CopilotToolMetric {
   count: number;
 }
 
+export interface AgentProviderInfo {
+  id: string;
+  display_name: string;
+  short_name: string;
+  available: boolean;
+  version?: string;
+  reason?: string;
+  install_hint?: string;
+  state_roots?: string[];
+}
+
 export interface CopilotEventSummary {
+  provider?: string;
   session_id: string;
   timestamp: string;
   kind: string;
   tool: string;
   category: MissionCategory | string;
   success: boolean;
+  synthetic?: boolean;
   input_tokens?: number;
   output_tokens?: number;
 }
 
 export interface CopilotSessionSummary {
+  provider?: string;
   id: string;
   title: string;
   session_name?: string;

@@ -1,5 +1,45 @@
 import { test, expect } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { GAME_URL, waitForGame } from './helpers';
+
+const PROVIDERS = [
+  { id: 'copilot', display_name: 'GitHub Copilot CLI', short_name: 'Copilot', available: true },
+  { id: 'codex', display_name: 'OpenAI Codex', short_name: 'Codex', available: true },
+  { id: 'claude', display_name: 'Claude Code', short_name: 'Claude', available: false, reason: 'Claude Code CLI not found', install_hint: 'Install Claude Code and authenticate' },
+];
+
+async function mockProviders(page: Page, selectedProvider = '', providerList = PROVIDERS) {
+  await page.addInitScript(({ providers, selected }) => {
+    localStorage.removeItem('cmc_agent_provider');
+    if (selected) localStorage.setItem('cmc_agent_provider', selected);
+    (window as any).__TAURI_INTERNALS__ = {
+      invoke: async (command: string, payload?: { provider?: string }) => {
+        if (command === 'get_agent_providers') return providers;
+        if (command === 'get_agent_activity_for_provider' || command === 'get_agent_activity_for_provider_with_history') {
+          const provider = payload?.provider || selected || 'copilot';
+          return {
+            available: false,
+            source: `${provider}-fixture`,
+            scanned_sessions: 0,
+            active_sessions: 0,
+            total_events: 0,
+            total_tool_calls: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            sessions: [],
+            tools: [],
+            recent_events: [
+              { provider: 'codex', session_id: 'codex001', timestamp: '2026-06-06T20:00:05.000Z', kind: 'assistant.turn_end', tool: 'waiting', category: 'waiting', success: true },
+            ],
+            alerts: [],
+            generated_at_ms: Date.now(),
+          };
+        }
+        return null;
+      },
+    };
+  }, { providers: providerList, selected: selectedProvider });
+}
 
 test.describe('Copilot Mission Control app shell', () => {
   test.beforeEach(async ({ page }) => {
@@ -30,6 +70,7 @@ test.describe('Copilot Mission Control app shell', () => {
         routeBoxShadow: missionRouteStyle.boxShadow,
       };
     });
+
     expect(topbarIconStyles.routeGroupBorderWidth).toBe('0px');
     expect(topbarIconStyles.routeBorderColor).toBe('rgba(0, 0, 0, 0)');
     expect(topbarIconStyles.routeBackgroundImage).not.toBe('none');
@@ -510,6 +551,140 @@ test.describe('Copilot Mission Control app shell', () => {
     });
     expect(dims.w).toBeGreaterThan(800);
     expect(dims.h).toBeGreaterThan(500);
+  });
+});
+
+test.describe('Agent provider selection', () => {
+  test('first run shows provider picker and persists selected provider', async ({ page }) => {
+    await mockProviders(page);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await expect(page.locator('#provider-picker-overlay.visible')).toBeVisible();
+    await expect(page.locator('[data-provider-id="codex"]')).toContainText('OpenAI Codex');
+    await expect(page.locator('[data-provider-id="claude"]')).toBeDisabled();
+
+    await page.locator('[data-provider-id="codex"]').click();
+    await page.locator('#provider-picker-continue').click();
+
+    await expect(page.locator('#provider-picker-overlay')).not.toHaveClass(/visible/);
+    await expect(page.locator('#topbar .brand')).toContainText('Codex Mission Control');
+    await expect(page.locator('#agent-provider-btn')).toHaveAttribute('aria-label', /Codex/);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('cmc_agent_provider'))).toBe('codex');
+    await expect.poll(() => page.title()).toBe('Codex Mission Control');
+  });
+
+  test('persisted provider restores without showing picker', async ({ page }) => {
+    await mockProviders(page, 'codex');
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await expect(page.locator('#provider-picker-overlay')).not.toHaveClass(/visible/);
+    await expect(page.locator('#topbar .brand')).toContainText('Codex Mission Control');
+    await expect(page.locator('#agent-provider-btn')).toHaveAttribute('aria-label', /Codex/);
+
+    await page.locator('#agent-provider-btn').click();
+    await expect(page.locator('#provider-picker-overlay.visible')).toBeVisible();
+  });
+
+  test('all unavailable providers leave picker dismissible', async ({ page }) => {
+    const unavailableProviders = PROVIDERS.map((provider) => ({
+      ...provider,
+      available: false,
+      reason: provider.reason || `${provider.display_name} is not installed`,
+    }));
+    await mockProviders(page, '', unavailableProviders);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await expect(page.locator('#provider-picker-overlay.visible')).toBeVisible();
+    await expect(page.locator('#provider-picker-continue')).toBeDisabled();
+    await expect(page.locator('#provider-picker-error')).toContainText(
+      'No installed agent providers were detected.',
+    );
+    await expect.poll(() => page.evaluate(() => {
+      const api = window as any;
+      return api.__cmcIsProviderSelectionReady?.();
+    })).toBe(true);
+
+    await page.locator('#provider-picker-cancel').click();
+    await expect(page.locator('#provider-picker-overlay')).not.toHaveClass(/visible/);
+  });
+});
+
+test.describe('Normalized activity mapping', () => {
+  test('backfills recent feed and replay from normalized session tool calls', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('cmc_agent_provider', 'codex');
+      localStorage.removeItem('cmc_prefs');
+      (window as any).__missionControlFixture = {
+        available: true,
+        source: 'mapping-fixture',
+        scanned_sessions: 1,
+        active_sessions: 0,
+        total_events: 0,
+        total_tool_calls: 2,
+        total_input_tokens: 12,
+        total_output_tokens: 4,
+        sessions: [{
+          provider: 'codex',
+          id: 'codex001',
+          title: 'Codex mapping fixture',
+          repository: 'mapping-repo',
+          branch: 'main',
+          updated_at: '2026-06-06T20:00:03.000Z',
+          is_active: false,
+          status: 'idle',
+          event_count: 2,
+          tool_count: 2,
+          write_count: 0,
+          read_count: 0,
+          command_count: 1,
+          web_count: 1,
+          task_count: 0,
+          delegates_count: 0,
+          skills_count: 0,
+          court_count: 0,
+          mcp_count: 0,
+          hooks_count: 0,
+          error_count: 0,
+          turn_count: 1,
+          input_tokens: 12,
+          output_tokens: 4,
+          last_tool: 'web_search',
+          last_event_kind: 'tool.execution_start',
+          last_event_category: 'signal',
+          last_event_timestamp: '2026-06-06T20:00:03.000Z',
+          stale_seconds: 600,
+          recent_tool_calls: [
+            { tool: 'exec', category: 'terminal', timestamp: '2026-06-06T20:00:01.000Z', success: true, completed_at: '2026-06-06T20:00:02.000Z', call_id: 'call_exec', event_ref: 'codex-callexec', details: [] },
+            { tool: 'web_search', category: 'signal', timestamp: '2026-06-06T20:00:03.000Z', success: true, completed_at: '2026-06-06T20:00:04.000Z', call_id: 'call_web', event_ref: 'codex-callweb', details: [] },
+          ],
+          recent_turns: [],
+          token_checkpoints: [],
+        }],
+        tools: [],
+        recent_events: [
+          { provider: 'codex', session_id: 'codex001', timestamp: '2026-06-06T20:00:05.000Z', kind: 'assistant.turn_end', tool: 'waiting', category: 'waiting', success: true },
+        ],
+        alerts: [],
+        generated_at_ms: Date.parse('2026-06-06T20:00:05.000Z'),
+      };
+    });
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await expect.poll(async () => page.locator('#dom-feed .cmc-feed-row').count()).toBeGreaterThan(0);
+    await expect(page.locator('#dom-feed')).toContainText(/exec|web_search/);
+    await expect(page.locator('#dom-feed')).toContainText('Codex is waiting');
+    await expect(page.locator('#dom-feed')).not.toContainText('Copilot is waiting');
+    await expect.poll(async () => Number(await page.locator('[data-cmc-action="replay-seek"]').getAttribute('aria-valuemax'))).toBeGreaterThan(0);
+    await page.locator('[data-cmc-action="replay-toggle"]').click();
+    await expect(page.locator('[data-cmc-action="replay-toggle"]')).toHaveAttribute('aria-label', /Resume|Pause/);
+    await page.evaluate(() => (window as any).__cmcSeekReplayRatio?.(0.5));
+    await expect.poll(async () => page.locator('#dom-session').textContent()).toMatch(/Tool:\s*(exec|web_search)/);
+    await expect(page.locator('#dom-session')).not.toContainText('Age: not reached');
+    await expect(page.locator('#dom-session')).not.toContainText('Tokens in/out: 0 / 0');
   });
 });
 
