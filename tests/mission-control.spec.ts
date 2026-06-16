@@ -39,7 +39,7 @@ const MISSION_FIXTURE = {
   total_input_tokens: 3300,
   total_output_tokens: 8120,
   sessions: [
-    { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 3, delegates_count: 1, skills_count: 2, court_count: 4, mcp_count: 1, hooks_count: 3, error_count: 0, input_tokens: 1600, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 12, recent_tool_calls: [
+    { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 3, delegates_count: 1, skills_count: 2, court_count: 4, mcp_count: 1, hooks_count: 3, error_count: 0, input_tokens: 1600, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'edits', stale_seconds: 12, recent_tool_calls: [
       agentStart('2026-05-21T07:18:00Z', 'alpha-agent-1'),
     ], token_checkpoints: [
       { timestamp: '2026-05-21T07:11:00Z', input_tokens: 100, output_tokens: 200 },
@@ -59,14 +59,14 @@ const MISSION_FIXTURE = {
   ],
   tools: [
     { name: 'view', category: 'library', count: 14 },
-    { name: 'apply_patch', category: 'forge', count: 8 },
+    { name: 'apply_patch', category: 'edits', count: 8 },
     { name: 'bash', category: 'terminal', count: 7 },
     { name: 'rg', category: 'library', count: 5 },
     { name: 'task', category: 'delegates', count: 3 },
     { name: 'web_fetch', category: 'signal', count: 4 },
   ],
   recent_events: [
-    { session_id: 'alpha123', timestamp: '2026-05-21T07:15:00Z', kind: 'tool.execution_start', tool: 'apply_patch', category: 'forge', success: true },
+    { session_id: 'alpha123', timestamp: '2026-05-21T07:15:00Z', kind: 'tool.execution_start', tool: 'apply_patch', category: 'edits', success: true },
     { session_id: 'beta4567', timestamp: '2026-05-21T07:14:00Z', kind: 'tool.execution_complete', tool: 'tool complete', category: 'alert', success: false },
     { session_id: 'alpha123', timestamp: '2026-05-21T07:13:00Z', kind: 'tool.execution_start', tool: 'view', category: 'library', success: true },
     { session_id: 'gamma890', timestamp: '2026-05-21T07:12:00Z', kind: 'tool.execution_start', tool: 'web_fetch', category: 'signal', success: true },
@@ -96,7 +96,7 @@ const MISSION_FIXTURE = {
     ],
     category_mix: [
       { name: 'library', count: 18, percent: 39.1 },
-      { name: 'forge', count: 10, percent: 21.7 },
+      { name: 'edits', count: 10, percent: 21.7 },
       { name: 'hooks', count: 5, percent: 10.9 },
       { name: 'alert', count: 2, percent: 4.3 },
     ],
@@ -141,7 +141,7 @@ const MISSION_FIXTURE = {
         model_mix: [{ name: 'gpt-5.5', count: 4, percent: 100 }],
         category_mix: [
           { name: 'library', count: 9, percent: 45 },
-          { name: 'forge', count: 7, percent: 35 },
+          { name: 'edits', count: 7, percent: 35 },
         ],
         top_tools: [
           { name: 'view', count: 9, percent: 56.3 },
@@ -666,7 +666,7 @@ test.describe('Agent Mission Control — Startup', () => {
     expect(state!.opsRecommendation).toContain('Reading source');
     expect(state!.selectedSessionId).toBe('beta4567');
     expect(state!.quarterCounts).toEqual({
-      forge: 2,
+      edits: 2,
       library: 7,
       terminal: 6,
       signal: 0,
@@ -1684,14 +1684,14 @@ test.describe('Agent Mission Control — Dashboard', () => {
         reset: state!.activityResetAtMs !== null,
         tokens: [state!.selectedInputTokens, state!.selectedOutputTokens],
         total: state!.replayState.total,
-        forge: state!.quarterCounts.forge,
+        edits: state!.quarterCounts.edits,
         library: state!.quarterCounts.library,
       };
     }).toEqual({
       reset: true,
       tokens: [0, 0],
       total: 0,
-      forge: 0,
+      edits: 0,
       library: 0,
     });
     await expect(page.locator('#dom-session .cmc-ops-tempo')).toContainText('idle');
@@ -1706,14 +1706,14 @@ test.describe('Agent Mission Control — Dashboard', () => {
       beta.output_tokens = 3220;
       beta.recent_tool_calls = [
         { tool: 'view', category: 'library', timestamp: oldTimestamp, success: true, call_id: 'old-view' },
-        { tool: 'apply_patch', category: 'forge', timestamp: newTimestamp, success: true, call_id: 'new-patch' },
+        { tool: 'apply_patch', category: 'edits', timestamp: newTimestamp, success: true, call_id: 'new-patch' },
       ];
       beta.token_checkpoints = [
         { timestamp: oldTimestamp, input_tokens: 1300, output_tokens: 3000 },
         { timestamp: newTimestamp, input_tokens: 1450, output_tokens: 3220 },
       ];
       fixture.recent_events = [
-        { session_id: 'beta4567', timestamp: newTimestamp, kind: 'tool.execution_start', tool: 'apply_patch', category: 'forge', success: true },
+        { session_id: 'beta4567', timestamp: newTimestamp, kind: 'tool.execution_start', tool: 'apply_patch', category: 'edits', success: true },
         { session_id: 'beta4567', timestamp: oldTimestamp, kind: 'tool.execution_start', tool: 'view', category: 'library', success: true },
         ...fixture.recent_events,
       ];
@@ -1725,13 +1725,13 @@ test.describe('Agent Mission Control — Dashboard', () => {
       return {
         tokens: [state!.selectedInputTokens, state!.selectedOutputTokens],
         total: state!.replayState.total,
-        forge: state!.quarterCounts.forge,
+        edits: state!.quarterCounts.edits,
         library: state!.quarterCounts.library,
       };
     }).toEqual({
       tokens: [250, 300],
       total: 1,
-      forge: 1,
+      edits: 1,
       library: 0,
     });
     await expect(page.locator('#dom-session .cmc-ops-tempo')).toContainText('1 activity/hr');
@@ -2092,7 +2092,7 @@ test.describe('Agent Mission Control — Dashboard', () => {
     const after = await getMissionState(page);
     expect(after!.selectedSessionId).toBe('alpha123');
     expect(after!.quarterCounts).toMatchObject({
-      forge: 8,
+      edits: 8,
       library: 9,
       terminal: 4,
       signal: 1,

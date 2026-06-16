@@ -35,7 +35,7 @@ const fixture = {
       event_count: 920, tool_count: 312, write_count: 71, read_count: 169,
       command_count: 197, web_count: 12, task_count: 3, error_count: 0,
       output_tokens: 138000, last_tool: 'apply_patch',
-      last_event_kind: 'tool.execution_start', last_event_category: 'forge',
+      last_event_kind: 'tool.execution_start', last_event_category: 'edits',
       stale_seconds: 4,
     },
     {
@@ -59,7 +59,7 @@ const fixture = {
   ],
   tools: [
     { name: 'view', category: 'library', count: 134 },
-    { name: 'apply_patch', category: 'forge', count: 71 },
+    { name: 'apply_patch', category: 'edits', count: 71 },
     { name: 'bash', category: 'terminal', count: 197 },
     { name: 'rg', category: 'library', count: 35 },
     { name: 'task', category: 'delegates', count: 3 },
@@ -67,7 +67,7 @@ const fixture = {
     { name: 'mcp.workiq', category: 'mcp', count: 1 },
   ],
   recent_events: [
-    { session_id: 'alpha123', timestamp: '2026-05-22T17:00:00Z', kind: 'tool.execution_start', tool: 'apply_patch', category: 'forge', success: true },
+    { session_id: 'alpha123', timestamp: '2026-05-22T17:00:00Z', kind: 'tool.execution_start', tool: 'apply_patch', category: 'edits', success: true },
     { session_id: 'alpha123', timestamp: '2026-05-22T16:59:00Z', kind: 'tool.execution_complete', tool: 'view', category: 'library', success: true },
     { session_id: 'alpha123', timestamp: '2026-05-22T16:58:00Z', kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
     { session_id: 'beta4567', timestamp: '2026-05-22T16:55:00Z', kind: 'tool.execution_start', tool: 'rg', category: 'library', success: true },
@@ -84,17 +84,17 @@ const fixture = {
 // actually looks like during a busy session.
 const SCRIPT = [
   { delayMs: 250,  session: 'alpha123', tool: 'view',        category: 'library'   },
-  { delayMs: 600,  session: 'alpha123', tool: 'apply_patch', category: 'forge'     },
+  { delayMs: 600,  session: 'alpha123', tool: 'apply_patch', category: 'edits'     },
   { delayMs: 950,  session: 'alpha123', tool: 'bash',        category: 'terminal'  },
   { delayMs: 1350, session: 'beta4567', tool: 'rg',          category: 'library'   },
   { delayMs: 1750, session: 'alpha123', tool: 'view',        category: 'library'   },
-  { delayMs: 2100, session: 'alpha123', tool: 'apply_patch', category: 'forge'     },
+  { delayMs: 2100, session: 'alpha123', tool: 'apply_patch', category: 'edits'     },
   { delayMs: 2500, session: 'gamma890', tool: 'web_fetch',   category: 'signal'    },
   { delayMs: 2900, session: 'alpha123', tool: 'bash',        category: 'terminal'  },
   { delayMs: 3300, session: 'alpha123', tool: 'task',        category: 'delegates' },
   { delayMs: 3650, session: 'alpha123', tool: 'view',        category: 'library'   },
   { delayMs: 4000, session: 'beta4567', tool: 'mcp.workiq',  category: 'mcp'       },
-  { delayMs: 4350, session: 'alpha123', tool: 'apply_patch', category: 'forge'     },
+  { delayMs: 4350, session: 'alpha123', tool: 'apply_patch', category: 'edits'     },
   { delayMs: 4700, session: 'alpha123', tool: 'bash',        category: 'terminal'  },
 ];
 
@@ -189,13 +189,13 @@ async function recordSession({ panelsHidden, outGif, outFirstFrame }) {
       s.recent_tool_calls = [];
     }
     const seed = [
-      ['alpha123', 'apply_patch', 'forge',     22],
+      ['alpha123', 'apply_patch', 'edits',     22],
       ['alpha123', 'view',        'library',   58],
       ['alpha123', 'bash',        'terminal',  41],
       ['alpha123', 'rg',          'library',   12],
       ['alpha123', 'task',        'delegates',  3],
       ['beta4567', 'view',        'library',   18],
-      ['beta4567', 'apply_patch', 'forge',      6],
+      ['beta4567', 'apply_patch', 'edits',      6],
       ['gamma890', 'web_fetch',   'signal',    11],
       ['gamma890', 'view',        'library',    4],
       ['alpha123', 'mcp.workiq',  'mcp',        1],
@@ -230,7 +230,7 @@ async function recordSession({ panelsHidden, outGif, outFirstFrame }) {
       if (session) {
         session.event_count = (session.event_count || 0) + 1;
         session.tool_count = (session.tool_count || 0) + 1;
-        if (step.category === 'forge') session.write_count = (session.write_count || 0) + 1;
+        if (step.category === 'edits') session.write_count = (session.write_count || 0) + 1;
         if (step.category === 'library') session.read_count = (session.read_count || 0) + 1;
         if (step.category === 'terminal') session.command_count = (session.command_count || 0) + 1;
         if (step.category === 'signal') session.web_count = (session.web_count || 0) + 1;

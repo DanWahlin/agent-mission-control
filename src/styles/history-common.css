@@ -566,7 +566,7 @@ body.theme-light .history-chart-axis span {
 .history-fill-palette-5 { fill: var(--history-palette-5); }
 .history-fill-palette-6 { fill: var(--history-palette-6); }
 .history-fill-palette-7 { fill: var(--history-palette-7); }
-.history-fill-category-forge { fill: #f0911d; }
+.history-fill-category-edits { fill: #f0911d; }
 .history-fill-category-library { fill: #e1ae45; }
 .history-fill-category-terminal { fill: #86d4b7; }
 .history-fill-category-signal { fill: #c37ee8; }

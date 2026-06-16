@@ -709,8 +709,8 @@ code {
 .game-card:hover .game-card-glow { opacity: 1; }
 
 /* Per-sector accent colors mirror the in-app sector colors. */
-.forge    .game-card-glow { background: radial-gradient(ellipse at 30% 20%, rgba(255,143,80,0.10), transparent 70%); }
-.forge:hover    { box-shadow: 0 0 40px rgba(255,143,80,0.12), 0 20px 50px rgba(0,0,0,0.4); }
+.edits    .game-card-glow { background: radial-gradient(ellipse at 30% 20%, rgba(255,143,80,0.10), transparent 70%); }
+.edits:hover    { box-shadow: 0 0 40px rgba(255,143,80,0.12), 0 20px 50px rgba(0,0,0,0.4); }
 
 .library  .game-card-glow { background: radial-gradient(ellipse at 30% 20%, rgba(120,196,255,0.10), transparent 70%); }
 .library:hover  { box-shadow: 0 0 40px rgba(120,196,255,0.12), 0 20px 50px rgba(0,0,0,0.4); }

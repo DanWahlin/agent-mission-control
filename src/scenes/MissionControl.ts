@@ -106,7 +106,7 @@ const MEDIEVAL_ATLAS_ROOT = 'assets/medieval';
 
 type ThemeMode = 'dark' | 'light';
 type AppTheme = 'space' | 'medieval';
-type SectorTextureMap = Record<'forge' | 'library' | 'terminal' | 'signal' | 'hooks' | 'delegates' | 'skills' | 'court' | 'mcp', string>;
+type SectorTextureMap = Record<'edits' | 'library' | 'terminal' | 'signal' | 'hooks' | 'delegates' | 'skills' | 'court' | 'mcp', string>;
 
 interface MissionTheme {
   mode: ThemeMode;
@@ -189,7 +189,7 @@ const SPACE_ART_SET: MissionArtSet = {
   centerMaxW: 220,
   centerMaxH: 190,
   quarterTextures: {
-    forge: 'dome_glass_blue',
+    edits: 'dome_glass_blue',
     library: 'outpost_disc',
     terminal: 'console_wide_teal',
     signal: 'telescope_blue',
@@ -215,7 +215,7 @@ const MEDIEVAL_ART_SET: MissionArtSet = {
   centerMaxW: 220,
   centerMaxH: 212,
   quarterTextures: {
-    forge: 'timber_house_large',
+    edits: 'timber_house_large',
     library: 'spellbook',
     terminal: 'blue_mage',
     signal: 'mountain_portal',
@@ -251,7 +251,7 @@ const FOCUS_RING_UP_LIFT_PX = 16;
 /// tweaked. The 'alert' entry is shared with the attention/error pulse
 /// path and is intentionally not a quarter.
 const QUARTER_COLORS: Record<MissionCategory, number> = {
-  forge: 0xf0911d,
+  edits: 0xf0911d,
   library: 0xe1ae45,
   terminal: 0x86d4b7,
   signal: 0x5b8cff,
@@ -1018,7 +1018,7 @@ export class MissionControlScene extends Phaser.Scene {
       ...session,
       event_count: recentToolCalls.length,
       tool_count: recentToolCalls.length,
-      write_count: categoryCounts.forge,
+      write_count: categoryCounts.edits,
       read_count: categoryCounts.library,
       command_count: categoryCounts.terminal,
       web_count: categoryCounts.signal,
@@ -1168,7 +1168,7 @@ export class MissionControlScene extends Phaser.Scene {
     const layout = this.layout ?? this.computeLayout();
     const { centerX, centerY, radiusX, radiusY, topLift, s } = layout;
     const specs: Omit<Quarter, 'x' | 'y' | 'count' | 'color'>[] = [
-      { key: 'forge', label: 'Forge', short: 'Edits' },
+      { key: 'edits', label: 'Edits', short: 'Edits' },
       { key: 'library', label: 'Library', short: 'Reads' },
       { key: 'terminal', label: 'Terminal Keep', short: 'Commands' },
       { key: 'signal', label: 'Signal Tower', short: 'Web/Docs' },
@@ -1205,7 +1205,7 @@ export class MissionControlScene extends Phaser.Scene {
   private selectedSessionCategoryCounts(): Map<string, number> {
     const session = this.selectedSession;
     return new Map<string, number>([
-      ['forge', session?.write_count ?? 0],
+      ['edits', session?.write_count ?? 0],
       ['library', session?.read_count ?? 0],
       ['terminal', session?.command_count ?? 0],
       ['signal', session?.web_count ?? 0],
@@ -2183,7 +2183,7 @@ export class MissionControlScene extends Phaser.Scene {
       : session.error_count > 0
       ? 'terminal'
       : session.write_count >= session.read_count && session.write_count > 0
-        ? 'forge'
+        ? 'edits'
         : session.command_count > 0
           ? 'terminal'
           : session.web_count > 0
@@ -2233,14 +2233,14 @@ function createDemoActivity(): CopilotActivity {
     total_tool_calls: 140,
     total_output_tokens: 24380,
     sessions: [
-      { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 128, tool_count: 55, write_count: 16, read_count: 22, command_count: 10, web_count: 3, task_count: 4, delegates_count: 4, skills_count: 0, court_count: 4, mcp_count: 0, hooks_count: 2, error_count: 0, output_tokens: 9800, last_tool: 'apply_patch', last_event_category: 'forge' },
+      { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 128, tool_count: 55, write_count: 16, read_count: 22, command_count: 10, web_count: 3, task_count: 4, delegates_count: 4, skills_count: 0, court_count: 4, mcp_count: 0, hooks_count: 2, error_count: 0, output_tokens: 9800, last_tool: 'apply_patch', last_event_category: 'edits' },
       { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 96, tool_count: 42, write_count: 5, read_count: 14, command_count: 18, web_count: 0, task_count: 5, delegates_count: 3, skills_count: 2, court_count: 1, mcp_count: 0, hooks_count: 1, error_count: 2, output_tokens: 6120, last_tool: 'bash', last_event_category: 'alert' },
       { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '', is_active: true, status: 'thinking', event_count: 74, tool_count: 28, write_count: 1, read_count: 11, command_count: 1, web_count: 13, task_count: 2, delegates_count: 2, skills_count: 0, court_count: 0, mcp_count: 0, hooks_count: 3, error_count: 0, output_tokens: 5450, last_tool: 'web_fetch', last_event_category: 'signal' },
       { id: 'delta321', title: 'Plan Refactor', repository: 'copilot-mission-control', branch: 'feature/mission', updated_at: '', is_active: false, status: 'idle', event_count: 62, tool_count: 15, write_count: 2, read_count: 8, command_count: 1, web_count: 1, task_count: 3, delegates_count: 3, skills_count: 0, court_count: 0, mcp_count: 0, hooks_count: 0, error_count: 0, output_tokens: 3010, last_tool: 'task', last_event_category: 'delegates' },
     ],
     tools: [
       { name: 'view', category: 'library', count: 33 },
-      { name: 'apply_patch', category: 'forge', count: 14 },
+      { name: 'apply_patch', category: 'edits', count: 14 },
       { name: 'bash', category: 'terminal', count: 44 },
       { name: 'rg', category: 'library', count: 16 },
       { name: 'task', category: 'delegates', count: 8 },
@@ -2262,7 +2262,7 @@ function createDemoEvents(count: number) {
 function createDemoEvent(index: number, timestampMs = Date.now()): CopilotEventSummary {
   const flow = [
     { session_id: 'alpha123', kind: 'tool.execution_start', tool: 'view', category: 'library', success: true },
-    { session_id: 'alpha123', kind: 'tool.execution_start', tool: 'apply_patch', category: 'forge', success: true },
+    { session_id: 'alpha123', kind: 'tool.execution_start', tool: 'apply_patch', category: 'edits', success: true },
     { session_id: 'beta4567', kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
     { session_id: 'gamma890', kind: 'tool.execution_start', tool: 'web_fetch', category: 'signal', success: true },
     { session_id: 'alpha123', kind: 'hook.start', tool: 'postToolUse', category: 'hooks', success: true },
@@ -2301,7 +2301,7 @@ function applyDemoEvent(activity: CopilotActivity, event: CopilotEventSummary): 
       status: event.success ? (event.category === 'thinking' ? 'thinking' : 'working') : 'needs-attention',
       event_count: session.event_count + 1,
       tool_count: event.kind.startsWith('tool.') ? session.tool_count + 1 : session.tool_count,
-      write_count: quarterKey === 'forge' ? session.write_count + 1 : session.write_count,
+      write_count: quarterKey === 'edits' ? session.write_count + 1 : session.write_count,
       read_count: quarterKey === 'library' ? session.read_count + 1 : session.read_count,
       command_count: quarterKey === 'terminal' ? session.command_count + 1 : session.command_count,
       web_count: quarterKey === 'signal' ? session.web_count + 1 : session.web_count,
@@ -2503,7 +2503,7 @@ function toolCallSignalEvent(sessionId: string, call: SessionToolCall): CopilotE
 
 function quarterKeyForEvent(event: CopilotEventSummary): MissionCategory | null {
   const category = event.category;
-  if (category === 'forge' || category === 'library' || category === 'terminal' || category === 'signal' || category === 'hooks' || category === 'delegates' || category === 'skills' || category === 'court' || category === 'mcp') {
+  if (category === 'edits' || category === 'library' || category === 'terminal' || category === 'signal' || category === 'hooks' || category === 'delegates' || category === 'skills' || category === 'court' || category === 'mcp') {
     return category;
   }
   if (category === 'alert') return 'terminal';
@@ -2577,7 +2577,7 @@ function compactNumberShort(value: number) {
 
 function categoryCountsFromToolCalls(calls: SessionToolCall[]): Record<string, number> {
   const counts: Record<string, number> = {
-    forge: 0,
+    edits: 0,
     library: 0,
     terminal: 0,
     signal: 0,

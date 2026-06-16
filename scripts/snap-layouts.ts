@@ -43,20 +43,20 @@ const KINGDOM_FIXTURE = {
   total_tool_calls: 70,
   total_output_tokens: 25_300,
   sessions: [
-    { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 1, error_count: 0, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'forge', stale_seconds: 12 },
+    { id: 'alpha123', title: 'Build Mission Control', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'working', event_count: 82, tool_count: 23, write_count: 8, read_count: 9, command_count: 4, web_count: 1, task_count: 1, error_count: 0, output_tokens: 4200, last_tool: 'apply_patch', last_event_kind: 'tool.execution_start', last_event_category: 'edits', stale_seconds: 12 },
     { id: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', updated_at: '', is_active: true, status: 'needs-attention', event_count: 64, tool_count: 17, write_count: 2, read_count: 7, command_count: 6, web_count: 0, task_count: 2, error_count: 1, output_tokens: 2920, last_tool: 'bash', last_event_kind: 'tool.execution_complete', last_event_category: 'alert', stale_seconds: 25 },
     { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '', is_active: false, status: 'idle', event_count: 38, tool_count: 7, write_count: 0, read_count: 3, command_count: 0, web_count: 4, task_count: 0, error_count: 0, output_tokens: 1000, last_tool: 'web_fetch', last_event_kind: 'tool.execution_start', last_event_category: 'signal', stale_seconds: 900 },
   ],
   tools: [
     { name: 'view', category: 'library', count: 14 },
-    { name: 'apply_patch', category: 'forge', count: 8 },
+    { name: 'apply_patch', category: 'edits', count: 8 },
     { name: 'bash', category: 'terminal', count: 7 },
     { name: 'rg', category: 'library', count: 5 },
     { name: 'task', category: 'delegates', count: 3 },
     { name: 'web_fetch', category: 'signal', count: 4 },
   ],
   recent_events: [
-    { session_id: 'alpha123', timestamp: '2026-05-21T07:15:00Z', kind: 'tool.execution_start',    tool: 'apply_patch', category: 'forge',    success: true  },
+    { session_id: 'alpha123', timestamp: '2026-05-21T07:15:00Z', kind: 'tool.execution_start',    tool: 'apply_patch', category: 'edits',    success: true  },
     { session_id: 'beta4567', timestamp: '2026-05-21T07:14:00Z', kind: 'tool.execution_complete', tool: 'tool complete', category: 'alert',    success: false },
     { session_id: 'alpha123', timestamp: '2026-05-21T07:13:00Z', kind: 'tool.execution_start',    tool: 'view',        category: 'library',  success: true  },
     { session_id: 'gamma890', timestamp: '2026-05-21T07:12:00Z', kind: 'tool.execution_start',    tool: 'web_fetch',   category: 'signal',   success: true  },

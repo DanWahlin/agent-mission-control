@@ -273,7 +273,7 @@
     if (category === 'terminal') return 'Command';
     if (category === 'signal') return 'Web/docs';
     if (category === 'hooks') return 'Hook';
-    if (category === 'forge') return 'Edit';
+    if (category === 'edits') return 'Edit';
     if (category === 'library') return 'Read/search';
     if (category === 'court') return 'Control';
     return category || 'Tool';
@@ -1887,7 +1887,7 @@
   }
 
   var CATEGORY_COLORS = {
-    forge: '#f0911d',
+    edits: '#f0911d',
     library: '#e1ae45',
     terminal: '#86d4b7',
     signal: '#c37ee8',
@@ -1900,7 +1900,7 @@
   };
 
   var CATEGORY_LABELS = {
-    forge: 'Edits',
+    edits: 'Edits',
     library: 'Reads',
     terminal: 'Commands',
     signal: 'Web/Docs',

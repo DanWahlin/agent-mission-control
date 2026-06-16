@@ -54,7 +54,7 @@ async function emit(type, data, when = Date.now()) {
 // EIGHT entries cover all eight sectors — a single 6-8 tool turn at
 // offset 0 already lights up most of the map, and a 10 s run that fires
 // 2-3 turns is guaranteed to cover every sector at least once.
-//   apply_patch       → forge      (Edits)
+//   apply_patch       → edits      (Edits)
 //   view / rg         → library    (Reads)
 //   bash              → terminal   (Commands)
 //   web_fetch         → signal     (Web/Docs)
@@ -63,7 +63,7 @@ async function emit(type, data, when = Date.now()) {
 //   context7-…        → mcp        (MCP — anything with '-' routes there)
 //   report_intent     → court      (Intent)
 const TOOLS = [
-  { name: 'apply_patch',                  args: { path: '/Users/me/project/src/App.tsx' },                          latencyMs: 180 }, // forge
+  { name: 'apply_patch',                  args: { path: '/Users/me/project/src/App.tsx' },                          latencyMs: 180 }, // edits
   { name: 'view',                         args: { path: '/Users/me/project/src/components/Header.tsx' },            latencyMs:  80 }, // library
   { name: 'bash',                         args: { command: 'npm run typecheck' },                                   latencyMs: 220 }, // terminal
   { name: 'web_fetch',                    args: { url: 'https://docs.tauri.app/v2/window' },                        latencyMs: 320 }, // signal
@@ -73,12 +73,12 @@ const TOOLS = [
   { name: 'report_intent',                args: { intent: 'Planning the demo loop' },                               latencyMs:  60 }, // court
   // After the first 8, keep mixing categories so subsequent turns stay varied.
   { name: 'rg',                           args: { pattern: 'useEffect' },                                           latencyMs: 110 }, // library
-  { name: 'apply_patch',                  args: { path: '/Users/me/project/src/api/auth.ts' },                      latencyMs: 200 }, // forge
+  { name: 'apply_patch',                  args: { path: '/Users/me/project/src/api/auth.ts' },                      latencyMs: 200 }, // edits
   { name: 'bash',                         args: { command: 'npm test -- --run' },                                   latencyMs: 360 }, // terminal
   { name: 'context7-get-library-docs',    args: { libraryId: '/tauri/tauri-v2' },                                   latencyMs: 260 }, // mcp
   { name: 'view',                         args: { path: '/Users/me/project/README.md' },                            latencyMs:  90 }, // library
   { name: 'web_fetch',                    args: { url: 'https://github.com/tauri-apps/tauri' },                     latencyMs: 320 }, // signal
-  { name: 'apply_patch',                  args: { path: '/Users/me/project/README.md' },                            latencyMs: 200 }, // forge
+  { name: 'apply_patch',                  args: { path: '/Users/me/project/README.md' },                            latencyMs: 200 }, // edits
   { name: 'task',                         args: { name: 'security-review' },                                        latencyMs: 360 }, // delegates
 ];
 
@@ -88,15 +88,15 @@ function pickTools(turnIdx) {
   // launches — at the 300 ms watcher debounce that's ~1-2 pulses per
   // push instead of 5+ overlapping each other. We use an explicit
   // offset schedule so the first two turns together cover all 8
-  // sectors (offset 0 → forge/library/terminal/signal, offset 4 →
+  // sectors (offset 0 → edits/library/terminal/signal, offset 4 →
   // delegates/skills/mcp/court) and later turns rotate through
   // varied slices.
   const SCHEDULE = [
-    { offset: 0, count: 4 }, // forge, library, terminal, signal
+    { offset: 0, count: 4 }, // edits, library, terminal, signal
     { offset: 4, count: 4 }, // delegates, skills, mcp, court
     { offset: 2, count: 3 }, // terminal, signal, delegates
-    { offset: 6, count: 3 }, // mcp, court, forge (wraps)
-    { offset: 8, count: 3 }, // library, forge, terminal (wraps)
+    { offset: 6, count: 3 }, // mcp, court, edits (wraps)
+    { offset: 8, count: 3 }, // library, edits, terminal (wraps)
   ];
   const slot = SCHEDULE[turnIdx % SCHEDULE.length];
   return Array.from({ length: slot.count }, (_, i) => TOOLS[(slot.offset + i) % TOOLS.length]);

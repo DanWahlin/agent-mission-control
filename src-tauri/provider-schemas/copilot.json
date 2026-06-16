@@ -110,7 +110,7 @@
     { "category": "terminal", "contains": ["bash", "shell", "sql", "test"] },
     { "category": "delegates", "contains": ["agent", "task"] },
     { "category": "signal", "contains": ["web", "fetch", "docs", "github"] },
-    { "category": "forge", "contains": ["edit", "create", "apply_patch", "write"] },
+    { "category": "edits", "contains": ["edit", "create", "apply_patch", "write"] },
     { "category": "library", "contains": ["view", "read", "grep", "rg", "glob", "search"] },
     { "category": "skills", "contains": ["skill", "memory"] },
     { "category": "court", "contains": ["ask", "intent", "plan", "schedule"] }

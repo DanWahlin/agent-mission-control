@@ -1124,7 +1124,7 @@ fn validate_provider_schema(schema: &ProviderSchema) -> Result<(), String> {
 fn is_known_tool_category(category: &str) -> bool {
     matches!(
         category,
-        "forge"
+        "edits"
             | "library"
             | "terminal"
             | "signal"
@@ -1388,12 +1388,19 @@ fn line_marks_mission_control_analytics_session(line: &str) -> bool {
         .and_then(|value| value.as_str())
         .unwrap_or("");
     if event_type == "system.message" {
+        // Anchor to the start of the system prompt. The analytics chat always
+        // prepends the marker as the first line of its system message, so a
+        // strict starts_with check avoids false positives when the marker merely
+        // appears elsewhere in the content (e.g. quoted in injected memories or
+        // custom instructions). The session.start clientName check below is the
+        // robust secondary signal.
         return value
             .pointer("/data/content")
             .and_then(|value| value.as_str())
             .is_some_and(|content| {
-                content.contains(MISSION_CONTROL_ANALYTICS_MARKER)
-                    || content.contains("Agent Mission Control Analytics assistant")
+                content
+                    .trim_start()
+                    .starts_with(MISSION_CONTROL_ANALYTICS_MARKER)
             });
     }
     if event_type == "session.start" {
@@ -2292,7 +2299,7 @@ fn build_category_mix(
     }
 
     for session in sessions {
-        add_category_count(&mut counts, "forge", session.write_count);
+        add_category_count(&mut counts, "edits", session.write_count);
         add_category_count(&mut counts, "library", session.read_count);
         add_category_count(&mut counts, "terminal", session.command_count);
         add_category_count(&mut counts, "signal", session.web_count);
@@ -3735,7 +3742,7 @@ fn summarize_events_with_mode(
             summary.tool_count += 1;
             summary.last_tool = tool_name.clone();
             match category.as_str() {
-                "forge" => summary.write_count += 1,
+                "edits" => summary.write_count += 1,
                 "library" => summary.read_count += 1,
                 "terminal" => summary.command_count += 1,
                 "signal" => summary.web_count += 1,
@@ -4707,7 +4714,7 @@ fn detail_kind(category: &str) -> &'static str {
         "delegates" => "Sub-agent",
         "terminal" => "Command tool",
         "signal" => "Web/docs tool",
-        "forge" => "Edit tool",
+        "edits" => "Edit tool",
         "library" => "Read/search tool",
         "court" => "Control tool",
         _ => "Tool",
@@ -4985,7 +4992,7 @@ mod tests {
         assert_eq!(published, BUNDLED_COPILOT_SCHEMA);
         assert_eq!(
             sha256_hex(published),
-            "3b559847ce1751fa8a84846d680c5e92cc5e2a14b340decc4b5ce04ca29746ce"
+            "7c4d45b7882705bdbf4b235cd63f3dca2fed94e32807e2b591c245b05b0b30de"
         );
     }
 
@@ -5067,9 +5074,27 @@ mod tests {
             r#"{{"type":"assistant.message","data":{{"content":"{}"}}}}"#,
             MISSION_CONTROL_ANALYTICS_MARKER
         );
+        // Realistic analytics prompt: marker is the first line of the system message.
+        let system_marker_prefix = format!(
+            r#"{{"type":"system.message","data":{{"content":"{}\nYou are the Agent Mission Control Analytics assistant."}}}}"#,
+            MISSION_CONTROL_ANALYTICS_MARKER
+        );
+        // Regression: a normal coding session whose system prompt merely mentions
+        // the marker mid-content (e.g. quoted in an injected memory or custom
+        // instruction) must NOT be treated as an analytics chat session.
+        let system_marker_mid_content = format!(
+            r#"{{"type":"system.message","data":{{"content":"You are the GitHub Copilot CLI. A memory cites const MARKER = {}"}}}}"#,
+            MISSION_CONTROL_ANALYTICS_MARKER
+        );
 
         assert!(line_marks_mission_control_analytics_session(&system_marker));
         assert!(line_marks_mission_control_analytics_session(client_marker));
+        assert!(line_marks_mission_control_analytics_session(
+            &system_marker_prefix
+        ));
+        assert!(!line_marks_mission_control_analytics_session(
+            &system_marker_mid_content
+        ));
         assert!(!line_marks_mission_control_analytics_session(
             &tool_output_marker
         ));
@@ -5825,7 +5850,7 @@ mod tests {
 
         assert_eq!(metric_count(&metrics, "terminal"), 4);
         assert_eq!(metric_count(&metrics, "library"), 3);
-        assert_eq!(metric_count(&metrics, "forge"), 2);
+        assert_eq!(metric_count(&metrics, "edits"), 2);
         assert_eq!(metric_count(&metrics, "alert"), 1);
     }
 
@@ -6104,7 +6129,7 @@ mod tests {
         // not "mcp".
         assert_eq!(categorize_tool("bash", &allowlist, &schema), "terminal");
         assert_eq!(categorize_tool("view", &allowlist, &schema), "library");
-        assert_eq!(categorize_tool("edit", &allowlist, &schema), "forge");
+        assert_eq!(categorize_tool("edit", &allowlist, &schema), "edits");
         // Hyphenated tool still routes to mcp via the heuristic.
         assert_eq!(
             categorize_tool("github-mcp-server-list", &allowlist, &schema),
@@ -6116,7 +6141,7 @@ mod tests {
     /// wrapped subsystem's name (read_bash, write_agent, web_search,
     /// ...) must route to the quarter that matches the work the tool
     /// actually performs, not the quarter implied by the verb prefix.
-    /// Before the pattern reorder these all landed in forge/library
+    /// Before the pattern reorder these all landed in edits/library
     /// purely because "read"/"write"/"search" was checked before
     /// "bash"/"agent"/"web".
     #[test]
@@ -6124,7 +6149,7 @@ mod tests {
         let schema = test_schema();
         let allowlist = HashSet::new();
         // *_bash / *_shell / *_sql / *_test should all land in terminal,
-        // not in forge (write) or library (read) just because of the
+        // not in edits (write) or library (read) just because of the
         // prefix verb.
         assert_eq!(
             categorize_tool("read_bash", &allowlist, &schema),
@@ -6143,7 +6168,7 @@ mod tests {
             "terminal"
         );
         // *_agent should land in delegates (Guild Hall) since the
-        // tool drives a sub-agent, not in library/forge.
+        // tool drives a sub-agent, not in library/edits.
         assert_eq!(
             categorize_tool("read_agent", &allowlist, &schema),
             "delegates"
@@ -6958,7 +6983,7 @@ mod tests {
         let schema = test_schema();
         let allowlist = HashSet::new();
         const QUARTERS: &[&str] = &[
-            "forge",
+            "edits",
             "library",
             "terminal",
             "signal",

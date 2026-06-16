@@ -1829,12 +1829,19 @@ fn line_marks_mission_control_analytics_session(line: &str) -> bool {
         .and_then(|value| value.as_str())
         .unwrap_or("");
     if event_type == "system.message" {
+        // Anchor to the start of the system prompt. The analytics chat always
+        // prepends the marker as the first line of its system message, so a
+        // strict starts_with check avoids false positives when the marker merely
+        // appears elsewhere in the content (e.g. quoted in injected memories or
+        // custom instructions). The session.start clientName check below is the
+        // robust secondary signal.
         return value
             .pointer("/data/content")
             .and_then(|value| value.as_str())
             .is_some_and(|content| {
-                content.contains(MISSION_CONTROL_ANALYTICS_MARKER)
-                    || content.contains("Agent Mission Control Analytics assistant")
+                content
+                    .trim_start()
+                    .starts_with(MISSION_CONTROL_ANALYTICS_MARKER)
             });
     }
     if event_type == "session.start" {
@@ -2635,7 +2642,7 @@ fn add_category_session_counts(
     partial: bool,
 ) {
     let counts = [
-        ("forge", session.write_count),
+        ("edits", session.write_count),
         ("library", session.read_count),
         ("terminal", session.command_count),
         ("signal", session.web_count),
@@ -6008,7 +6015,7 @@ fn categorize_local_tool(tool_name: &str) -> String {
         ("terminal", ["bash", "shell", "sql", "test"]),
         ("delegates", ["agent", "task", "", ""]),
         ("signal", ["web", "fetch", "docs", "github"]),
-        ("forge", ["edit", "create", "apply_patch", "write"]),
+        ("edits", ["edit", "create", "apply_patch", "write"]),
         ("library", ["view", "read", "grep", "rg"]),
         ("library", ["glob", "search", "", ""]),
         ("skills", ["skill", "memory", "", ""]),
@@ -6176,7 +6183,7 @@ fn unix_ms_now() -> u64 {
 
 fn category_label(category: &str) -> &'static str {
     match category {
-        "forge" => "Edits",
+        "edits" => "Edits",
         "library" => "Reads",
         "terminal" => "Commands",
         "signal" => "Web/Docs",
