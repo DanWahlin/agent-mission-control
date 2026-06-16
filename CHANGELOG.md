@@ -1,11 +1,24 @@
 # Changelog
 
 All notable changes to Agent Mission Control.
+## [0.2.0] - 2026-06-16
+
+### 🚀 Features & Improvements
+
+- Rebrand the app to Agent Mission Control with a new hero image and updated repo links
 ## [0.1.12] - 2026-06-06
 
 ### 🚀 Features & Improvements
 
 - Enhance README with detailed descriptions for History, Daily Log, and Analytics Chat features
+
+### 🐛 Bug Fixes
+
+- Fix Activity Rate header status
+
+### ⚙️ CI/CD & Build
+
+- Release v0.1.12
 ## [0.1.11] - 2026-06-04
 
 ### 🚀 Features & Improvements
