@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Copilot Mission Control is a windowed, decorated, resizable Tauri 2 desktop app that visualizes live activity from the [GitHub Copilot CLI](https://github.com/github/copilot-cli). It runs as an opaque normal-level window (not an overlay) so devs can park it on a second monitor while interacting with Copilot CLI in their primary terminal.
+Agent Mission Control is a windowed, decorated, resizable Tauri 2 desktop app that visualizes live activity from the [GitHub Copilot CLI](https://github.com/github/copilot-cli). It runs as an opaque normal-level window (not an overlay) so devs can park it on a second monitor while interacting with Copilot CLI in their primary terminal.
 
 The architecture is **provider-agnostic by design** — the `AgentProvider` trait in `src-tauri/src/agent.rs` is the privacy boundary, and `CopilotProvider` is the only implementation that ships today. Adding Claude Code, Codex, or other CLIs is a matter of dropping in another provider (see "Adding a Provider" below).
 

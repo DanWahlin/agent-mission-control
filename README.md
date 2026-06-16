@@ -1,24 +1,24 @@
-![Copilot Mission Control](docs/img/copilot-mission-control.webp)
+![Agent Mission Control](docs/img/agent-mission-control.webp)
 
-# 🛰️ Copilot Mission Control
+# 🛰️ Agent Mission Control
 
 A live dashboard that provides insights into the activity of [GitHub Copilot CLI](https://github.com/github/copilot-cli). Tool calls, hook callbacks, sub-agent dispatches, skills, edits, reads and more become live signals so you can spot stalls, follow active work, and catch actionable provider issues without scrolling back through terminal output.
 
 Built with [Tauri 2](https://v2.tauri.app/), [Phaser 4](https://phaser.io/), and TypeScript.
 
-🔗 Website: [https://danwahlin.github.io/copilot-mission-control](https://danwahlin.github.io/copilot-mission-control)
+🔗 Website: [https://danwahlin.github.io/agent-mission-control](https://danwahlin.github.io/agent-mission-control)
 
-![Copilot Mission Control dashboard](docs/img/dashboard.gif)
+![Agent Mission Control dashboard](docs/img/dashboard.gif)
 
-![Copilot Mission Control focus mode](docs/img/focus-mode.gif)
+![Agent Mission Control focus mode](docs/img/focus-mode.gif)
 
-![Copilot Mission Control history](docs/img/history.webp)
+![Agent Mission Control history](docs/img/history.webp)
 
-![Copilot Mission Control analytics chat](docs/img/chat.webp)
+![Agent Mission Control analytics chat](docs/img/chat.webp)
 
 ## What it does
 
-Copilot Mission Control reads the local session state Copilot CLI already writes under `~/.copilot/session-state/` and tracks:
+Agent Mission Control reads the local session state Copilot CLI already writes under `~/.copilot/session-state/` and tracks:
 
 | Signal | What it tracks |
 |---------------|----------------|
@@ -49,7 +49,7 @@ Click the 👁 button in the top-right to hide the side panels and put the missi
 
 ## Install
 
-Builds for macOS, Windows, and Linux are produced from the [latest GitHub Release](https://github.com/DanWahlin/copilot-mission-control/releases). The app is not code-signed; see the release notes for platform-specific quarantine/SmartScreen unlock instructions.
+Builds for macOS, Windows, and Linux are produced from the [latest GitHub Release](https://github.com/DanWahlin/agent-mission-control/releases). The app is not code-signed; see the release notes for platform-specific quarantine/SmartScreen unlock instructions.
 
 ## Develop
 

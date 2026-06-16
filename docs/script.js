@@ -1,6 +1,6 @@
 // @ts-nocheck
 /* ============================================================
-   Copilot Mission Control — landing page interactions
+   Agent Mission Control — landing page interactions
    Starfield + particles + screenshot carousel + scroll reveal
    ============================================================ */
 (function () {

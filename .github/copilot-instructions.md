@@ -1,4 +1,4 @@
-# Copilot Instructions — Copilot Mission Control
+# Copilot Instructions — Agent Mission Control
 
 ## Language & Framework Conventions
 

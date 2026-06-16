@@ -1,4 +1,4 @@
-// Copilot Mission Control — Tauri backend.
+// Agent Mission Control — Tauri backend.
 // A windowed observability dashboard for the GitHub Copilot CLI.
 //
 // Backend responsibilities:
@@ -349,8 +349,8 @@ async fn open_in_editor(path: String, scheme: Option<String>) -> Result<(), Stri
 #[tauri::command]
 async fn open_external_url(url: String) -> Result<(), String> {
     let allowed = url
-        .starts_with("https://github.com/DanWahlin/copilot-mission-control/issues/new?")
-        || url == "https://github.com/DanWahlin/copilot-mission-control/releases/latest";
+        .starts_with("https://github.com/DanWahlin/agent-mission-control/issues/new?")
+        || url == "https://github.com/DanWahlin/agent-mission-control/releases/latest";
     if !allowed {
         return Err("Refusing unsupported external URL".to_string());
     }
@@ -517,7 +517,7 @@ pub fn run() {
 
             // Build a minimal system tray with Show/Hide and Quit.
             let is_mac = cfg!(target_os = "macos");
-            let toggle_label = "Show / Hide Copilot Mission Control";
+            let toggle_label = "Show / Hide Agent Mission Control";
             let quit_label = if is_mac {
                 "Quit  (⌘Q)"
             } else {
@@ -531,7 +531,7 @@ pub fn run() {
                 .build()?;
 
             let _tray = TrayIconBuilder::with_id("main")
-                .tooltip("Copilot Mission Control")
+                .tooltip("Agent Mission Control")
                 .title("")
                 .icon(tauri::image::Image::from_bytes(TRAY_ICON_BYTES)?)
                 .menu(&menu)
@@ -555,7 +555,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Copilot Mission Control")
+        .expect("error while building Agent Mission Control")
         .run(|app, event| {
             // macOS: re-show window when the user clicks the dock icon
             // after the window has been hidden.

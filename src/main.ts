@@ -1,4 +1,4 @@
-// Copilot Mission Control — single-scene bootstrap.
+// Agent Mission Control — single-scene bootstrap.
 //
 // One Phaser app, one scene, no switcher, no ready screen.
 // Boots directly into the Mission Control view as soon as the window

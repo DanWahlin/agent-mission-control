@@ -1,4 +1,4 @@
-// Shared viewport dimensions for the Copilot Mission Control scene.
+// Shared viewport dimensions for the Agent Mission Control scene.
 //
 // We re-export `W` and `H` as live values that callers refresh by
 // invoking `refreshDimensions()` whenever the window resizes. The

@@ -6,7 +6,7 @@
 //! summary fields (no prompts, no tool args, no command output, no file
 //! contents, no diffs). The merger [`collect_agent_activity`] composes
 //! provider scans into the [`AgentActivity`] shape consumed by the
-//! Copilot Mission Control scene.
+//! Agent Mission Control scene.
 //!
 //! A filesystem watcher (see [`start_watcher`]) replaces the previous
 //! 5-second renderer poll by emitting a JS callback whenever any
@@ -493,7 +493,7 @@ const MAX_SESSION_TURNS: usize = 80;
 const BUNDLED_COPILOT_SCHEMA: &str = include_str!("../provider-schemas/copilot.json");
 const SUPPORTED_SCHEMA_MAJOR: &str = "1";
 const REMOTE_COPILOT_SCHEMA_INDEX_URL: &str =
-    "https://danwahlin.github.io/copilot-mission-control/provider-schemas/copilot/index.json";
+    "https://danwahlin.github.io/agent-mission-control/provider-schemas/copilot/index.json";
 const SCHEMA_FETCH_TIMEOUT_SECS: u64 = 2;
 const MISSION_CONTROL_ANALYTICS_MARKER: &str = "COPILOT_MISSION_CONTROL_ANALYTICS_CHAT_IGNORE";
 static COPILOT_SCHEMA: OnceLock<(ProviderSchema, Vec<String>)> = OnceLock::new();
@@ -1393,7 +1393,7 @@ fn line_marks_mission_control_analytics_session(line: &str) -> bool {
             .and_then(|value| value.as_str())
             .is_some_and(|content| {
                 content.contains(MISSION_CONTROL_ANALYTICS_MARKER)
-                    || content.contains("Copilot Mission Control Analytics assistant")
+                    || content.contains("Agent Mission Control Analytics assistant")
             });
     }
     if event_type == "session.start" {
@@ -5277,7 +5277,7 @@ mod tests {
     #[test]
     fn schema_url_resolution_rejects_encoded_or_external_paths() {
         let index_url =
-            "https://danwahlin.github.io/copilot-mission-control/provider-schemas/copilot/index.json";
+            "https://danwahlin.github.io/agent-mission-control/provider-schemas/copilot/index.json";
 
         assert!(resolve_schema_url(index_url, "1.0.1.json").is_ok());
         assert!(resolve_schema_url(index_url, "nested/1.0.1.json").is_ok());

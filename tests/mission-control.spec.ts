@@ -644,7 +644,7 @@ function overflowingInspectorFixture() {
   return fixture;
 }
 
-test.describe('Copilot Mission Control — Startup', () => {
+test.describe('Agent Mission Control — Startup', () => {
   test.beforeEach(async ({ page }) => {
     await installFixture(page);
     await page.goto(GAME_URL);
@@ -691,7 +691,7 @@ test.describe('Copilot Mission Control — Startup', () => {
   });
 });
 
-test.describe('Copilot Mission Control — History', () => {
+test.describe('Agent Mission Control — History', () => {
   test.beforeEach(async ({ page }) => {
     await installFixture(page);
     await page.goto(GAME_URL);
@@ -1454,7 +1454,7 @@ test.describe('Copilot Mission Control — History', () => {
   });
 });
 
-test.describe('Copilot Mission Control — Dashboard', () => {
+test.describe('Agent Mission Control — Dashboard', () => {
   test.beforeEach(async ({ page }) => {
     await installFixture(page);
     await page.goto(GAME_URL);
@@ -2550,7 +2550,7 @@ test.describe('Copilot Mission Control — Dashboard', () => {
   });
 });
 
-test.describe('Copilot Mission Control — Attention Center', () => {
+test.describe('Agent Mission Control — Attention Center', () => {
   test('keeps attention summary out of the selected session panel', async ({ page }) => {
     const fixture = {
       ...MISSION_FIXTURE,
@@ -2638,7 +2638,7 @@ test.describe('Copilot Mission Control — Attention Center', () => {
   });
 });
 
-test.describe('Copilot Mission Control — Focus Mode', () => {
+test.describe('Agent Mission Control — Focus Mode', () => {
   test('topbar panels button toggles side panels and resizes the ring', async ({ page }) => {
     await installFixture(page);
     await page.setViewportSize({ width: 1600, height: 1000 });
@@ -2727,7 +2727,7 @@ test.describe('Copilot Mission Control — Focus Mode', () => {
   });
 });
 
-test.describe('Copilot Mission Control — Schema Drift', () => {
+test.describe('Agent Mission Control — Schema Drift', () => {
   test('schema drift dialog opens a privacy-safe issue report', async ({ page }) => {
     const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
     fixture.schema_drift = [
@@ -2770,7 +2770,7 @@ test.describe('Copilot Mission Control — Schema Drift', () => {
     await page.locator('#schema-drift-report').click();
     const openedUrl = await page.waitForFunction(() => (window as any).__openedUrls?.[0] || '', null, { timeout: 2000 });
     const url = String(await openedUrl.jsonValue());
-    expect(url).toContain('https://github.com/DanWahlin/copilot-mission-control/issues/new?');
+    expect(url).toContain('https://github.com/DanWahlin/agent-mission-control/issues/new?');
     const issueUrl = new URL(url);
     const body = issueUrl.searchParams.get('body') || '';
     expect(issueUrl.searchParams.get('title')).toBe('Schema drift detected: Copilot provider');
@@ -2782,7 +2782,7 @@ test.describe('Copilot Mission Control — Schema Drift', () => {
   });
 });
 
-test.describe('Copilot Mission Control — Ops Rules', () => {
+test.describe('Agent Mission Control — Ops Rules', () => {
   test('reports idle when no sessions are active', async ({ page }) => {
     const fixture = {
       ...MISSION_FIXTURE,
@@ -2830,7 +2830,7 @@ const VIEWPORTS = [
 ];
 
 for (const vp of VIEWPORTS) {
-  test(`Copilot Mission Control renders at ${vp.name} (${vp.width}x${vp.height})`, async ({ page }) => {
+  test(`Agent Mission Control renders at ${vp.name} (${vp.width}x${vp.height})`, async ({ page }) => {
     await installFixture(page);
     await page.setViewportSize({ width: vp.width, height: vp.height });
     await page.goto(GAME_URL);

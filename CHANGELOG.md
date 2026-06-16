@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Copilot Mission Control.
+All notable changes to Agent Mission Control.
 ## [0.1.12] - 2026-06-06
 
 ### 🚀 Features & Improvements

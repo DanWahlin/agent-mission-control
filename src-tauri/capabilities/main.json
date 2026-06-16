@@ -1,6 +1,6 @@
 {
   "identifier": "main-capability",
-  "description": "Main window capability for Copilot Mission Control",
+  "description": "Main window capability for Agent Mission Control",
   "windows": ["main"],
   "permissions": [
     "core:window:default",

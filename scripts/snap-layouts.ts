@@ -1,5 +1,5 @@
 /**
- * Visual layout snapshot tool for Copilot Mission Control.
+ * Visual layout snapshot tool for Agent Mission Control.
  *
  * Boots `dist/index.html` in headless Chromium at a sequence of
  * viewport sizes (with the deterministic fixture installed) and writes

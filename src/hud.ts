@@ -1,5 +1,5 @@
 // @ts-nocheck
-// Copilot Mission Control — slim DOM HUD.
+// Agent Mission Control — slim DOM HUD.
 //
 // Responsibilities (deliberately tiny):
 //   - Theme toggle (sun/moon) that flips body.theme-light and persists
@@ -2703,7 +2703,7 @@
     return [
       '## Schema drift report',
       '',
-      'Copilot Mission Control detected local Copilot CLI events that do not match the current parser/schema assumptions.',
+      'Agent Mission Control detected local Copilot CLI events that do not match the current parser/schema assumptions.',
       '',
       'This report is structural only. It does not include prompts, tool arguments, command output, file paths, or diffs.',
       '',
@@ -2737,7 +2737,7 @@
   function schemaDriftIssueUrl(report) {
     var title = 'Schema drift detected: Copilot provider';
     var body = schemaDriftIssueBody(report);
-    return 'https://github.com/DanWahlin/copilot-mission-control/issues/new?'
+    return 'https://github.com/DanWahlin/agent-mission-control/issues/new?'
       + 'title=' + encodeURIComponent(title)
       + '&labels=' + encodeURIComponent('schema-drift,provider:copilot')
       + '&body=' + encodeURIComponent(body);
@@ -4352,7 +4352,7 @@
 
     banner.onclick = function (event) {
       if (event.target === dismissBtn) return;
-      openExternalUrl('https://github.com/DanWahlin/copilot-mission-control/releases/latest').catch(function (err) {
+      openExternalUrl('https://github.com/DanWahlin/agent-mission-control/releases/latest').catch(function (err) {
         console.error('Unable to open release URL', err);
       });
     };

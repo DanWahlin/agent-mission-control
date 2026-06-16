@@ -1,5 +1,5 @@
 name: ✨ Feature Request
-description: Suggest a new feature, quarter, or improvement for Copilot Mission Control
+description: Suggest a new feature, quarter, or improvement for Agent Mission Control
 labels: ["enhancement"]
 body:
   - type: textarea
@@ -14,7 +14,7 @@ body:
     id: proposal
     attributes:
       label: Proposed solution
-      description: What would you like Copilot Mission Control to do?
+      description: What would you like Agent Mission Control to do?
     validations:
       required: true
 

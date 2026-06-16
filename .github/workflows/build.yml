@@ -123,7 +123,7 @@ jobs:
           LINUX_FILE: ''
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          BASE_URL="https://github.com/DanWahlin/copilot-mission-control/releases/download/${GITHUB_REF_NAME}"
+          BASE_URL="https://github.com/DanWahlin/agent-mission-control/releases/download/${GITHUB_REF_NAME}"
 
           MAC_SIG=$(find artifacts -name "*.app.tar.gz.sig" -type f -exec cat {} \; -quit 2>/dev/null || echo "")
           WIN_SIG=$(find artifacts -name "*.nsis.zip.sig" -type f -exec cat {} \; -quit 2>/dev/null || echo "")
@@ -167,16 +167,16 @@ jobs:
           draft: false
           prerelease: false
           body: |
-            ## 🛰️ Download Copilot Mission Control
+            ## 🛰️ Download Agent Mission Control
 
             A live, second-monitor dashboard for the GitHub Copilot CLI. Every tool call, sub-agent dispatch, and permission prompt becomes a live signal so you can spot stalls and "needs attention" the moment they happen.
 
             ### 🤖 Install this using the Copilot CLI
 
-            If you have [GitHub Copilot CLI](https://github.com/features/copilot/cli/) installed, you can install Copilot Mission Control with a single prompt:
+            If you have [GitHub Copilot CLI](https://github.com/features/copilot/cli/) installed, you can install Agent Mission Control with a single prompt:
 
             ```
-            copilot --allow-all -p "Install the latest version of this app for me https://github.com/DanWahlin/copilot-mission-control/releases"
+            copilot --allow-all -p "Install the latest version of this app for me https://github.com/DanWahlin/agent-mission-control/releases"
             ```
 
             > **Note:** The app is not code-signed, so after installing you'll still need to manually run the commands shown below for your operating system.
@@ -192,7 +192,7 @@ jobs:
             >
             > **Note:** The app is not code-signed. After installing, open Terminal and run:
             > ```
-            > sudo xattr -rd com.apple.quarantine /Applications/Copilot\ Mission\ Control.app
+            > sudo xattr -rd com.apple.quarantine /Applications/Agent\ Mission\ Control.app
             > ```
 
             ### 🪟 Windows

@@ -448,7 +448,7 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   get displayName() {
-    return 'Copilot Mission Control';
+    return 'Agent Mission Control';
   }
 
   preload() {

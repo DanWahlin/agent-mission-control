@@ -1,5 +1,5 @@
 /**
- * Playwright test helpers for Copilot Mission Control.
+ * Playwright test helpers for Agent Mission Control.
  *
  * The app is a single-scene Phaser canvas (`mission-control`) inside a
  * Tauri window; in tests we serve `dist/` over plain HTTP at port 4173

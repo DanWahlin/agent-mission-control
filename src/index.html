@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' blob:;">
-  <title>Copilot Mission Control</title>
+  <title>Agent Mission Control</title>
   <link rel="stylesheet" href="styles/app.css">
   <link rel="stylesheet" href="styles/history.css">
   <link rel="stylesheet" href="styles/analytics.css">
 </head>
 <body>
   <div id="topbar">
-    <span class="brand">Copilot Mission Control</span>
+    <span class="brand">Agent Mission Control</span>
     <span id="topbar-controls">
       <span class="topbar-route-group" role="group" aria-label="App views">
         <button id="mission-route-btn" class="topbar-button topbar-route active" type="button" title="Show Home" aria-label="Show Home" aria-current="page">
@@ -54,7 +54,7 @@
   <div id="game"></div>
   <div id="dashboard-loading" class="dashboard-loading" role="status" aria-live="polite">
     <div class="dashboard-loading-card">
-      <img src="./docs/img/copilot-mission-control.webp" alt="Copilot Mission Control dashboard preview">
+      <img src="./docs/img/agent-mission-control.webp" alt="Agent Mission Control dashboard preview">
       <div class="dashboard-loading-caption">Initializing mission control…</div>
     </div>
   </div>
@@ -143,7 +143,7 @@
     <div class="analytics-token-dialog" role="dialog" aria-modal="true" aria-labelledby="analytics-token-title" tabindex="-1">
       <h2 id="analytics-token-title">Welcome to Mission Analytics Chat</h2>
       <p>Answers are generated using the GitHub Copilot SDK through your local Copilot CLI setup. Asking questions here will consume Copilot requests and tokens.</p>
-      <p>The app sends indexed Copilot Mission Control analytics summaries to the model. If you ask about prompts, skills, or agents, it may also use local read-only Mission Control Insights tools to inspect bounded Copilot data and definitions.</p>
+      <p>The app sends indexed Agent Mission Control analytics summaries to the model. If you ask about prompts, skills, or agents, it may also use local read-only Mission Control Insights tools to inspect bounded Copilot data and definitions.</p>
       <button id="analytics-token-ack" class="cmc-button" type="button">I understand</button>
     </div>
   </section>

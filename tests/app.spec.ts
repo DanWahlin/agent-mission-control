@@ -1,14 +1,14 @@
 import { test, expect } from '@playwright/test';
 import { GAME_URL, waitForGame } from './helpers';
 
-test.describe('Copilot Mission Control app shell', () => {
+test.describe('Agent Mission Control app shell', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(GAME_URL);
     await waitForGame(page);
   });
 
   test('top bar shows brand and theme toggle', async ({ page }) => {
-    await expect(page.locator('#topbar .brand')).toContainText('Copilot Mission Control');
+    await expect(page.locator('#topbar .brand')).toContainText('Agent Mission Control');
     await expect(page.locator('#settings-btn')).toBeVisible();
     await expect(page.locator('#theme-btn')).toBeVisible();
     await expect(page.locator('#mission-route-btn')).toHaveAttribute('aria-label', 'Show Home');
@@ -513,7 +513,7 @@ test.describe('Copilot Mission Control app shell', () => {
   });
 });
 
-test.describe('Copilot Mission Control loading splash', () => {
+test.describe('Agent Mission Control loading splash', () => {
   test('keeps the splash visible until the initial activity scan finishes', async ({ page }) => {
     await page.addInitScript(() => {
       (window as any).__cmcSplashMinMs = 0;
