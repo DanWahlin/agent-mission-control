@@ -1626,6 +1626,11 @@ struct LocalModelTokenAccumulator {
     assistant_output_tokens: u64,
     shutdown_input_tokens: u64,
     shutdown_output_tokens: u64,
+    /// Local calendar day on which this model last produced an
+    /// `assistant.message`. Tokens are bucketed onto this day so a session
+    /// that runs before midnight but only shuts down the next day keeps its
+    /// tokens with its turns instead of leaking onto the shutdown day.
+    last_activity_day: String,
 }
 
 struct PendingLocalTool {
@@ -1780,11 +1785,6 @@ fn parse_local_events_file(
     let input_known = session.input_tokens > 0
         || session.output_tokens == 0
         || session.last_status == "completed";
-    if let Some(daily) = rollups.daily.get_mut(&(provider.clone(), token_day)) {
-        daily.input_tokens = daily.input_tokens.saturating_add(session.input_tokens);
-        daily.output_tokens = daily.output_tokens.saturating_add(session.output_tokens);
-        daily.token_data_partial |= !input_known;
-    }
     rollups.sessions.push(AnalyticsSessionRow {
         provider,
         session_id_hash: session_hash,
@@ -1898,6 +1898,7 @@ fn apply_local_event(
             if let Some(model) = string_at_path(value, "data.model") {
                 session.last_model = safe_label(&model, "Unknown");
             }
+            record_session_model_activity_day(session, day);
             if let Some(tokens) = u64_at_path(value, "data.outputTokens") {
                 session.output_tokens = session.output_tokens.saturating_add(tokens);
                 record_session_model_assistant_output(session, tokens);
@@ -2061,6 +2062,18 @@ fn record_session_model_assistant_output(session: &mut LocalSessionBuilder, outp
     acc.assistant_output_tokens = acc.assistant_output_tokens.saturating_add(output_tokens);
 }
 
+/// Stamps the current model's last-active day. Called on every
+/// `assistant.message` so token reconciliation can bucket a model's tokens on
+/// the day it actually produced output rather than the session's shutdown day.
+fn record_session_model_activity_day(session: &mut LocalSessionBuilder, day: &str) {
+    let model = safe_label(&session.last_model, "Unknown");
+    if model == "Unknown" || day.is_empty() {
+        return;
+    }
+    let acc = session.model_tokens.entry(model).or_default();
+    acc.last_activity_day = day.to_string();
+}
+
 fn record_session_model_shutdown_tokens(
     session: &mut LocalSessionBuilder,
     model: &str,
@@ -2080,13 +2093,13 @@ fn reconcile_local_session_model_tokens(
     session: &mut LocalSessionBuilder,
     rollups: &mut LocalHistoryRollups,
     provider: &str,
-    day: &str,
+    fallback_day: &str,
 ) {
     let mut resolved = BTreeMap::<String, (u64, u64, bool)>::new();
     for (model, acc) in &session.model_tokens {
         let input = acc.shutdown_input_tokens;
         let output = acc.shutdown_output_tokens.max(acc.assistant_output_tokens);
-        if model == "Unknown" && input == 0 && output == 0 {
+        if input == 0 && output == 0 {
             continue;
         }
         resolved.insert(
@@ -2127,16 +2140,37 @@ fn reconcile_local_session_model_tokens(
     session.output_tokens = final_output;
 
     for (model, (input, output, partial)) in resolved {
+        // Bucket each model's tokens on the day that model was actually active
+        // (its last `assistant.message`), not the session's last-event day. A
+        // session that starts before midnight but only shuts down the next day
+        // would otherwise dump all its tokens onto the shutdown day with zero
+        // turns, while the turns stay on the prior day. Falls back to the
+        // session's last-event day when no activity day was observed (e.g. a
+        // model that appears only in shutdown metrics).
+        let model_day = session
+            .model_tokens
+            .get(&model)
+            .map(|acc| acc.last_activity_day.as_str())
+            .filter(|day| !day.is_empty())
+            .unwrap_or(fallback_day)
+            .to_string();
         add_model_tokens(
             rollups,
             provider,
-            day,
+            &model_day,
             &session.session_hash,
             &model,
             input,
             output,
             partial,
         );
+        let daily = rollups
+            .daily
+            .entry((provider.to_string(), model_day))
+            .or_insert_with(|| DailyAccumulator::new(0));
+        daily.input_tokens = daily.input_tokens.saturating_add(input);
+        daily.output_tokens = daily.output_tokens.saturating_add(output);
+        daily.token_data_partial |= partial;
     }
 }
 
@@ -6411,6 +6445,91 @@ mod tests {
         assert_eq!(model.input_tokens, daily.input_tokens);
         assert_eq!(model.output_tokens, daily.output_tokens);
         assert_eq!(model.turn_count, 1);
+    }
+
+    #[test]
+    fn local_history_buckets_cross_midnight_tokens_with_turns() {
+        // A session whose turns happen one day but which only shuts down the
+        // next day must keep its model tokens on the activity day (with the
+        // turns), not leak them onto the shutdown day as a 0-turn row.
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cmc_analytics_cross_midnight_{}_{}.jsonl",
+            std::process::id(),
+            unix_ms_now()
+        ));
+        std::fs::write(
+            &path,
+            [
+                r#"{"type":"session.start","timestamp":"2026-06-15T12:00:00Z","data":{"selectedModel":"gpt-5.5"}}"#,
+                r#"{"type":"assistant.turn_start","timestamp":"2026-06-15T12:00:01Z","data":{"turnId":"turn-1"}}"#,
+                r#"{"type":"assistant.message","timestamp":"2026-06-15T12:00:02Z","data":{"model":"gpt-5.5","outputTokens":150}}"#,
+                r#"{"type":"session.shutdown","timestamp":"2026-06-16T12:00:00Z","data":{"currentModel":"gpt-5.5","modelMetrics":{"gpt-5.5":{"usage":{"inputTokens":1000,"cacheReadTokens":200,"outputTokens":180}}}}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write fixture");
+
+        let mut rollups = LocalHistoryRollups::default();
+        let mut parse_errors = 0;
+        parse_local_events_file(
+            &path,
+            "session-cross-midnight",
+            LocalSessionMetadata {
+                repository: "copilot-mission-control".to_string(),
+                branch: "main".to_string(),
+                title: "Cross Midnight".to_string(),
+            },
+            0,
+            unix_ms_now(),
+            &mut rollups,
+            &mut parse_errors,
+        )
+        .expect("parse local history");
+        let _ = std::fs::remove_file(&path);
+
+        let activity_day = local_day(parse_iso_ms("2026-06-15T12:00:02Z").unwrap());
+        let shutdown_day = local_day(parse_iso_ms("2026-06-16T12:00:00Z").unwrap());
+        assert_ne!(
+            activity_day, shutdown_day,
+            "fixture must span two local days"
+        );
+
+        // Turns and tokens both land on the activity day.
+        let model = rollups
+            .model
+            .get(&(
+                "copilot".to_string(),
+                "gpt-5.5".to_string(),
+                activity_day.clone(),
+            ))
+            .expect("model rollup on activity day");
+        assert_eq!(model.turn_count, 1);
+        assert_eq!(model.input_tokens, 800);
+        assert_eq!(model.output_tokens, 180);
+
+        // The shutdown day must NOT carry a 0-turn token row for the model.
+        assert!(rollups
+            .model
+            .get(&(
+                "copilot".to_string(),
+                "gpt-5.5".to_string(),
+                shutdown_day.clone(),
+            ))
+            .is_none());
+
+        // Daily token totals follow the model: activity day carries them,
+        // shutdown day stays at zero tokens.
+        let activity_daily = rollups
+            .daily
+            .get(&("copilot".to_string(), activity_day))
+            .expect("daily rollup on activity day");
+        assert_eq!(activity_daily.input_tokens, 800);
+        assert_eq!(activity_daily.output_tokens, 180);
+        if let Some(shutdown_daily) = rollups.daily.get(&("copilot".to_string(), shutdown_day)) {
+            assert_eq!(shutdown_daily.input_tokens, 0);
+            assert_eq!(shutdown_daily.output_tokens, 0);
+        }
     }
 
     #[test]
