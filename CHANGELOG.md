@@ -1,11 +1,20 @@
 # Changelog
 
 All notable changes to Agent Mission Control.
+## [0.2.2] - 2026-06-17
+
+### 🐛 Bug Fixes
+
+- Fix cross-midnight day bucketing for per-model token totals in History
 ## [0.2.1] - 2026-06-16
 
 ### 🐛 Bug Fixes
 
 - Rename forge category to edits and fix analytics-chat session filter
+
+### ⚙️ CI/CD & Build
+
+- Release v0.2.1
 ## [0.2.0] - 2026-06-16
 
 ### 🚀 Features & Improvements
