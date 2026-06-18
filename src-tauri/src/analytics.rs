@@ -485,9 +485,8 @@ pub async fn analytics_chat(
             if !answer.in_scope {
                 response.artifacts.clear();
                 response.caveats.clear();
-                response.mode_reason = Some(
-                    "Question is outside Agent Mission Control analytics scope.".to_string(),
-                );
+                response.mode_reason =
+                    Some("Question is outside Agent Mission Control analytics scope.".to_string());
             } else {
                 let mut artifacts = if definition_gap_prompt {
                     Vec::new()
@@ -1498,6 +1497,9 @@ fn ingest_local_copilot_history(conn: &mut Connection) -> Result<bool, String> {
             .and_then(|name| name.to_str())
             .unwrap_or("session");
         let metadata = read_local_session_metadata(&session_dir);
+        if !metadata.has_repository || metadata.is_mission_control_analytics {
+            continue;
+        }
         parse_local_events_file(
             &events_path,
             session_id,
@@ -1543,7 +1545,7 @@ fn delete_analytics_range(conn: &Connection, start_day: &str) -> Result<(), Stri
         .map_err(|err| err.to_string())?;
     }
     conn.execute(
-        "DELETE FROM sessions WHERE last_seen_ms >= ?1",
+        "DELETE FROM sessions WHERE last_seen_ms >= ?1 OR repository = '' OR repository = 'Unknown'",
         params![start_ms as i64],
     )
     .map_err(|err| err.to_string())?;
@@ -1644,14 +1646,20 @@ struct LocalSessionMetadata {
     repository: String,
     branch: String,
     title: String,
+    has_repository: bool,
+    is_mission_control_analytics: bool,
 }
 
 fn read_local_session_metadata(session_dir: &Path) -> LocalSessionMetadata {
     let mut values = BTreeMap::<String, String>::new();
     let workspace_path = session_dir.join("workspace.yaml");
     if let Ok(content) = fs::read_to_string(workspace_path) {
-        for line in content.lines() {
+        let lines = content.lines().collect::<Vec<_>>();
+        let mut index = 0;
+        while index < lines.len() {
+            let line = lines[index];
             let Some((key, value)) = line.split_once(':') else {
+                index += 1;
                 continue;
             };
             let key = key.trim();
@@ -1659,22 +1667,40 @@ fn read_local_session_metadata(session_dir: &Path) -> LocalSessionMetadata {
                 key,
                 "repository" | "branch" | "name" | "summary" | "git_root"
             ) {
+                index += 1;
                 continue;
             }
-            values.insert(
-                key.to_string(),
-                value
-                    .trim()
-                    .trim_matches('"')
-                    .trim_matches('\'')
-                    .to_string(),
-            );
+            let trimmed = value.trim().trim_matches('"').trim_matches('\'');
+            if is_yaml_block_scalar_indicator(trimmed) {
+                let mut block_lines = Vec::new();
+                index += 1;
+                while index < lines.len() {
+                    let next_line = lines[index];
+                    let is_indented = next_line.starts_with(' ') || next_line.starts_with('\t');
+                    if !is_indented && next_line.split_once(':').is_some() {
+                        break;
+                    }
+                    let block_value = next_line.trim();
+                    if !block_value.is_empty() {
+                        block_lines.push(block_value);
+                    }
+                    index += 1;
+                }
+                values.insert(key.to_string(), block_lines.join(" "));
+                continue;
+            }
+            values.insert(key.to_string(), trimmed.to_string());
+            index += 1;
         }
     }
-    let repository = values
+    let repository_source = values
         .get("repository")
         .or_else(|| values.get("git_root"))
-        .map(|value| sanitize_repository_label(value))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let has_repository = repository_source.is_some();
+    let repository = repository_source
+        .map(sanitize_repository_label)
         .unwrap_or_else(|| "Unknown".to_string());
     let branch = values
         .get("branch")
@@ -1685,11 +1711,34 @@ fn read_local_session_metadata(session_dir: &Path) -> LocalSessionMetadata {
         .or_else(|| values.get("summary"))
         .map(|value| sanitize_title_label(value))
         .filter(|value| value != "Untitled")
-        .unwrap_or_else(|| format!("{} {}", repository, branch));
+        .unwrap_or_else(|| fallback_session_title(&repository, &branch));
+    let is_mission_control_analytics = values
+        .get("name")
+        .or_else(|| values.get("summary"))
+        .is_some_and(|value| value.contains(MISSION_CONTROL_ANALYTICS_MARKER));
     LocalSessionMetadata {
         repository,
         branch,
         title,
+        has_repository,
+        is_mission_control_analytics,
+    }
+}
+
+fn is_yaml_block_scalar_indicator(value: &str) -> bool {
+    matches!(value, "|" | "|-" | "|+" | ">" | ">-" | ">+")
+}
+
+fn fallback_session_title(repository: &str, branch: &str) -> String {
+    let repository = repository.trim();
+    let branch = branch.trim();
+    let has_repository = !repository.is_empty() && !repository.eq_ignore_ascii_case("unknown");
+    let has_branch = !branch.is_empty() && !branch.eq_ignore_ascii_case("unknown");
+    match (has_repository, has_branch) {
+        (true, true) => format!("{} {}", repository, branch),
+        (true, false) => repository.to_string(),
+        (false, true) => branch.to_string(),
+        (false, false) => "Untitled".to_string(),
     }
 }
 
@@ -3267,7 +3316,9 @@ fn activity_rate_for_day(
             }
         })
         .collect::<Vec<_>>();
-    let mut session_sets = (0..24).map(|_| BTreeSet::<String>::new()).collect::<Vec<_>>();
+    let mut session_sets = (0..24)
+        .map(|_| BTreeSet::<String>::new())
+        .collect::<Vec<_>>();
 
     let mut stmt = conn
         .prepare(
@@ -3357,6 +3408,8 @@ fn dominant_session_labels(
             JOIN sessions s
               ON s.provider = f.provider AND s.session_id_hash = f.session_id_hash
             WHERE f.occurred_at_ms >= ?1 AND f.occurred_at_ms < ?2
+              AND s.repository <> ''
+              AND s.repository <> 'Unknown'
             GROUP BY s.repository, s.branch, f.session_id_hash, f.occurred_at_ms / 86400000
             "#,
         )
@@ -3491,8 +3544,10 @@ fn digest_sessions_for_day(
              AND f.session_id_hash = s.session_id_hash
              AND f.occurred_at_ms >= ?1
              AND f.occurred_at_ms < ?2
-            WHERE (f.id IS NOT NULL)
-               OR (s.last_seen_ms >= ?1 AND s.last_seen_ms < ?2)
+            WHERE s.repository <> ''
+              AND s.repository <> 'Unknown'
+              AND ((f.id IS NOT NULL)
+                OR (s.last_seen_ms >= ?1 AND s.last_seen_ms < ?2))
             GROUP BY s.provider, s.session_id_hash
             ORDER BY COALESCE(MAX(f.occurred_at_ms), s.last_seen_ms) DESC
             LIMIT 24
@@ -5359,14 +5414,35 @@ fn daily_points_window(
     }
 }
 
+/// Builds the second line of a token-hotspot label, leading with the friendly
+/// session name (from `workspace.yaml` `name`/`summary`) when one is available
+/// and always keeping the short hash in parentheses so sessions that share a
+/// fallback title stay distinguishable.
+fn friendly_session_label(title: &str, short_hash: &str) -> String {
+    let trimmed = title.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("untitled")
+        || trimmed.eq_ignore_ascii_case("unknown")
+        || trimmed.eq_ignore_ascii_case("unknown unknown")
+        || is_yaml_block_scalar_indicator(trimmed)
+    {
+        format!("Session {short_hash}")
+    } else {
+        format!("{trimmed} ({short_hash})")
+    }
+}
+
 fn token_hotspots(conn: &Connection, since_day: &str) -> Result<Vec<AnalyticsRankedItem>, String> {
     let (since_ms, _, _) = local_day_bounds(since_day);
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT session_id_hash, output_tokens, input_tokens, token_data_partial, last_model, turn_count, last_seen_ms
+            SELECT session_id_hash, output_tokens, input_tokens, token_data_partial, last_model, turn_count, last_seen_ms, title
             FROM sessions
-            WHERE last_seen_ms >= ?1 AND (output_tokens > 0 OR input_tokens > 0)
+            WHERE last_seen_ms >= ?1
+              AND repository <> ''
+              AND repository <> 'Unknown'
+              AND (output_tokens > 0 OR input_tokens > 0)
             ORDER BY output_tokens DESC, input_tokens DESC
             LIMIT 8
             "#,
@@ -5378,13 +5454,14 @@ fn token_hotspots(conn: &Connection, since_day: &str) -> Result<Vec<AnalyticsRan
             let short_hash: String = session_hash.chars().take(8).collect();
             let turn_count = row.get::<_, i64>(5)?.max(0) as u64;
             let last_seen_ms = row.get::<_, i64>(6)?.max(0) as u64;
+            let title: String = row.get::<_, String>(7).unwrap_or_default();
             Ok(AnalyticsRankedItem {
                 label: format!(
-                    "{} - {} turn{}\nSession {}",
+                    "{} - {} turn{}\n{}",
                     local_time_label(last_seen_ms),
                     turn_count,
                     if turn_count == 1 { "" } else { "s" },
-                    short_hash
+                    friendly_session_label(&title, &short_hash)
                 ),
                 category: row.get::<_, String>(4)?,
                 value: row.get::<_, i64>(1)?.max(0) as u64,
@@ -5962,13 +6039,13 @@ fn sanitize_branch_label(value: &str) -> String {
 
 fn sanitize_title_label(value: &str) -> String {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
+    if trimmed.is_empty() || is_yaml_block_scalar_indicator(trimmed) {
         return "Untitled".to_string();
     }
     if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("~/") {
         return "Untitled".to_string();
     }
-    trimmed
+    let title = trimmed
         .chars()
         .filter(|ch| {
             ch.is_ascii_alphanumeric() || *ch == ' ' || matches!(*ch, '.' | '_' | '-' | ':' | '#')
@@ -5976,7 +6053,12 @@ fn sanitize_title_label(value: &str) -> String {
         .take(96)
         .collect::<String>()
         .trim()
-        .to_string()
+        .to_string();
+    if title.is_empty() {
+        "Untitled".to_string()
+    } else {
+        title
+    }
 }
 
 fn local_copilot_history_root() -> Option<PathBuf> {
@@ -6267,7 +6349,9 @@ mod tests {
                 token_data_partial INTEGER NOT NULL,
                 last_model TEXT NOT NULL,
                 turn_count INTEGER NOT NULL,
-                last_seen_ms INTEGER NOT NULL
+                last_seen_ms INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                repository TEXT NOT NULL DEFAULT 'copilot-mission-control'
             );
             "#,
         )
@@ -6277,8 +6361,8 @@ mod tests {
             r#"
             INSERT INTO sessions (
                 session_id_hash, output_tokens, input_tokens, token_data_partial,
-                last_model, turn_count, last_seen_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                last_model, turn_count, last_seen_ms, title
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 "abcdef1234567890",
@@ -6287,17 +6371,111 @@ mod tests {
                 0_i64,
                 "gpt-5.5",
                 7_i64,
-                now as i64
+                now as i64,
+                "Improve Session Name Display"
             ],
         )
         .expect("insert session row");
+        conn.execute(
+            r#"
+            INSERT INTO sessions (
+                session_id_hash, output_tokens, input_tokens, token_data_partial,
+                last_model, turn_count, last_seen_ms, title
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+            params![
+                "0123456789abcdef",
+                10_000_i64,
+                1_000_i64,
+                0_i64,
+                "gpt-5.5",
+                1_i64,
+                now as i64,
+                ""
+            ],
+        )
+        .expect("insert untitled session row");
 
         let rows = token_hotspots(&conn, &local_day(now)).expect("token hotspots");
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].label.contains("7 turns\nSession abcdef12"));
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0]
+            .label
+            .contains("7 turns\nImprove Session Name Display (abcdef12)"));
         assert_eq!(rows[0].category, "gpt-5.5");
         assert_eq!(rows[0].value, 123_456);
         assert_eq!(rows[0].secondary_value, 12_345);
+        // Sessions without a friendly title fall back to the short hash.
+        assert!(rows[1].label.contains("1 turn\nSession 01234567"));
+    }
+
+    #[test]
+    fn block_scalar_workspace_title_is_used_for_local_history() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "cmc_analytics_workspace_title_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp session dir");
+        std::fs::write(
+            dir.join("workspace.yaml"),
+            concat!(
+                "repository: DanWahlin/agent-mission-control\n",
+                "branch: main\n",
+                "name: |-\n",
+                "  Investigate Session Titles\n",
+            ),
+        )
+        .expect("write workspace");
+
+        let metadata = read_local_session_metadata(&dir);
+
+        assert_eq!(metadata.title, "Investigate Session Titles");
+        assert!(metadata.has_repository);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_history_metadata_without_repo_is_not_session_scoped() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "cmc_analytics_no_repo_metadata_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp session dir");
+        std::fs::write(
+            dir.join("workspace.yaml"),
+            concat!("branch: main\n", "name: Mission Control Chat\n"),
+        )
+        .expect("write workspace");
+
+        let metadata = read_local_session_metadata(&dir);
+
+        assert!(!metadata.has_repository);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_history_metadata_with_marker_is_mission_control_analytics() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "cmc_analytics_marker_metadata_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp session dir");
+        std::fs::write(
+            dir.join("workspace.yaml"),
+            format!(
+                "repository: DanWahlin/agent-mission-control\nbranch: main\nname: {}\n",
+                MISSION_CONTROL_ANALYTICS_MARKER
+            ),
+        )
+        .expect("write workspace");
+
+        let metadata = read_local_session_metadata(&dir);
+
+        assert!(metadata.has_repository);
+        assert!(metadata.is_mission_control_analytics);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -6417,6 +6595,8 @@ mod tests {
                 repository: "copilot-mission-control".to_string(),
                 branch: "main".to_string(),
                 title: "Build Daily Log".to_string(),
+                has_repository: true,
+                is_mission_control_analytics: false,
             },
             0,
             unix_ms_now(),
@@ -6479,6 +6659,8 @@ mod tests {
                 repository: "copilot-mission-control".to_string(),
                 branch: "main".to_string(),
                 title: "Cross Midnight".to_string(),
+                has_repository: true,
+                is_mission_control_analytics: false,
             },
             0,
             unix_ms_now(),

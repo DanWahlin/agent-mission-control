@@ -177,7 +177,7 @@ test.describe('Agent Mission Control app shell', () => {
               title: 'Recommendations',
               cards: [
                 { title: 'Review Repeated Tool Failures', body: 'Commands failed twice.', severity: 'review', metric: 'tool_failures' },
-                { title: 'Investigate Token Hotspot', body: 'Session abc12345 produced 2400 output tokens.', severity: 'review', metric: 'output_tokens' },
+                { title: 'Investigate Token Hotspot', body: 'Build Mission Control produced 2400 output tokens.', severity: 'review', metric: 'output_tokens' },
                 { title: 'Model Mix Context', body: 'gpt-5.5 appears most often in this range.', severity: 'info', metric: 'model_mix' },
               ],
             },
@@ -260,7 +260,9 @@ test.describe('Agent Mission Control app shell', () => {
     await expect(page.locator('.analytics-mcp-switch.on')).toContainText('On');
     await expect(page.locator('.analytics-mcp-switch.off')).toContainText('Off');
     await expect(page.locator('.analytics-table-tool-failures')).toContainText('github-mcp-server-get_file_contents');
-    await expect(page.locator('.analytics-artifact').filter({ hasText: 'Tool and Failure Changes' }).locator('.analytics-table-comparison')).toContainText('Delta Calls/Failures');
+    const toolChangeHeaders = page.locator('.analytics-artifact').filter({ hasText: 'Tool and Failure Changes' }).locator('.analytics-table-comparison th .analytics-heading-stack');
+    await expect(toolChangeHeaders).toHaveCount(3);
+    await expect(toolChangeHeaders).toContainText(['CurrentCalls /Failures', 'PreviousCalls /Failures', 'DeltaCalls /Failures']);
     const artifactTitles = await page.locator('.analytics-artifact h3').allTextContents();
     expect(artifactTitles.slice(-2)).toEqual(['Tool Failures', 'Tool and Failure Changes']);
     await expect(page.locator('#analytics-chat-transcript')).toContainText('Active window is estimated.');

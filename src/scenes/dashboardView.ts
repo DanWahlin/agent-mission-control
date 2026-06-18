@@ -197,18 +197,32 @@ function sessionPickerRow(
 }
 
 function sessionOptionRow(session: CopilotSessionSummary, index: number) {
+  const shortId = session.id.length > 8 ? session.id.slice(0, 8) : session.id;
+  const sessionName = cleanSessionLabel(session.session_name);
+  const title = cleanSessionLabel(session.title);
+  const repository = cleanSessionLabel(session.repository);
+  const branch = cleanSessionLabel(session.branch);
   return {
     id: session.id,
     index,
-    title: session.title || session.id,
-    sessionName: session.session_name || '',
-    repository: session.repository || '',
-    branch: session.branch || '',
-    shortId: session.id.length > 8 ? session.id.slice(0, 8) : session.id,
+    title: sessionName || title || repository || `Session ${shortId}`,
+    sessionName,
+    repository,
+    branch,
+    shortId,
     status: session.status,
     isActive: session.is_active,
     statusLabel: session.is_active ? 'active' : 'idle',
   };
+}
+
+function cleanSessionLabel(value?: string | null): string {
+  const text = String(value || '').trim();
+  const normalized = text.toLowerCase();
+  if (!text || normalized === 'unknown' || normalized === 'unknown repo' || normalized === 'unknown repository' || normalized === '|-') {
+    return '';
+  }
+  return text;
 }
 
 function buildSelectedSessionView(

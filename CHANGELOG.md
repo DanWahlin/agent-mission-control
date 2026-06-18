@@ -6,6 +6,10 @@ All notable changes to Agent Mission Control.
 ### 🐛 Bug Fixes
 
 - Fix cross-midnight day bucketing for per-model token totals in History
+
+### ⚙️ CI/CD & Build
+
+- Release v0.2.2
 ## [0.2.1] - 2026-06-16
 
 ### 🐛 Bug Fixes

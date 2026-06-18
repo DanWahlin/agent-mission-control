@@ -1762,12 +1762,8 @@ fn build_activity_signal_buckets(
     events: &[AgentEventSummary],
     generated_at_ms: u64,
 ) -> Vec<AgentActivitySignalBucket> {
-    let history_buckets = build_history_buckets(
-        events,
-        generated_at_ms,
-        HOUR_MS,
-        HISTORY_HOUR_BUCKETS,
-    );
+    let history_buckets =
+        build_history_buckets(events, generated_at_ms, HOUR_MS, HISTORY_HOUR_BUCKETS);
     let mut buckets: Vec<AgentActivitySignalBucket> = history_buckets
         .into_iter()
         .map(|bucket| AgentActivitySignalBucket {
@@ -1879,16 +1875,14 @@ fn build_session_activity_signal_from_path(
                 bucket.turn_count += 1;
             }
             event if event == schema.events.tool_complete => {
-                let success =
-                    bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
+                let success = bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
                 if !success {
                     bucket.failure_count += 1;
                 }
                 continue;
             }
             event if event == schema.events.hook_complete => {
-                let success =
-                    bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
+                let success = bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
                 if !success {
                     bucket.failure_count += 1;
                 }
@@ -2677,9 +2671,15 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
             .to_string();
         let workspace_path = first_existing_child(&session_path, &schema.session.workspace_files);
         let events_path = first_existing_child(&session_path, &schema.session.events_files);
+        let workspace = parse_workspace(&workspace_path, &schema);
+        if workspace_marks_mission_control_analytics_session(&workspace) {
+            continue;
+        }
+        let Some(repository) = workspace_repository_label(&workspace) else {
+            continue;
+        };
         active_session_paths.insert(session_path.clone());
         active_events_paths.insert(events_path.clone());
-        let workspace = parse_workspace(&workspace_path, &schema);
         let session_name = sanitize_session_title(workspace.get("name"));
         let age_seconds = now
             .duration_since(modified)
@@ -2689,19 +2689,8 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
             provider: provider.to_string(),
             id: session_id.chars().take(8).collect(),
             session_name: session_name.clone().unwrap_or_default(),
-            repository: workspace
-                .get("repository")
-                .cloned()
-                .or_else(|| {
-                    workspace
-                        .get("git_root")
-                        .and_then(|p| Path::new(p).file_name()?.to_str().map(str::to_string))
-                })
-                .unwrap_or_else(|| "unknown repo".to_string()),
-            branch: workspace
-                .get("branch")
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_string()),
+            repository,
+            branch: workspace.get("branch").cloned().unwrap_or_default(),
             updated_at: workspace.get("updated_at").cloned().unwrap_or_default(),
             is_active: age_seconds < 10 * 60,
             stale_seconds: age_seconds,
@@ -3300,8 +3289,12 @@ fn parse_workspace(path: &Path, schema: &ProviderSchema) -> BTreeMap<String, Str
         return values;
     };
 
-    for line in content.lines() {
+    let lines = content.lines().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
         let Some((key, value)) = line.split_once(':') else {
+            index += 1;
             continue;
         };
         let key = key.trim();
@@ -3311,16 +3304,63 @@ fn parse_workspace(path: &Path, schema: &ProviderSchema) -> BTreeMap<String, Str
             .iter()
             .any(|allowed| allowed == key)
         {
-            values.insert(key.to_string(), value.trim().trim_matches('"').to_string());
+            let trimmed = value.trim().trim_matches('"');
+            if is_yaml_block_scalar_indicator(trimmed) {
+                let mut block_lines = Vec::new();
+                index += 1;
+                while index < lines.len() {
+                    let next_line = lines[index];
+                    let is_indented = next_line.starts_with(' ') || next_line.starts_with('\t');
+                    if !is_indented && next_line.split_once(':').is_some() {
+                        break;
+                    }
+                    let block_value = next_line.trim();
+                    if !block_value.is_empty() {
+                        block_lines.push(block_value);
+                    }
+                    index += 1;
+                }
+                values.insert(key.to_string(), block_lines.join(" "));
+                continue;
+            }
+            values.insert(key.to_string(), trimmed.to_string());
         }
+        index += 1;
     }
 
     values
 }
 
+fn is_yaml_block_scalar_indicator(value: &str) -> bool {
+    matches!(value, "|" | "|-" | "|+" | ">" | ">-" | ">+")
+}
+
+fn workspace_repository_label(workspace: &BTreeMap<String, String>) -> Option<String> {
+    workspace
+        .get("repository")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            workspace
+                .get("git_root")
+                .and_then(|p| Path::new(p).file_name()?.to_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn workspace_marks_mission_control_analytics_session(workspace: &BTreeMap<String, String>) -> bool {
+    ["name", "summary"].iter().any(|key| {
+        workspace
+            .get(*key)
+            .is_some_and(|value| value.contains(MISSION_CONTROL_ANALYTICS_MARKER))
+    })
+}
+
 fn sanitize_session_title(summary: Option<&String>) -> Option<String> {
     let raw = summary?.trim();
-    if raw.is_empty() {
+    if raw.is_empty() || is_yaml_block_scalar_indicator(raw) {
         return None;
     }
 
@@ -3359,7 +3399,16 @@ fn session_title_from_workspace(
 ) -> String {
     sanitize_session_title(workspace.get("name"))
         .or_else(|| sanitize_session_title(workspace.get("summary")))
-        .unwrap_or_else(|| format!("{} {}", repository, branch))
+        .unwrap_or_else(|| {
+            let repository = repository.trim();
+            let branch = branch.trim();
+            match (repository.is_empty(), branch.is_empty()) {
+                (false, false) => format!("{} {}", repository, branch),
+                (false, true) => repository.to_string(),
+                (true, false) => branch.to_string(),
+                (true, true) => "Session".to_string(),
+            }
+        })
 }
 
 struct PendingToolStart {
@@ -5021,6 +5070,61 @@ mod tests {
 
         assert_eq!(title, "Custom Session Name");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn workspace_block_scalar_name_becomes_session_title() {
+        let schema = test_schema();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cmc_workspace_block_name_test_{}.yaml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            concat!(
+                "repository: DanWahlin/copilot-mission-control\n",
+                "branch: main\n",
+                "name: |-\n",
+                "  Investigate Retained Session Titles\n",
+            ),
+        )
+        .expect("write workspace");
+
+        let workspace = parse_workspace(&path, &schema);
+        let title =
+            session_title_from_workspace(&workspace, "DanWahlin/copilot-mission-control", "main");
+
+        assert_eq!(title, "Investigate Retained Session Titles");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn workspace_without_repository_or_git_root_has_no_session_scope() {
+        let workspace = BTreeMap::from([
+            ("name".to_string(), "Mission Control Chat".to_string()),
+            ("branch".to_string(), "main".to_string()),
+        ]);
+
+        assert_eq!(workspace_repository_label(&workspace), None);
+    }
+
+    #[test]
+    fn workspace_marker_marks_mission_control_analytics_session() {
+        let workspace = BTreeMap::from([
+            (
+                "name".to_string(),
+                MISSION_CONTROL_ANALYTICS_MARKER.to_string(),
+            ),
+            (
+                "repository".to_string(),
+                "DanWahlin/agent-mission-control".to_string(),
+            ),
+        ]);
+
+        assert!(workspace_marks_mission_control_analytics_session(
+            &workspace
+        ));
     }
 
     #[test]

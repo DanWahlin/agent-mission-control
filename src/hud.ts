@@ -568,25 +568,27 @@
 
   function renderInspector() {
     if (!inspectorSession) return;
+    var heading = selectedSessionHeading(inspectorSession);
+    var scope = heading.subtitle || heading.title;
     var sectorCalls = inspectorScope === 'sector' ? filteredCalls() : null;
     if (inspectorToolbar) inspectorToolbar.hidden = inspectorScope === 'sector';
     if (inspectorScope === 'sector' && sectorInspectorContext) {
       if (inspectorTitle) {
         inspectorTitle.innerHTML = '<span class="inspector-title-swatch" style="--swatch:' + escapeHtml(sectorInspectorContext.color || CATEGORY_COLORS[sectorInspectorContext.category] || '#ffd54a') + '"></span>'
-          + escapeHtml((sectorInspectorContext.title || categoryLabel(sectorInspectorContext.category)) + ' details · ' + (inspectorSession.title || inspectorSession.id || 'session'));
+          + escapeHtml((sectorInspectorContext.title || categoryLabel(sectorInspectorContext.category)) + ' details · ' + heading.title);
       }
       if (inspectorSubtitle) {
         var retained = sectorCalls ? sectorCalls.length : 0;
         var total = Number(sectorInspectorContext.count || 0);
-        inspectorSubtitle.textContent = (inspectorSession.repository || 'unknown repo') + ' / ' + (inspectorSession.branch || 'unknown')
+        inspectorSubtitle.textContent = scope
           + ' · ' + retained + ' retained rows · ' + exactNumber(total) + ' selected-session signals';
       }
     } else {
-      if (inspectorTitle) inspectorTitle.textContent = 'Inspector · ' + (inspectorSession.title || inspectorSession.id || 'session');
+      if (inspectorTitle) inspectorTitle.textContent = 'Inspector · ' + heading.title;
       if (inspectorSubtitle) {
         var calls = (inspectorSession.recent_tool_calls || []).length;
         var turns = (inspectorSession.recent_turns || []).length;
-        inspectorSubtitle.textContent = (inspectorSession.repository || 'unknown repo') + ' / ' + (inspectorSession.branch || 'unknown') + ' · ' + calls + ' calls · ' + turns + ' turns';
+        inspectorSubtitle.textContent = scope + ' · ' + calls + ' calls · ' + turns + ' turns';
       }
     }
     if (inspectorScope !== 'sector') {
@@ -1494,6 +1496,10 @@
       var parts = heading.split(' ');
       return '<span class="analytics-heading-stack"><span>' + escapeHtml(parts[0]) + '</span><span>' + escapeHtml(parts[1]) + '</span></span>';
     }
+    if (artifactTitle === 'tool and failure changes' && /^(Current|Previous|Delta) Calls\/Failures?$/.test(heading)) {
+      var match = /^(Current|Previous|Delta) Calls\/(Failures?)$/.exec(heading);
+      return '<span class="analytics-heading-stack"><span>' + escapeHtml(match[1]) + '</span><span>Calls /</span><span>' + escapeHtml(match[2]) + '</span></span>';
+    }
     return escapeHtml(heading);
   }
 
@@ -2016,20 +2022,24 @@
   function sessionOptionLines(opt) {
     var marker = opt && opt.isActive ? '● ' : '○ ';
     var shortId = (opt && (opt.shortId || (opt.id || '').slice(0, 8))) || '';
-    var repository = opt && opt.repository;
-    var title = opt && opt.title;
-    var sessionName = opt && opt.sessionName;
-    var main = repository || title || (opt && opt.id) || 'session';
-    var detail = sessionName || (repository && title !== repository ? title : '');
-    if (detail) {
+    var repository = cleanSessionLabel(opt && opt.repository);
+    var branch = cleanSessionLabel(opt && opt.branch);
+    var title = cleanSessionLabel(opt && opt.title);
+    var sessionName = cleanSessionLabel(opt && opt.sessionName);
+    var main = sessionName || title || repository || (shortId ? 'Session ' + shortId : 'session');
+    var scope = [repository, branch].filter(Boolean).join(' ');
+    var subParts = [];
+    if (scope && scope !== main) subParts.push(scope);
+    if (shortId) subParts.push(shortId);
+    if (subParts.length) {
       return {
         main: marker + main,
-        sub: detail + (shortId ? ' · ' + shortId : ''),
+        sub: subParts.join(' · '),
       };
     }
     return {
       main: marker + main,
-      sub: shortId,
+      sub: '',
     };
   }
 
@@ -2046,13 +2056,14 @@
 
   function selectedSessionHeading(session) {
     if (!session) return { title: '', subtitle: '' };
-    if (session.session_name) {
-      return {
-        title: session.repository || session.title || session.id,
-        subtitle: session.session_name,
-      };
-    }
-    return { title: session.title || session.id, subtitle: '' };
+    var shortId = shortSessionId(session.id);
+    var sessionName = cleanSessionLabel(session.session_name);
+    var title = cleanSessionLabel(session.title);
+    var repository = cleanSessionLabel(session.repository);
+    var branch = cleanSessionLabel(session.branch);
+    var heading = sessionName || title || repository || 'Session ' + shortId;
+    var scope = [repository, branch].filter(Boolean).join(' / ');
+    return { title: heading, subtitle: scope && scope !== heading ? scope : '' };
   }
 
   function closeSessionMenu() {
@@ -2978,6 +2989,13 @@
   function shortSessionId(id) {
     var text = String(id || '');
     return text.length > 8 ? text.slice(0, 8) : text || 'unknown';
+  }
+
+  function cleanSessionLabel(value) {
+    var text = String(value || '').trim();
+    var normalized = text.toLowerCase();
+    if (!text || normalized === 'unknown' || normalized === 'unknown repo' || normalized === 'unknown repository' || normalized === '|-') return '';
+    return text;
   }
 
   function cssToken(value) {

@@ -1635,26 +1635,33 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(sector.locator('[data-cmc-action="quarter-details"]')).toBeVisible();
   });
 
-  test('session dropdown shows custom session names as a secondary line', async ({ page }) => {
+  test('session dropdown prefers friendly session names and hides unknown repository placeholders', async ({ page }) => {
     await page.evaluate(() => {
       const fixture = (window as any).__missionControlFixture;
       const beta = fixture.sessions.find((session: any) => session.id === 'beta4567');
       beta.title = 'Fix Missing Input Tokens Display';
       beta.session_name = 'Fix Missing Input Tokens Display';
+      const gamma = fixture.sessions.find((session: any) => session.id === 'gamma890');
+      gamma.title = 'Investigate Retained Session';
+      gamma.repository = 'unknown repo';
+      gamma.branch = '|-';
       window.__cmcOnAgentActivityChanged?.();
     });
 
-    await expect(page.locator('#dom-session .cmc-session-title')).toHaveText('copilot-mission-control');
-    await expect(page.locator('#dom-session .cmc-session-subtitle')).toHaveText('Fix Missing Input Tokens Display');
+    await expect(page.locator('#dom-session .cmc-session-title')).toHaveText('Fix Missing Input Tokens Display');
+    await expect(page.locator('#dom-session .cmc-session-subtitle')).toHaveText('copilot-mission-control / main');
 
     await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
     const selectedOption = page.locator('#dom-session .cmc-session-option.selected');
-    await expect(selectedOption.locator('.cmc-session-option-main')).toContainText('copilot-mission-control');
+    await expect(selectedOption.locator('.cmc-session-option-main')).toContainText('Fix Missing Input Tokens Display');
     await expect(selectedOption.locator('.cmc-session-status-label')).toHaveText('active');
-    await expect(selectedOption.locator('.cmc-session-option-sub')).toContainText('Fix Missing Input Tokens Display');
-    await expect(page.locator('#dom-session .cmc-session-option').filter({ hasText: 'Build Mission Control · alpha123' })).toHaveCount(1);
-    const idleOption = page.locator('#dom-session .cmc-session-option').filter({ hasText: 'Research UI · gamma890' });
+    await expect(selectedOption.locator('.cmc-session-option-sub')).toContainText('copilot-mission-control main · beta4567');
+    await expect(page.locator('#dom-session .cmc-session-option').filter({ hasText: 'Build Mission Control' }).filter({ hasText: 'copilot-mission-control main · alpha123' })).toHaveCount(1);
+    const idleOption = page.locator('#dom-session .cmc-session-option').filter({ hasText: 'Investigate Retained Session' });
     await expect(idleOption).toHaveCount(1);
+    await expect(idleOption).not.toContainText('unknown repo');
+    await expect(idleOption).not.toContainText('|-');
+    await expect(idleOption.locator('.cmc-session-option-sub')).toHaveText('gamma890');
     await expect(idleOption.locator('.cmc-session-status-label')).toHaveText('idle');
   });
 
