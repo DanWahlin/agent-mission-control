@@ -304,6 +304,96 @@ test.describe('Agent Mission Control app shell', () => {
     await expect(page.locator('.analytics-chat-prompt-list')).toBeHidden();
   });
 
+  test('content routes use the full available window width', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 900 });
+
+    await page.locator('#history-route-btn').click();
+    const historyLayout = await page.evaluate(() => {
+      const screen = document.querySelector('#history-screen') as HTMLElement;
+      const shell = document.querySelector('.history-shell') as HTMLElement;
+      const screenRect = screen.getBoundingClientRect();
+      const screenStyle = getComputedStyle(screen);
+      return {
+        availableWidth: screenRect.width - parseFloat(screenStyle.paddingLeft) - parseFloat(screenStyle.paddingRight),
+        shellWidth: shell.getBoundingClientRect().width,
+      };
+    });
+
+    await page.locator('#analytics-route-btn').click();
+    if (await page.locator('#analytics-token-notice.visible').count()) {
+      await page.locator('#analytics-token-ack').click();
+    }
+    const chatLayout = await page.evaluate(() => {
+      const screen = document.querySelector('#analytics-chat-screen') as HTMLElement;
+      const shell = document.querySelector('.analytics-chat-shell') as HTMLElement;
+      const screenRect = screen.getBoundingClientRect();
+      const screenStyle = getComputedStyle(screen);
+      return {
+        availableWidth: screenRect.width - parseFloat(screenStyle.paddingLeft) - parseFloat(screenStyle.paddingRight),
+        shellWidth: shell.getBoundingClientRect().width,
+      };
+    });
+
+    expect(historyLayout.shellWidth).toBeCloseTo(historyLayout.availableWidth, 0);
+    expect(chatLayout.shellWidth).toBeCloseTo(chatLayout.availableWidth, 0);
+    expect(chatLayout.shellWidth).toBeCloseTo(historyLayout.shellWidth, 0);
+  });
+
+  test('screen routes use subtle enter animations with reduced-motion support', async ({ page }) => {
+    const animation = await page.evaluate(() => {
+      const getRouteAnimation = (selector: string) => {
+        const el = document.querySelector(selector) as HTMLElement;
+        return getComputedStyle(el).animationName;
+      };
+
+      document.body.classList.add('history-route');
+      document.querySelector('#history-screen')?.classList.add('cmc-route-entering');
+      const historyAnimation = getRouteAnimation('#history-screen');
+      document.body.classList.remove('history-route');
+      document.body.classList.add('analytics-route');
+      document.querySelector('#analytics-chat-screen')?.classList.add('cmc-route-entering');
+      const analyticsAnimation = getRouteAnimation('#analytics-chat-screen');
+      document.body.classList.remove('analytics-route');
+      document.querySelector('#game')?.classList.add('cmc-route-entering');
+      const missionAnimation = getRouteAnimation('#game');
+
+      return { historyAnimation, analyticsAnimation, missionAnimation };
+    });
+
+    expect(animation).toEqual({
+      historyAnimation: 'cmc-route-enter',
+      analyticsAnimation: 'cmc-route-enter',
+      missionAnimation: 'cmc-route-enter',
+    });
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const reducedMotionAnimation = await page.evaluate(() => {
+      const getRouteAnimation = (selector: string) => {
+        const el = document.querySelector(selector) as HTMLElement;
+        return getComputedStyle(el).animationName;
+      };
+
+      document.body.classList.add('history-route');
+      document.querySelector('#history-screen')?.classList.add('cmc-route-entering');
+      const historyAnimation = getRouteAnimation('#history-screen');
+      document.body.classList.remove('history-route');
+      document.body.classList.add('analytics-route');
+      document.querySelector('#analytics-chat-screen')?.classList.add('cmc-route-entering');
+      const analyticsAnimation = getRouteAnimation('#analytics-chat-screen');
+      document.body.classList.remove('analytics-route');
+      document.querySelector('#game')?.classList.add('cmc-route-entering');
+      const missionAnimation = getRouteAnimation('#game');
+
+      return { historyAnimation, analyticsAnimation, missionAnimation };
+    });
+
+    expect(reducedMotionAnimation).toEqual({
+      historyAnimation: 'none',
+      analyticsAnimation: 'none',
+      missionAnimation: 'none',
+    });
+  });
+
   test('analytics chat shows background indexing status', async ({ page }) => {
     await page.evaluate(() => {
       (window as any).__analyticsChatFixture = {

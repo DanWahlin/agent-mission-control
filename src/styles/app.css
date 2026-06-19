@@ -10,6 +10,9 @@
   --cmc-scrollbar-thumb-hover-end: #9fb0ff;
   --cmc-scrollbar-size: 16px;
   --cmc-scrollbar-thumb-border: 3px;
+  --cmc-route-screen-padding: 24px;
+  --cmc-route-transition-duration: 520ms;
+  --cmc-route-transition-ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 html, body {
   margin: 0;
@@ -772,6 +775,22 @@ body.theme-light .inspector-related-meta { color: #64748b; }
 }
 body.theme-light #game { background: #ffffff; }
 canvas { display: block; }
+@keyframes cmc-route-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+#game.cmc-route-entering,
+#dashboard-overlay.cmc-route-entering {
+  animation: cmc-route-enter var(--cmc-route-transition-duration) var(--cmc-route-transition-ease) both;
+}
+#game.cmc-route-entering canvas,
+#dashboard-overlay.cmc-route-entering .cmc-panel {
+  animation: cmc-route-enter var(--cmc-route-transition-duration) var(--cmc-route-transition-ease) both;
+}
 #dashboard-overlay {
   position: fixed;
   top: 40px;
@@ -781,6 +800,14 @@ canvas { display: block; }
   z-index: 6;
   pointer-events: none;
   font-family: var(--cmc-ui-font);
+}
+@media (prefers-reduced-motion: reduce) {
+  #game.cmc-route-entering,
+  #dashboard-overlay.cmc-route-entering,
+  #game.cmc-route-entering canvas,
+  #dashboard-overlay.cmc-route-entering .cmc-panel {
+    animation: none;
+  }
 }
 .dashboard-loading {
   position: fixed;

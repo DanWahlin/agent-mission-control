@@ -1807,6 +1807,23 @@
     if (analyticsChatScreen) analyticsChatScreen.scrollTop = 0;
   }
 
+  function triggerRouteEnterAnimation(route) {
+    var routeTargets = [gameRoot, dashboardOverlay, historyScreen, analyticsChatScreen].filter(Boolean);
+    var activeTargets = route === 'history'
+      ? [historyScreen]
+      : route === 'analytics'
+        ? [analyticsChatScreen]
+        : [gameRoot, dashboardOverlay];
+    routeTargets.forEach(function (el) {
+      el.classList.remove('cmc-route-entering');
+    });
+    activeTargets.forEach(function (el) {
+      if (!el) return;
+      void el.offsetWidth;
+      el.classList.add('cmc-route-entering');
+    });
+  }
+
   function applyAppRoute(route, options) {
     var next = route === 'history' ? 'history' : (route === 'analytics' ? 'analytics' : 'mission');
     var previous = appRoute;
@@ -1822,6 +1839,7 @@
     [gameRoot, dashboardOverlay, domLoading].forEach(function (el) {
       if (el) el.setAttribute('aria-hidden', appRoute === 'mission' ? 'false' : 'true');
     });
+    if (previous !== appRoute) triggerRouteEnterAnimation(appRoute);
     if (!options || options.syncHash !== false) syncRouteHash(appRoute);
     if (appRoute === 'history') {
       if (previous === 'analytics') unloadAnalyticsRoute();

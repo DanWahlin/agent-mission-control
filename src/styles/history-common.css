@@ -29,7 +29,7 @@
   overflow-y: auto;
   scrollbar-gutter: stable;
   box-sizing: border-box;
-  padding: 24px;
+  padding: var(--cmc-route-screen-padding);
   color: var(--history-text);
   background: #05081a;
   font-family: var(--cmc-ui-font);
@@ -56,7 +56,21 @@
   background: repeating-linear-gradient(180deg, transparent 0 7px, rgba(255, 255, 255, 0.08) 8px);
   mix-blend-mode: screen;
 }
-body.history-route #history-screen { display: block; }
+body.history-route #history-screen {
+  display: block;
+}
+#history-screen.cmc-route-entering {
+  animation: cmc-route-enter var(--cmc-route-transition-duration) var(--cmc-route-transition-ease) both;
+}
+#history-screen.cmc-route-entering .history-shell {
+  animation: cmc-route-enter var(--cmc-route-transition-duration) var(--cmc-route-transition-ease) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  #history-screen.cmc-route-entering,
+  #history-screen.cmc-route-entering .history-shell {
+    animation: none;
+  }
+}
 body.theme-light #history-screen {
   --history-card-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 253, 0.98));
   --history-card-border: #b8c5d7;
@@ -94,7 +108,7 @@ body.theme-light .history-dossier-id {
 .history-shell {
   position: relative;
   z-index: 1;
-  width: min(1440px, 100%);
+  width: 100%;
   margin: 0 auto;
 }
 .history-header {
