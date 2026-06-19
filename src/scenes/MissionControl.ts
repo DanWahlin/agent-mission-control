@@ -497,7 +497,6 @@ export class MissionControlScene extends Phaser.Scene {
     this.inspectedQuarterKey = prefs.inspectedQuarterKey ?? null;
     this.activityResetAtMs = validResetAtMs(prefs.activityResetAtMs);
     this.activityResetTokenBaselines = prefs.activityResetTokenBaselines ?? {};
-    if (prefs.replayPaused) this.replayPaused = true;
     if (typeof prefs.lastSelectedSessionId === 'string') {
       // Mark as user-selected so pickSelectedSession respects the
       // restored id instead of jumping back to the needs-attention

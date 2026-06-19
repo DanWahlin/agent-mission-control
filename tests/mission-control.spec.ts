@@ -691,6 +691,25 @@ test.describe('Agent Mission Control — Startup', () => {
   });
 });
 
+test.describe('Agent Mission Control — Replay startup', () => {
+  test('defaults the time travel slider to live even if pause was persisted', async ({ page }) => {
+    await page.addInitScript((fixtureArg) => {
+      window.localStorage.setItem('cmc_prefs', JSON.stringify({ replayPaused: true }));
+      (window as any).__missionControlFixture = fixtureArg;
+    }, MISSION_FIXTURE);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    const state = await getMissionState(page);
+    expect(state!.replayState.total).toBe(4);
+    expect(state!.replayState.cursor).toBe(4);
+    expect(state!.replayState.atLive).toBe(true);
+    expect(state!.replayState.paused).toBe(false);
+    await expect(page.locator('#dom-replay [data-cmc-action="replay-live"]')).toHaveText('LIVE');
+    await expect(page.locator('#dom-feed .cmc-panel-title')).toHaveText('Recent Activity Feed');
+  });
+});
+
 test.describe('Agent Mission Control — History', () => {
   test.beforeEach(async ({ page }) => {
     await installFixture(page);
