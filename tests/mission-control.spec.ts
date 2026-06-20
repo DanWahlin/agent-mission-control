@@ -55,7 +55,10 @@ const MISSION_FIXTURE = {
     ], token_checkpoints: [
       { timestamp: '2026-05-21T07:14:00Z', input_tokens: 1200, output_tokens: 2920 },
     ] },
-    { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '', is_active: false, status: 'idle', event_count: 38, tool_count: 7, write_count: 0, read_count: 3, command_count: 0, web_count: 4, task_count: 0, delegates_count: 0, skills_count: 0, court_count: 0, mcp_count: 0, hooks_count: 0, error_count: 0, input_tokens: 500, output_tokens: 1000, last_tool: 'web_fetch', last_event_kind: 'tool.execution_start', last_event_category: 'signal', stale_seconds: 900 },
+    { id: 'gamma890', title: 'Research UI', repository: 'docs', branch: 'main', updated_at: '', is_active: false, status: 'idle', event_count: 38, tool_count: 7, write_count: 0, read_count: 3, command_count: 0, web_count: 4, task_count: 0, delegates_count: 0, skills_count: 0, court_count: 0, mcp_count: 0, hooks_count: 0, error_count: 0, input_tokens: 500, output_tokens: 1000, last_tool: 'web_fetch', last_event_kind: 'tool.execution_start', last_event_category: 'signal', stale_seconds: 900, recent_turns: [
+      { id: 'gamma-turn-1', started_at: '2026-05-21T07:10:00Z', ended_at: '2026-05-21T07:11:00Z', status: 'complete', tool_count: 2, tools: ['web_fetch'], failure_count: 0, categories: ['signal'], output_tokens: 600 },
+      { id: 'gamma-turn-2', started_at: '2026-05-21T07:11:30Z', ended_at: '2026-05-21T07:12:00Z', status: 'complete', tool_count: 1, tools: ['view'], failure_count: 0, categories: ['library'], output_tokens: 1000 },
+    ] },
   ],
   tools: [
     { name: 'view', category: 'library', count: 14 },
@@ -66,8 +69,11 @@ const MISSION_FIXTURE = {
     { name: 'web_fetch', category: 'signal', count: 4 },
   ],
   recent_events: [
+    { session_id: 'alpha123', timestamp: '2026-05-21T07:14:30Z', kind: 'assistant.turn_start', tool: 'thinking', category: 'thinking', success: true },
     { session_id: 'alpha123', timestamp: '2026-05-21T07:15:00Z', kind: 'tool.execution_start', tool: 'apply_patch', category: 'edits', success: true },
+    { session_id: 'beta4567', timestamp: '2026-05-21T07:13:30Z', kind: 'assistant.turn_start', tool: 'thinking', category: 'thinking', success: true },
     { session_id: 'beta4567', timestamp: '2026-05-21T07:14:00Z', kind: 'tool.execution_complete', tool: 'tool complete', category: 'alert', success: false },
+    { session_id: 'alpha123', timestamp: '2026-05-21T07:12:30Z', kind: 'assistant.turn_start', tool: 'thinking', category: 'thinking', success: true },
     { session_id: 'alpha123', timestamp: '2026-05-21T07:13:00Z', kind: 'tool.execution_start', tool: 'view', category: 'library', success: true },
     { session_id: 'gamma890', timestamp: '2026-05-21T07:12:00Z', kind: 'tool.execution_start', tool: 'web_fetch', category: 'signal', success: true },
   ],
@@ -425,6 +431,11 @@ async function getMissionState(page: Page) {
       selectedOutputTokens: scene.selectedSession?.output_tokens ?? 0,
       selectedToolCount: scene.selectedSession?.tool_count ?? 0,
       eventLogLength: scene.eventLog?.length ?? 0,
+      eventLogSessionIds: Array.from(new Set((scene.eventLog ?? []).map((event: any) => event.session_id))),
+      eventLogTools: (scene.eventLog ?? []).map((event: any) => event.tool),
+      replayTimelineLength: scene.replayTimeline?.length ?? 0,
+      replayTimelineKinds: Array.from(new Set((scene.replayTimeline ?? []).map((event: any) => event.kind))),
+      replayTimelineTimestamps: (scene.replayTimeline ?? []).map((event: any) => event.timestamp),
       activityResetAtMs: scene.activityResetAtMs ?? null,
       sessionPickerRows: scene.sessionPickerRows ?? [],
       activeEventPulseCount: scene.activeEventPulseCount ?? 0,
@@ -701,8 +712,8 @@ test.describe('Agent Mission Control — Replay startup', () => {
     await waitForGame(page);
 
     const state = await getMissionState(page);
-    expect(state!.replayState.total).toBe(4);
-    expect(state!.replayState.cursor).toBe(4);
+    expect(state!.replayState.total).toBe(1);
+    expect(state!.replayState.cursor).toBe(1);
     expect(state!.replayState.atLive).toBe(true);
     expect(state!.replayState.paused).toBe(false);
     await expect(page.locator('#dom-replay [data-cmc-action="replay-live"]')).toHaveText('LIVE');
@@ -1596,6 +1607,7 @@ test.describe('Agent Mission Control — Dashboard', () => {
   });
 
   test('Recent Activity Feed fills remaining vertical space and scrolls overflow', async ({ page }) => {
+    await selectSession(page, 'alpha123');
     await page.evaluate(() => {
       const fixture = (window as any).__missionControlFixture;
       fixture.recent_events = Array.from({ length: 12 }, (_, index) => ({
@@ -1830,7 +1842,9 @@ test.describe('Agent Mission Control — Dashboard', () => {
     const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
     alpha.input_tokens = 0;
     alpha.output_tokens = 4200;
-    alpha.token_checkpoints = [];
+    alpha.token_checkpoints = [
+      { timestamp: '2026-05-21T07:13:00Z', input_tokens: 0, output_tokens: 900 },
+    ];
 
     await page.addInitScript((f) => {
       (window as any).__missionControlFixture = f;
@@ -1891,7 +1905,7 @@ test.describe('Agent Mission Control — Dashboard', () => {
     // stay empty during bootstrap.
     expect(Object.keys(state!.quarterEventBadges).length).toBe(0);
     // Replay log still ingested the events — just without pulses.
-    expect(state!.replayState.total).toBe(4);
+    expect(state!.replayState.total).toBe(1);
   });
 
   test('post-bootstrap watcher push queues live pulses for new events', async ({ page }) => {
@@ -1903,7 +1917,7 @@ test.describe('Agent Mission Control — Dashboard', () => {
     const queued = await page.evaluate(() => {
       const fixture = (window as any).__missionControlFixture;
       const newEvent = {
-        session_id: 'alpha123',
+        session_id: 'beta4567',
         timestamp: new Date().toISOString(),
         kind: 'tool.execution_start',
         tool: 'bash',
@@ -2005,16 +2019,26 @@ test.describe('Agent Mission Control — Dashboard', () => {
     expect(renderStats.fullRenders).toBe(0);
   });
 
-  test('replay timeline ingests events into the log and stays live by default', async ({ page }) => {
+  test('replay timeline is scoped to the selected session and stays live by default', async ({ page }) => {
     const state = await getMissionState(page);
-    expect(state!.replayState.total).toBe(4);
-    expect(state!.replayState.cursor).toBe(4);
+    expect(state!.selectedSessionId).toBe('beta4567');
+    expect(state!.eventLogSessionIds).toEqual(['beta4567']);
+    expect(state!.replayTimelineKinds).toEqual(['assistant.turn_start']);
+    expect(state!.replayState.total).toBe(1);
+    expect(state!.replayState.cursor).toBe(1);
     expect(state!.replayState.atLive).toBe(true);
     expect(state!.replayState.paused).toBe(false);
     await expect(page.locator('#dom-replay [data-cmc-action="replay-toggle"]')).toBeVisible();
     await expect(page.locator('#dom-replay [data-cmc-action="replay-seek"]')).toBeVisible();
     await expect(page.locator('#dom-feed .cmc-panel-title')).toHaveText('Recent Activity Feed');
-    await expect(page.locator('#dom-replay .cmc-replay-status')).toContainText('Recent activity replay');
+    await expect(page.locator('#dom-replay .cmc-replay-status')).toContainText('Selected session turn replay');
+
+    await selectSession(page, 'alpha123');
+    const alpha = await getMissionState(page);
+    expect(alpha!.eventLogSessionIds).toEqual(['alpha123']);
+    expect(alpha!.replayTimelineKinds).toEqual(['assistant.turn_start']);
+    expect(alpha!.replayState.total).toBe(2);
+    expect(alpha!.replayState.cursor).toBe(2);
   });
 
   test('replay controls align with the timeline rail', async ({ page }) => {
@@ -2043,8 +2067,30 @@ test.describe('Agent Mission Control — Dashboard', () => {
     expect(Math.abs(metrics.toggle.center - metrics.rail.center)).toBeLessThanOrEqual(0.5);
     expect(Math.abs(metrics.live.center - metrics.rail.center)).toBeLessThanOrEqual(0.5);
     expect(Math.abs(metrics.panel.center - metrics.rail.center)).toBeLessThanOrEqual(0.5);
-    expect(metrics.status.top).toBeGreaterThan(metrics.rail.bottom);
+    expect(metrics.status.top).toBeGreaterThanOrEqual(metrics.rail.bottom + 8);
     expect(metrics.status.bottom).toBeLessThanOrEqual(metrics.panel.bottom);
+  });
+
+  test('idle sessions use recent turns as replay checkpoints when recent events are absent', async ({ page }) => {
+    await selectSession(page, 'gamma890');
+    const state = await getMissionState(page);
+    expect(state!.selectedSessionId).toBe('gamma890');
+    expect(state!.eventLogSessionIds).toEqual(['gamma890']);
+    expect(state!.eventLogTools).toContain('web_fetch');
+    expect(state!.replayTimelineKinds).toEqual(['assistant.turn_start']);
+    expect(state!.replayState.total).toBe(2);
+    expect(state!.replayState.cursor).toBe(2);
+    await expect(page.locator('#dom-replay .cmc-replay-status')).toContainText('2 / 2');
+  });
+
+  test('selected session replay sorts raw events newest-first before ingesting', async ({ page }) => {
+    await selectSession(page, 'alpha123');
+    const state = await getMissionState(page);
+    expect(state!.eventLogTools).toEqual(['thinking', 'view', 'thinking', 'apply_patch']);
+    expect(state!.replayTimelineTimestamps).toEqual([
+      '2026-05-21T07:12:30Z',
+      '2026-05-21T07:14:30Z',
+    ]);
   });
 
   test('clicking pause freezes replay; clicking live resumes', async ({ page }) => {
@@ -2061,19 +2107,32 @@ test.describe('Agent Mission Control — Dashboard', () => {
   });
 
   test('clicking the timeline scrubs the cursor backward', async ({ page }) => {
-    const before = await getMissionState(page);
-    expect(before!.replayState.total).toBe(4);
+    await selectSession(page, 'alpha123');
+    const selected = await getMissionState(page);
+    expect(selected!.replayState.total).toBe(2);
     const track = page.locator('#dom-replay [data-cmc-action="replay-seek"]');
     const box = await track.boundingBox();
     expect(box).toBeTruthy();
     await page.mouse.click(box!.x + box!.width * 0.25, box!.y + box!.height / 2);
     await page.waitForTimeout(120);
     const after = await getMissionState(page);
-    expect(after!.replayState.cursor).toBeLessThan(before!.replayState.cursor);
+    expect(after!.replayState.cursor).toBeLessThan(selected!.replayState.cursor);
     expect(after!.replayState.atLive).toBe(false);
     await expect(page.locator('#dom-feed .cmc-panel-title')).toHaveText('Recent Activity Feed · replay cursor');
-    await expect(page.locator('#dom-feed .cmc-feed-row')).toContainText('web_fetch');
-    await expect(page.locator('#dom-feed .cmc-feed-row')).toContainText('at cursor');
+    await expect(page.locator('#dom-feed')).toContainText('view');
+    await expect(page.locator('#dom-feed .cmc-feed-row').first()).toContainText('at cursor');
+  });
+
+  test('turn replay emits Phaser pulses for raw events inside each turn', async ({ page }) => {
+    await selectSession(page, 'alpha123');
+    const track = page.locator('#dom-replay [data-cmc-action="replay-seek"]');
+    await track.focus();
+    await page.keyboard.press('Home');
+    await page.waitForTimeout(120);
+    expect((await getMissionState(page))!.replayState.cursor).toBe(0);
+
+    await expect.poll(async () => (await getMissionState(page))!.activeEventPulseCount, { timeout: 1600 })
+      .toBeGreaterThan(0);
   });
 
   test('selected session stats reflect replay cursor activity', async ({ page }) => {
@@ -2088,11 +2147,36 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(meta).toContainText('Last: view started');
     await expect(meta).toContainText('Tool: view');
     await expect(meta).toContainText('Age: at cursor');
-    await expect(meta).toContainText('Tokens in/out: 400 / 900');
+    await expect(meta).toContainText('Tokens in/out: 100 / 200');
 
     await page.mouse.click(box!.x + box!.width * 0.95, box!.y + box!.height / 2);
     await page.waitForTimeout(120);
     await expect(meta).toContainText('Tokens in/out: 1,600 / 4,200');
+  });
+
+  test('replay shows pending input tokens until an input checkpoint exists', async ({ page }) => {
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
+      alpha.input_tokens = 0;
+      alpha.output_tokens = 4200;
+      alpha.token_checkpoints = [];
+      fixture.recent_events = fixture.recent_events.map((event: any) =>
+        event.session_id === 'alpha123' && event.kind === 'tool.execution_start'
+          ? { ...event, output_tokens: event.tool === 'view' ? 900 : 4200 }
+          : event
+      );
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await selectSession(page, 'alpha123');
+    const track = page.locator('#dom-replay [data-cmc-action="replay-seek"]');
+    const box = await track.boundingBox();
+    expect(box).toBeTruthy();
+    await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height / 2);
+    await page.waitForTimeout(120);
+
+    await expect(page.locator('#dom-session .cmc-session-meta')).toContainText('Tokens in/out: pending / 900');
+    await expect(page.locator('#dom-session .cmc-token-pending')).toHaveAttribute('title', /input tokens usually arrive later/i);
   });
 
   test('replay timeline exposes keyboard slider controls', async ({ page }) => {

@@ -108,7 +108,7 @@ body.theme-light .history-dossier-id {
 .history-shell {
   position: relative;
   z-index: 1;
-  width: 100%;
+  width: calc(100vw - (var(--cmc-route-screen-padding) * 2));
   margin: 0 auto;
 }
 .history-header {

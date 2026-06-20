@@ -42,6 +42,7 @@ export interface CopilotSessionSummary {
   turn_count?: number;
   output_tokens: number;
   input_tokens?: number;
+  input_tokens_pending?: boolean;
   last_tool: string;
   last_event_kind?: string;
   last_event_category?: string;

@@ -218,11 +218,13 @@ test.describe('Agent Mission Control app shell', () => {
       const form = document.querySelector('#analytics-chat-form') as HTMLElement;
       const transcript = document.querySelector('#analytics-chat-transcript') as HTMLElement;
       const screen = document.querySelector('#analytics-chat-screen') as HTMLElement;
+      const compose = document.querySelector('.analytics-chat-compose') as HTMLElement;
       return {
         input: input.getBoundingClientRect().toJSON(),
         submit: submit.getBoundingClientRect().toJSON(),
         newChat: newChat.getBoundingClientRect().toJSON(),
         form: form.getBoundingClientRect().toJSON(),
+        compose: compose.getBoundingClientRect().toJSON(),
         newChatText: newChat.textContent?.trim(),
         newChatInsideForm: Boolean(newChat.closest('form')),
         transcript: transcript.getBoundingClientRect().toJSON(),
@@ -233,6 +235,8 @@ test.describe('Agent Mission Control app shell', () => {
     expect(layout.input.height).toBeLessThanOrEqual(56);
     expect(layout.submit.height).toBeLessThanOrEqual(56);
     expect(layout.input.width).toBeGreaterThan(300);
+    expect(layout.compose.width).toBeLessThan(layout.transcript.width);
+    expect(Math.abs((layout.compose.x + layout.compose.width / 2) - (layout.transcript.x + layout.transcript.width / 2))).toBeLessThanOrEqual(1);
     expect(layout.newChatText).toBe('New Chat');
     expect(layout.newChatInsideForm).toBe(false);
     expect(layout.newChat.height).toBeLessThanOrEqual(56);

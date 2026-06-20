@@ -1641,7 +1641,7 @@ body.theme-light #dom-quarter .cmc-panel-title {
 .cmc-replay-rail { position: absolute; left: 0; right: 0; top: 50%; height: 10px; border-radius: 999px; background: #1a2448; overflow: hidden; transform: translateY(-50%); }
 .cmc-replay-fill { height: 100%; border-radius: 999px; background: #60ff9a; width: 0%; }
 .cmc-replay-knob { position: absolute; top: 50%; width: 8px; height: 24px; background: #60ff9a; transform: translate(-4px, -50%); }
-.cmc-replay-status { position: absolute; left: 0; top: calc(50% + 9px); font-size: 9px; line-height: 1; color: #60ff9a; }
+.cmc-replay-status { position: absolute; left: 0; top: calc(50% + 15px); font-size: 9px; line-height: 1; color: #60ff9a; }
 body.theme-light .cmc-replay-rail { background: #c8d4e4; }
 body.theme-light .cmc-replay-fill,
 body.theme-light .cmc-replay-knob { background: #234ee8; }

@@ -17,6 +17,7 @@ import type {
   CopilotToolMetric,
   MissionCategory,
   SessionToolCall,
+  SessionTurnSummary,
 } from './missionTypes.js';
 
 interface ActivityTokenBaseline {
@@ -371,6 +372,9 @@ export class MissionControlScene extends Phaser.Scene {
   private userSelectedSession = false;
   private seenEventKeys = new Set<string>();
   private eventLog: CopilotEventSummary[] = [];
+  private seenReplayTimelineKeys = new Set<string>();
+  private replayTimeline: CopilotEventSummary[] = [];
+  private replaySessionId: string | null = null;
   private eventPulses: EventPulse[] = [];
   /// Active arrival sigils. Pushed in `updateEventPulses` when a live
   /// pulse lands; pruned in the same tick once their age exceeds
@@ -506,11 +510,13 @@ export class MissionControlScene extends Phaser.Scene {
     }
 
     this.setActivity(this.resolveFixture());
-    this.ingestActivityEvents(this.activity.recent_events);
     if (prefs.lastSelectedSessionId) {
       const idx = this.activity.sessions.findIndex(s => s.id === prefs.lastSelectedSessionId);
       if (idx >= 0) this.selectedSessionIndex = idx;
     }
+    this.selectedSession = this.pickSelectedSession();
+    this.resetReplayForSelectedSession();
+    this.ingestActivityEvents(this.selectedSessionReplayEvents());
     // Restore persisted focus-mode preference BEFORE the first render so
     // the mission paints in its final layout instead of flashing the
     // side panels in for one frame and then collapsing them.
@@ -587,7 +593,7 @@ export class MissionControlScene extends Phaser.Scene {
     };
     window.__cmcSeekReplayRatio = (ratio: number) => {
       if (!this.scene?.isActive?.()) return;
-      this.seekReplay(Math.round(Math.max(0, Math.min(1, ratio)) * this.eventLog.length));
+      this.seekReplay(Math.round(Math.max(0, Math.min(1, ratio)) * this.replayTimeline.length));
     };
     // Startup retry ramp: the very first invoke can race the Tauri bridge
     // becoming ready or a Copilot session being mid-write. Re-poll a few
@@ -801,6 +807,9 @@ export class MissionControlScene extends Phaser.Scene {
     this.lastPushRefreshAt = 0;
     this.eventLog = [];
     this.seenEventKeys.clear();
+    this.replayTimeline = [];
+    this.seenReplayTimelineKeys.clear();
+    this.replaySessionId = null;
     this.replayCursor = 0;
     this.replayPaused = false;
     this.replayPlayTimer = 0;
@@ -1062,6 +1071,9 @@ export class MissionControlScene extends Phaser.Scene {
 
     this.eventLog = [];
     this.seenEventKeys.clear();
+    this.replayTimeline = [];
+    this.seenReplayTimelineKeys.clear();
+    this.replaySessionId = null;
     this.workMixHistory = {};
     this.eventPulses = [];
     this.arrivalEffects = [];
@@ -1072,6 +1084,9 @@ export class MissionControlScene extends Phaser.Scene {
     this.replayPlayTimer = 0;
     this.updateReplayState();
     this.setActivity(this.rawActivity);
+    this.selectedSession = this.pickSelectedSession();
+    this.resetReplayForSelectedSession();
+    this.ingestActivityEvents(this.selectedSessionReplayEvents());
     this.renderActivity();
   }
 
@@ -1109,7 +1124,9 @@ export class MissionControlScene extends Phaser.Scene {
         }
       }
       this.lastRefresh = performance.now();
-      const appended = this.ingestActivityEvents(this.activity.recent_events);
+      this.selectedSession = this.pickSelectedSession();
+      this.resetReplayForSelectedSession();
+      const appended = this.ingestActivityEvents(this.selectedSessionReplayEvents());
       this.initialActivityLoaded = true;
       this.requestRender(force && this.bootstrapCompleted && appended > 0 ? 'live' : 'normal');
     } finally {
@@ -1658,6 +1675,7 @@ export class MissionControlScene extends Phaser.Scene {
       selectedSessionIndex: this.selectedSessionIndex,
       selectedSession: this.selectedSession,
       eventLog: this.eventLog,
+      replayTimeline: this.replayTimeline,
       replayPaused: this.replayPaused,
       replayCursor: this.replayCursor,
       atLive: this.isAtLive(),
@@ -1745,19 +1763,35 @@ export class MissionControlScene extends Phaser.Scene {
 
   private ingestActivityEvents(events: CopilotEventSummary[]) {
     const nowMs = performance.now();
-    const result = ingestReplayEvents({
+    const selectedSessionId = this.selectedSession?.id ?? null;
+    const activityResult = ingestReplayEvents({
       events,
       eventLog: this.eventLog,
       seenEventKeys: this.seenEventKeys,
+      cursor: this.eventLog.length,
+      paused: this.replayPaused,
+      maxEvents: this.replayMaxEvents,
+      includeEvent: event => this.isAfterReset(event.timestamp) && (!selectedSessionId || event.session_id === selectedSessionId),
+    });
+    const replayResult = ingestReplayEvents({
+      events,
+      eventLog: this.replayTimeline,
+      seenEventKeys: this.seenReplayTimelineKeys,
       cursor: this.replayCursor,
       paused: this.replayPaused,
       maxEvents: this.replayMaxEvents,
-      includeEvent: event => this.isAfterReset(event.timestamp),
+      includeEvent: event =>
+        isReplayTimelineEvent(event)
+        && this.isAfterReset(event.timestamp)
+        && (!selectedSessionId || event.session_id === selectedSessionId),
     });
-    this.replayCursor = result.cursor;
-    if (result.appended.length === 0) return 0;
+    this.replayCursor = replayResult.cursor;
+    if (activityResult.appended.length === 0) {
+      this.updateReplayState();
+      return 0;
+    }
 
-    for (const event of result.appended) {
+    for (const event of activityResult.appended) {
       // Track rolling histories. The buffer self-trims during render so
       // unbounded growth is impossible. The live entry's key
       // matches the per-session snapshot's dedupe format so
@@ -1782,10 +1816,10 @@ export class MissionControlScene extends Phaser.Scene {
       }
     }
 
-    if (result.wasAtLive && !this.replayPaused && this.bootstrapCompleted) {
+    if (replayResult.wasAtLive && !this.replayPaused && this.bootstrapCompleted) {
       if (this.quarters.length > 0) {
         const latestPulseByQuarter = new Map<MissionCategory, CopilotEventSummary>();
-        for (const event of result.appended) {
+        for (const event of activityResult.appended) {
           if (event.kind !== 'tool.execution_start' && event.kind !== 'hook.start') continue;
           const quarterKey = quarterKeyForEvent(event);
           if (!quarterKey) continue;
@@ -1797,7 +1831,7 @@ export class MissionControlScene extends Phaser.Scene {
       }
     }
     this.updateReplayState();
-    return result.appended.length;
+    return activityResult.appended.length;
   }
 
   /// Per-frame attention escalation. Fires bell + OS notification when
@@ -1866,11 +1900,11 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private isAtLive() {
-    return isReplayAtLive(this.replayCursor, this.eventLog.length);
+    return isReplayAtLive(this.replayCursor, this.replayTimeline.length);
   }
 
   private updateReplayState() {
-    this.replayState = createReplayViewState(this.replayPaused, this.replayCursor, this.eventLog.length);
+    this.replayState = createReplayViewState(this.replayPaused, this.replayCursor, this.replayTimeline.length);
   }
 
   private queueEventPulse(event: CopilotEventSummary, source: 'live' | 'replay' = 'live', delay = 0) {
@@ -2067,8 +2101,9 @@ export class MissionControlScene extends Phaser.Scene {
 
   private advanceReplay(delta: number) {
     if (this.quarters.length === 0) return;
+    const previousCursor = this.replayCursor;
     const result = advanceReplayCursor({
-      eventLog: this.eventLog,
+      eventLog: this.replayTimeline,
       cursor: this.replayCursor,
       paused: this.replayPaused,
       playTimer: this.replayPlayTimer,
@@ -2077,8 +2112,10 @@ export class MissionControlScene extends Phaser.Scene {
     });
     this.replayCursor = result.cursor;
     this.replayPlayTimer = result.playTimer;
-    for (const event of result.events) {
-      this.queueEventPulse(event, 'replay');
+    for (let index = previousCursor; index < result.cursor; index++) {
+      for (const event of this.replayEventsForTurnIndex(index)) {
+        this.queueEventPulse(event, 'replay');
+      }
     }
     if (result.events.length === 0) return;
     this.updateReplayState();
@@ -2086,7 +2123,7 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   public seekReplay(cursor: number) {
-    const clamped = seekReplayCursor(cursor, this.eventLog.length);
+    const clamped = seekReplayCursor(cursor, this.replayTimeline.length);
     if (clamped === this.replayCursor) return;
     this.replayCursor = clamped;
     this.replayPlayTimer = 0;
@@ -2094,6 +2131,16 @@ export class MissionControlScene extends Phaser.Scene {
     this.activeEventPulseCount = this.eventPulses.length + this.arrivalEffects.length;
     this.updateReplayState();
     this.renderActivity();
+  }
+
+  private replayEventsForTurnIndex(index: number): CopilotEventSummary[] {
+    const startMs = safeEventTimestampMs(this.replayTimeline[index]?.timestamp);
+    if (startMs === null) return [];
+    const endMs = safeEventTimestampMs(this.replayTimeline[index + 1]?.timestamp);
+    return this.eventLog.filter(event => {
+      const eventMs = safeEventTimestampMs(event.timestamp);
+      return eventMs !== null && eventMs >= startMs && (endMs === null || eventMs < endMs);
+    });
   }
 
   public toggleReplayPause() {
@@ -2106,7 +2153,7 @@ export class MissionControlScene extends Phaser.Scene {
 
   public jumpReplayToLive() {
     this.replayPaused = false;
-    this.replayCursor = this.eventLog.length;
+    this.replayCursor = this.replayTimeline.length;
     this.replayPlayTimer = 0;
     this.eventPulses = this.eventPulses.filter(p => p.source === 'live' && !p.arrived);
     this.activeEventPulseCount = this.eventPulses.length + this.arrivalEffects.length;
@@ -2124,6 +2171,44 @@ export class MissionControlScene extends Phaser.Scene {
     this.selectedSessionIndex = result.selectedIndex;
     this.userSelectedSession = result.userSelectedSession;
     return result.session;
+  }
+
+  private selectedSessionReplayEvents(): CopilotEventSummary[] {
+    const selectedSessionId = this.selectedSession?.id ?? null;
+    if (!selectedSessionId) return [];
+    const events = sortReplayEventsNewestFirst(
+      this.activity.recent_events.filter(event => event.session_id === selectedSessionId)
+    );
+    if (events.some(isReplayTimelineEvent)) return events;
+    const turnEvents = this.selectedSessionTurnsAsReplayEvents();
+    return mergeReplayEvents(
+      events,
+      turnEvents.length > 0 ? turnEvents : rawEventsAsReplayCheckpoint(selectedSessionId, events)
+    );
+  }
+
+  private selectedSessionTurnsAsReplayEvents(): CopilotEventSummary[] {
+    const selectedSessionId = this.selectedSession?.id ?? null;
+    if (!selectedSessionId) return [];
+    return (this.selectedSession?.recent_turns ?? [])
+      .filter(turn => this.isAfterReset(turn.started_at))
+      .map(turn => turnSummaryReplayEvent(selectedSessionId, turn))
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }
+
+  private resetReplayForSelectedSession() {
+    const nextSessionId = this.selectedSession?.id ?? null;
+    if (nextSessionId === this.replaySessionId) return;
+    this.replaySessionId = nextSessionId;
+    this.eventLog = [];
+    this.seenEventKeys.clear();
+    this.replayTimeline = [];
+    this.seenReplayTimelineKeys.clear();
+    this.replayCursor = 0;
+    this.replayPlayTimer = 0;
+    this.eventPulses = [];
+    this.activeEventPulseCount = this.eventPulses.length + this.arrivalEffects.length;
+    this.updateReplayState();
   }
 
   /// Push the currently-selected session's model id to the navbar
@@ -2151,6 +2236,9 @@ export class MissionControlScene extends Phaser.Scene {
     this.selectedSessionIndex = index;
     this.userSelectedSession = true;
     savePref('lastSelectedSessionId', this.activity.sessions[index].id);
+    this.selectedSession = this.pickSelectedSession();
+    this.resetReplayForSelectedSession();
+    this.ingestActivityEvents(this.selectedSessionReplayEvents());
     this.renderActivity();
   }
 
@@ -2256,6 +2344,58 @@ function createDemoActivity(): CopilotActivity {
 function createDemoEvents(count: number) {
   const now = Date.now();
   return Array.from({ length: count }, (_, offset) => createDemoEvent(count - offset, now - offset * 12_000));
+}
+
+function isReplayTimelineEvent(event: CopilotEventSummary) {
+  return event.kind === 'assistant.turn_start';
+}
+
+function sortReplayEventsNewestFirst(events: CopilotEventSummary[]) {
+  return [...events].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+}
+
+function mergeReplayEvents(events: CopilotEventSummary[], fallbackEvents: CopilotEventSummary[]) {
+  if (events.length === 0) return fallbackEvents;
+  if (fallbackEvents.length === 0) return events;
+  const seen = new Set(events.map(replayEventKey));
+  const merged = [...events];
+  for (const event of fallbackEvents) {
+    const key = replayEventKey(event);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(event);
+  }
+  return sortReplayEventsNewestFirst(merged);
+}
+
+function rawEventsAsReplayCheckpoint(sessionId: string, events: CopilotEventSummary[]): CopilotEventSummary[] {
+  const earliest = events[events.length - 1];
+  if (!earliest) return [];
+  return [{
+    session_id: sessionId,
+    timestamp: earliest.timestamp,
+    kind: 'assistant.turn_start',
+    tool: 'thinking',
+    category: 'thinking',
+    success: true,
+  }];
+}
+
+function turnSummaryReplayEvent(sessionId: string, turn: SessionTurnSummary): CopilotEventSummary {
+  return {
+    session_id: sessionId,
+    timestamp: turn.started_at,
+    kind: 'assistant.turn_start',
+    tool: turn.tools?.[0] || 'thinking',
+    category: turn.categories?.[0] || 'thinking',
+    success: turn.status !== 'failed' && turn.failure_count <= 0,
+    output_tokens: turn.output_tokens,
+  };
+}
+
+function safeEventTimestampMs(timestamp?: string) {
+  const ms = timestamp ? Date.parse(timestamp) : NaN;
+  return Number.isFinite(ms) ? ms : null;
 }
 
 function createDemoEvent(index: number, timestampMs = Date.now()): CopilotEventSummary {

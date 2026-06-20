@@ -846,6 +846,8 @@ body.theme-light .analytics-card strong { color: #92400e; }
 }
 body.theme-light .analytics-caveats { color: #64748b; }
 .analytics-chat-compose {
+  width: min(100%, 980px);
+  justify-self: center;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
@@ -934,6 +936,7 @@ body.theme-light .analytics-chat-input::placeholder {
   .analytics-chat-header { flex-direction: column; }
   .analytics-chat-subtitle { white-space: normal; }
   .analytics-chat-compose {
+    width: 100%;
     grid-template-columns: 1fr;
   }
   .analytics-chat-form {

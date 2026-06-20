@@ -41,6 +41,7 @@ export interface DashboardViewInput {
   selectedSessionIndex: number;
   selectedSession: CopilotSessionSummary | null;
   eventLog: CopilotEventSummary[];
+  replayTimeline: CopilotEventSummary[];
   replayPaused: boolean;
   replayCursor: number;
   atLive: boolean;
@@ -66,7 +67,7 @@ export function buildQuarterView(input: QuarterViewInput | null) {
 }
 
 export function buildDashboardView(input: DashboardViewInput): DashboardViewBuildResult {
-  const { layout, activity, sessionOptions, selectedSessionIndex, eventLog, replayCursor, atLive } = input;
+  const { layout, activity, sessionOptions, selectedSessionIndex, eventLog, replayTimeline, replayCursor, atLive } = input;
   const compact = layout.compact;
   const activeOptions = sessionOptions.filter(({ session }) => session.is_active);
   const pickerOptions = sessionOptions.slice(0, 5);
@@ -86,11 +87,24 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
   ));
   const feedY = layout.topY + layout.sessionH + (compact ? 14 : 22);
   const feedH = Math.max(140, layout.bottomY - feedY - 16);
-  const total = eventLog.length;
+  const total = replayTimeline.length;
   const cursor = replayCursor;
-  const visibleLog = eventLog.slice(0, cursor);
-  const cursorEvent = visibleLog[visibleLog.length - 1];
+  const firstTimelineEvent = replayTimeline[0];
+  const cursorEvent = cursor > 0 ? replayTimeline[cursor - 1] : undefined;
+  const nextCursorEvent = cursor > 0 ? replayTimeline[cursor] : undefined;
+  const firstTimeMs = eventTimestampMs(firstTimelineEvent?.timestamp);
   const cursorTimeMs = eventTimestampMs(cursorEvent?.timestamp);
+  const nextCursorTimeMs = eventTimestampMs(nextCursorEvent?.timestamp);
+  const visibleLog = atLive
+    ? eventLog
+    : cursor <= 0 || firstTimeMs === null
+      ? []
+      : eventLog.filter(event => {
+          const eventMs = eventTimestampMs(event.timestamp);
+          return eventMs !== null
+            && eventMs >= firstTimeMs
+            && (nextCursorTimeMs === null || eventMs < nextCursorTimeMs);
+        });
   const feedAnchorMs = atLive ? input.nowMs : (cursorTimeMs ?? input.nowMs);
   const feed = visibleLog
     .slice(-30)
@@ -242,6 +256,7 @@ function buildSelectedSessionView(
   const tokenCheckpoint = latestTokenCheckpoint(selected.token_checkpoints, cursorTimeMs);
   const inputTokens = tokenCheckpoint?.input_tokens ?? tokenEvent?.input_tokens ?? 0;
   const outputTokens = tokenCheckpoint?.output_tokens ?? tokenEvent?.output_tokens ?? 0;
+  const inputTokensPending = inputTokens <= 0 && outputTokens > 0;
   const replayActivity = latestEvent
     ? {
         last: replaySessionLastLabel(latestEvent),
@@ -257,6 +272,7 @@ function buildSelectedSessionView(
   return {
     ...selected,
     input_tokens: inputTokens,
+    input_tokens_pending: inputTokensPending,
     output_tokens: outputTokens,
     last_tool: replayActivity.tool,
     last_event_kind: latestEvent?.kind ?? '',
@@ -267,11 +283,11 @@ function buildSelectedSessionView(
 }
 
 function replayStatusText(total: number, cursor: number, atLive: boolean, paused: boolean, cursorLabel: string) {
-  if (total === 0) return 'Recent activity replay · waiting for events';
-  if (atLive) return `Recent activity replay · ${cursor} / ${total} · live${cursorLabel}`;
+  if (total === 0) return 'Selected session turn replay · waiting for turns';
+  if (atLive) return `Selected session turn replay · ${cursor} / ${total} · live${cursorLabel}`;
   return paused
-    ? `Recent activity replay · ${cursor} / ${total} · paused${cursorLabel}`
-    : `Recent activity replay · ${cursor} / ${total} · playing${cursorLabel}`;
+    ? `Selected session turn replay · ${cursor} / ${total} · paused${cursorLabel}`
+    : `Selected session turn replay · ${cursor} / ${total} · playing${cursorLabel}`;
 }
 
 function eventAgeSeconds(timestamp: string, nowMs = Date.now()): number {

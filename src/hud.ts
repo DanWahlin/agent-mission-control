@@ -1256,9 +1256,7 @@
         analyticsChatTranscript.scrollTop = 0;
         return;
       }
-      var containerRect = analyticsChatTranscript.getBoundingClientRect();
-      var latestRect = latest.getBoundingClientRect();
-      analyticsChatTranscript.scrollTop += latestRect.top - containerRect.top - 8;
+      analyticsChatTranscript.scrollTop = analyticsChatTranscript.scrollHeight;
     });
   }
 
@@ -1986,7 +1984,10 @@
   function tokenLabel(input, output, inputPending) {
     var inTok = Number(input || 0);
     var outTok = Number(output || 0);
-    return (inputPending ? 'pending' : exactNumber(inTok)) + ' / ' + exactNumber(outTok);
+    var inputLabel = inputPending
+      ? '<span class="cmc-token-pending" title="Input token totals are pending because Copilot CLI emits output tokens during each turn, but input tokens usually arrive later in aggregate usage summaries or session shutdown events.">pending</span>'
+      : exactNumber(inTok);
+    return inputLabel + ' / ' + exactNumber(outTok);
   }
 
   function ageLabel(seconds) {
@@ -2394,7 +2395,7 @@
     if (selected) {
       var inTok = selected.input_tokens || 0;
       var outTok = selected.output_tokens || 0;
-      var inputPending = !selected.replay_activity && inTok <= 0 && outTok > 0;
+      var inputPending = !!selected.input_tokens_pending || (!selected.replay_activity && inTok <= 0 && outTok > 0);
       var tcalls = (selected.recent_tool_calls || []).length;
       var hasGitRoot = !!selected.git_root;
       var activity = selected.replay_activity || selectedActivity(selected);
