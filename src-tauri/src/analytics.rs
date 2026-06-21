@@ -1665,7 +1665,7 @@ fn read_local_session_metadata(session_dir: &Path) -> LocalSessionMetadata {
             let key = key.trim();
             if !matches!(
                 key,
-                "repository" | "branch" | "name" | "summary" | "git_root"
+                "repository" | "branch" | "name" | "summary" | "git_root" | "cwd"
             ) {
                 index += 1;
                 continue;
@@ -1696,6 +1696,7 @@ fn read_local_session_metadata(session_dir: &Path) -> LocalSessionMetadata {
     let repository_source = values
         .get("repository")
         .or_else(|| values.get("git_root"))
+        .or_else(|| values.get("cwd"))
         .map(|value| value.trim())
         .filter(|value| !value.is_empty());
     let has_repository = repository_source.is_some();
@@ -6451,6 +6452,32 @@ mod tests {
         let metadata = read_local_session_metadata(&dir);
 
         assert!(!metadata.has_repository);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_history_metadata_with_cwd_is_session_scoped() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "cmc_analytics_cwd_metadata_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp session dir");
+        std::fs::write(
+            dir.join("workspace.yaml"),
+            concat!(
+                "cwd: /Users/danwahlin/Desktop/projects/github-copilot-app-for-beginners\n",
+                "name: Planning copilot app course\n",
+            ),
+        )
+        .expect("write workspace");
+
+        let metadata = read_local_session_metadata(&dir);
+
+        assert!(metadata.has_repository);
+        assert_eq!(metadata.repository, "github-copilot-app-for-beginners");
+        assert_eq!(metadata.branch, "unknown");
+        assert_eq!(metadata.title, "Planning copilot app course");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

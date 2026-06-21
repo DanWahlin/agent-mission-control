@@ -336,10 +336,7 @@ async fn open_in_editor(path: String, scheme: Option<String>) -> Result<(), Stri
     let scheme = scheme.unwrap_or_else(|| "vscode".to_string());
     // Defense-in-depth: reject non-trivial schemes so a malicious
     // renderer build can't smuggle arbitrary protocols.
-    if !scheme
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '+')
-    {
+    if !is_supported_editor_scheme(&scheme) {
         return Err(format!("Refusing unsupported editor scheme: {}", scheme));
     }
     let url = format!("{}://file/{}", scheme, path);
@@ -348,13 +345,22 @@ async fn open_in_editor(path: String, scheme: Option<String>) -> Result<(), Stri
 
 #[tauri::command]
 async fn open_external_url(url: String) -> Result<(), String> {
-    let allowed = url
-        .starts_with("https://github.com/DanWahlin/agent-mission-control/issues/new?")
-        || url == "https://github.com/DanWahlin/agent-mission-control/releases/latest";
-    if !allowed {
+    if !is_allowed_external_url(&url) {
         return Err("Refusing unsupported external URL".to_string());
     }
     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+fn is_supported_editor_scheme(scheme: &str) -> bool {
+    !scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '+')
+}
+
+fn is_allowed_external_url(url: &str) -> bool {
+    url.starts_with("https://github.com/DanWahlin/agent-mission-control/issues/new?")
+        || url == "https://github.com/DanWahlin/agent-mission-control/releases/latest"
 }
 
 // ── Window helpers ────────────────────────────────────────────────────
@@ -456,6 +462,41 @@ fn toggle_window(app: &AppHandle) {
             }
             _ => show_window(app),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_scheme_allowlist_rejects_protocol_smuggling_characters() {
+        assert!(is_supported_editor_scheme("vscode"));
+        assert!(is_supported_editor_scheme("vscode-insiders"));
+        assert!(is_supported_editor_scheme("cursor+file"));
+        assert!(!is_supported_editor_scheme(""));
+        assert!(!is_supported_editor_scheme("javascript:alert"));
+        assert!(!is_supported_editor_scheme("vscode/file"));
+        assert!(!is_supported_editor_scheme("vscode?x=1"));
+    }
+
+    #[test]
+    fn external_url_allowlist_only_allows_known_project_urls() {
+        assert!(is_allowed_external_url(
+            "https://github.com/DanWahlin/agent-mission-control/releases/latest"
+        ));
+        assert!(is_allowed_external_url(
+            "https://github.com/DanWahlin/agent-mission-control/issues/new?title=Schema"
+        ));
+        assert!(!is_allowed_external_url(
+            "https://github.com/DanWahlin/agent-mission-control/issues"
+        ));
+        assert!(!is_allowed_external_url(
+            "https://github.com/Other/repo/issues/new?title=Schema"
+        ));
+        assert!(!is_allowed_external_url(
+            "http://github.com/DanWahlin/agent-mission-control/releases/latest"
+        ));
     }
 }
 
