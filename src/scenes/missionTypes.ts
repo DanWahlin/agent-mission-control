@@ -20,6 +20,7 @@ export interface CopilotEventSummary {
 export interface CopilotSessionSummary {
   id: string;
   title: string;
+  provider?: string;
   session_name?: string;
   repository: string;
   branch: string;
@@ -50,6 +51,7 @@ export interface CopilotSessionSummary {
   stale_seconds?: number;
   last_model?: string;
   git_root?: string;
+  is_all_sessions?: boolean;
   recent_tool_calls?: SessionToolCall[];
   recent_turns?: SessionTurnSummary[];
   token_checkpoints?: SessionTokenCheckpoint[];
@@ -80,6 +82,9 @@ export interface SessionToolCall {
   target?: string;
   details?: SafeDetail[];
   duration_ms?: number;
+  source_session_id?: string;
+  source_session_label?: string;
+  source_session_provider?: string;
 }
 
 export interface SafeDetail {
