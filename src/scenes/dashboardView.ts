@@ -1,6 +1,7 @@
 import { buildAttentionItems, providerAttentionAlerts } from './opsSignals.js';
 import type { MissionLayout } from './missionLayout.js';
 import type { SessionPickerOption } from './sessionSelection.js';
+import { ALL_SESSIONS_ID } from './sessionSelection.js';
 import type { CopilotActivity, CopilotEventSummary, CopilotSessionSummary, MissionCategory, SessionTokenCheckpoint } from './missionTypes.js';
 
 export interface SessionPickerRow {
@@ -26,6 +27,8 @@ export interface QuarterViewInput {
   short: string;
   colorCss: string;
   count: number;
+  allSessions?: boolean;
+  detailsDisabled?: boolean;
   stats: {
     line: string;
   };
@@ -61,15 +64,22 @@ export function buildQuarterView(input: QuarterViewInput | null) {
     color: input.colorCss,
     title: input.short,
     count: input.count,
-    countLine: `${input.count} selected-session ${input.short.toLowerCase()} signals`,
+    countLine: input.allSessions
+      ? `${input.count} ${input.short.toLowerCase()} signals`
+      : `${input.count} selected-session ${input.short.toLowerCase()} signals`,
     line: input.stats.line,
+    detailsDisabled: input.detailsDisabled === true,
   };
 }
 
 export function buildDashboardView(input: DashboardViewInput): DashboardViewBuildResult {
   const { layout, activity, sessionOptions, selectedSessionIndex, eventLog, replayTimeline, replayCursor, atLive } = input;
   const compact = layout.compact;
-  const activeOptions = sessionOptions.filter(({ session }) => session.is_active);
+  const realSessionOptions = sessionOptions.filter(({ session }) => !session.is_all_sessions);
+  const activeOptions = realSessionOptions.filter(({ session }) => session.is_active);
+  const menuOptions = input.selectedSession?.is_all_sessions === true
+    ? sessionOptions.filter(({ session }) => session.is_all_sessions || session.is_active)
+    : sessionOptions;
   const pickerOptions = sessionOptions.slice(0, 5);
   if (!pickerOptions.some(({ index }) => index === selectedSessionIndex)) {
     const selectedOption = sessionOptions.find(({ index }) => index === selectedSessionIndex);
@@ -106,12 +116,14 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
             && (nextCursorTimeMs === null || eventMs < nextCursorTimeMs);
         });
   const feedAnchorMs = atLive ? input.nowMs : (cursorTimeMs ?? input.nowMs);
+  const sessionLabels = new Map(activity.sessions.map(session => [session.id, sessionOptionTitle(session)]));
+  const labelAllSessions = input.selectedSession?.is_all_sessions === true;
   const feed = visibleLog
     .slice(-30)
     .reverse()
     .map(event => ({ event, ageS: eventAgeSeconds(event.timestamp, feedAnchorMs) }))
     .map(({ event, ageS }) => ({
-      label: feedLabel(event),
+      label: labelAllSessions ? `${sessionLabels.get(event.session_id) ?? shortSessionId(event.session_id)} · ${feedLabel(event)}` : feedLabel(event),
       age: atLive
         ? `${formatAge(ageS)} ago`
         : ageS === 0 ? 'at cursor' : `${formatAge(ageS)} before`,
@@ -120,7 +132,7 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
     }));
   const quarter = buildQuarterView(input.quarter);
   const cursorLabel = cursorEvent ? ` · ${formatEventClock(cursorEvent.timestamp)}` : '';
-  const replayStatus = replayStatusText(total, cursor, atLive, input.replayPaused, cursorLabel);
+  const replayStatus = replayStatusText(total, cursor, atLive, input.replayPaused, cursorLabel, input.selectedSession?.is_all_sessions === true);
   const selectedSessionView = buildSelectedSessionView(
     input.selectedSession,
     visibleLog,
@@ -169,7 +181,7 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
         header: activeOptions.length > 0 ? `Running sessions (${activeOptions.length})` : 'Recent sessions (none active)',
         rows: sessionPickerRows,
         idleCount: Math.max(0, sessionOptions.length - pickerOptions.length),
-        options: sessionOptions.map(({ session, index }) => sessionOptionRow(session, index)),
+        options: menuOptions.map(({ session, index }) => sessionOptionRow(session, index)),
         selected: selectedSessionView,
       },
       feed: {
@@ -211,7 +223,8 @@ function sessionPickerRow(
 }
 
 function sessionOptionRow(session: CopilotSessionSummary, index: number) {
-  const shortId = session.id.length > 8 ? session.id.slice(0, 8) : session.id;
+  const isAllSessions = session.id === ALL_SESSIONS_ID || session.is_all_sessions === true;
+  const shortId = isAllSessions ? '' : shortSessionId(session.id);
   const sessionName = cleanSessionLabel(session.session_name);
   const title = cleanSessionLabel(session.title);
   const repository = cleanSessionLabel(session.repository);
@@ -219,15 +232,28 @@ function sessionOptionRow(session: CopilotSessionSummary, index: number) {
   return {
     id: session.id,
     index,
-    title: sessionName || title || repository || `Session ${shortId}`,
+    title: sessionOptionTitle(session),
     sessionName,
     repository,
     branch,
     shortId,
     status: session.status,
     isActive: session.is_active,
-    statusLabel: session.is_active ? 'active' : 'idle',
+    statusLabel: isAllSessions ? '' : session.is_active ? 'active' : 'idle',
   };
+}
+
+function sessionOptionTitle(session: CopilotSessionSummary) {
+  if (session.id === ALL_SESSIONS_ID || session.is_all_sessions) return 'All Active Sessions';
+  const shortId = shortSessionId(session.id);
+  const sessionName = cleanSessionLabel(session.session_name);
+  const title = cleanSessionLabel(session.title);
+  const repository = cleanSessionLabel(session.repository);
+  return sessionName || title || repository || `Session ${shortId}`;
+}
+
+function shortSessionId(id: string) {
+  return id.length > 8 ? id.slice(0, 8) : id;
 }
 
 function cleanSessionLabel(value?: string | null): string {
@@ -248,12 +274,14 @@ function buildSelectedSessionView(
   if (!selected) return null;
   if (atLive) return selected;
 
-  const selectedEvents = visibleLog.filter(event => eventBelongsToSession(event, selected.id));
+  const selectedEvents = selected.is_all_sessions
+    ? visibleLog
+    : visibleLog.filter(event => eventBelongsToSession(event, selected.id));
   const latestEvent = selectedEvents[selectedEvents.length - 1];
   const tokenEvent = [...selectedEvents]
     .reverse()
     .find(event => event.input_tokens !== undefined || event.output_tokens !== undefined);
-  const tokenCheckpoint = latestTokenCheckpoint(selected.token_checkpoints, cursorTimeMs);
+  const tokenCheckpoint = selected.is_all_sessions ? null : latestTokenCheckpoint(selected.token_checkpoints, cursorTimeMs);
   const inputTokens = tokenCheckpoint?.input_tokens ?? tokenEvent?.input_tokens ?? 0;
   const outputTokens = tokenCheckpoint?.output_tokens ?? tokenEvent?.output_tokens ?? 0;
   const inputTokensPending = inputTokens <= 0 && outputTokens > 0;
@@ -282,12 +310,13 @@ function buildSelectedSessionView(
   };
 }
 
-function replayStatusText(total: number, cursor: number, atLive: boolean, paused: boolean, cursorLabel: string) {
-  if (total === 0) return 'Selected session turn replay · waiting for turns';
-  if (atLive) return `Selected session turn replay · ${cursor} / ${total} · live${cursorLabel}`;
+function replayStatusText(total: number, cursor: number, atLive: boolean, paused: boolean, cursorLabel: string, allSessions = false) {
+  const replayLabel = allSessions ? 'All sessions turn replay' : 'Selected session turn replay';
+  if (total === 0) return `${replayLabel} · waiting for turns`;
+  if (atLive) return `${replayLabel} · ${cursor} / ${total} · live${cursorLabel}`;
   return paused
-    ? `Selected session turn replay · ${cursor} / ${total} · paused${cursorLabel}`
-    : `Selected session turn replay · ${cursor} / ${total} · playing${cursorLabel}`;
+    ? `${replayLabel} · ${cursor} / ${total} · paused${cursorLabel}`
+    : `${replayLabel} · ${cursor} / ${total} · playing${cursorLabel}`;
 }
 
 function eventAgeSeconds(timestamp: string, nowMs = Date.now()): number {

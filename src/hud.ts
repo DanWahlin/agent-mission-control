@@ -159,9 +159,12 @@
 
   function updateModelChipElement(model, force) {
     var modelEl = $('model-chip');
+    var labelEl = $('model-label');
     var next = (model == null ? '' : String(model)).trim();
     if (!force && next === lastModel) return;
     lastModel = next;
+    var label = modelLabelText(next);
+    if (labelEl) labelEl.textContent = label + ':';
     if (!modelEl) return;
     if (next === '') {
       modelEl.classList.add('empty');
@@ -177,6 +180,11 @@
   window.__cmcUpdateModel = function (model) {
     updateModelChipElement(model, false);
   };
+
+  function modelLabelText(model) {
+    var models = String(model || '').split(',').map(function (part) { return part.trim(); }).filter(Boolean);
+    return models.length > 1 ? 'Models' : 'Model';
+  }
 
   if (resetBtn) {
     resetBtn.addEventListener('click', function () {
@@ -209,6 +217,7 @@
   var selectedTurnId = '';
   var inspectorReturnFocus = null;
   var rawRevealState = null;
+  var expandedAggregateSessionGroups = new Set();
 
   var TOOL_TABS = [
     { id: 'all', label: 'All' },
@@ -262,7 +271,9 @@
   }
 
   function toolKey(call) {
-    return call && (call.event_ref || call.call_id || [call.timestamp, call.tool, call.category].join('|'));
+    if (!call) return '';
+    var source = call.source_session_id ? call.source_session_id + '|' : '';
+    return source + (call.event_ref || call.call_id || [call.timestamp, call.tool, call.category].join('|'));
   }
 
   function callKindLabel(call) {
@@ -335,7 +346,15 @@
   function filteredCalls() {
     var calls = ((inspectorSession && inspectorSession.recent_tool_calls) || []).slice().reverse();
     if (inspectorScope === 'sector' && sectorInspectorContext) {
-      return calls.filter(function (call) { return call.category === sectorInspectorContext.category; });
+      var sectorCalls = calls.filter(function (call) { return call.category === sectorInspectorContext.category; });
+      if (inspectorSession && inspectorSession.is_all_sessions) {
+        return sectorCalls.sort(function (a, b) {
+          var group = String(a.source_session_label || '').localeCompare(String(b.source_session_label || ''));
+          if (group !== 0) return group;
+          return String(b.timestamp || '').localeCompare(String(a.timestamp || ''));
+        });
+      }
+      return sectorCalls;
     }
     if (inspectorTab === 'all') return calls;
     if (inspectorTab === 'failures') return calls.filter(function (call) { return !call.success; });
@@ -349,6 +368,24 @@
   function selectedCall(calls) {
     if (!calls.length) return null;
     return calls.find(function (call) { return toolKey(call) === selectedToolKey; }) || calls[0];
+  }
+
+  function aggregateGroupKey(call) {
+    if (!call) return 'unknown';
+    return call.source_session_id || call.source_session_label || 'unknown';
+  }
+
+  function aggregateGroupLabel(call) {
+    return (call && call.source_session_label) || 'Unknown session';
+  }
+
+  function aggregateGroupIsExpanded(key) {
+    return expandedAggregateSessionGroups.has(key);
+  }
+
+  function visibleAggregateCalls(calls) {
+    if (!(inspectorScope === 'sector' && inspectorSession && inspectorSession.is_all_sessions)) return calls;
+    return calls.filter(function (call) { return aggregateGroupIsExpanded(aggregateGroupKey(call)); });
   }
 
   function selectedTurn(turns) {
@@ -447,8 +484,9 @@
       if (inspectorScope === 'sector' && sectorInspectorContext) {
         var total = Number(sectorInspectorContext.count || 0);
         var sector = sectorInspectorContext.title || categoryLabel(sectorInspectorContext.category);
+        var signalScope = inspectorSession && inspectorSession.is_all_sessions ? 'signals' : 'selected-session signals';
         var message = total > 0
-          ? 'This sector recorded ' + exactNumber(total) + ' selected-session signals, but no detailed rows are in the retained call window.'
+          ? 'This sector recorded ' + exactNumber(total) + ' ' + signalScope + ', but no detailed rows are in the retained call window.'
           : 'No retained rows for the selected ' + sector + ' sector.';
         inspectorList.innerHTML = '<div class="inspector-empty">' + escapeHtml(message) + '</div>';
         return;
@@ -456,12 +494,42 @@
       inspectorList.innerHTML = '<div class="inspector-empty">No ' + escapeHtml(inspectorTab) + ' calls retained for this session.</div>';
       return;
     }
+    var grouped = inspectorScope === 'sector' && inspectorSession && inspectorSession.is_all_sessions;
+    var currentGroup = '';
+    var currentGroupTotal = 0;
+    if (grouped) {
+      var groupCounts = new Map();
+      calls.forEach(function (call) {
+        var key = aggregateGroupKey(call);
+        groupCounts.set(key, (groupCounts.get(key) || 0) + 1);
+      });
+    }
     inspectorList.innerHTML = calls.map(function (call) {
       var key = toolKey(call);
       var active = selected && toolKey(selected) === key;
       var duration = typeof call.duration_ms === 'number' ? formatDuration(call.duration_ms) : 'in flight';
       var fullName = toolDisplayName(call);
-      return '<button class="inspector-row ' + (active ? 'active ' : '') + (!call.success ? 'failed' : '') + '" type="button" data-tool-key="' + escapeHtml(key) + '">'
+      var sessionLabel = aggregateGroupLabel(call);
+      var groupKey = aggregateGroupKey(call);
+      var expanded = aggregateGroupIsExpanded(groupKey);
+      var groupHtml = '';
+      if (grouped && groupKey !== currentGroup) {
+        currentGroup = groupKey;
+        currentGroupTotal = groupCounts.get(groupKey) || 0;
+        groupHtml = '<button class="inspector-group-heading ' + (expanded ? 'expanded' : 'collapsed') + '" type="button"'
+          + ' data-inspector-group-key="' + escapeHtml(groupKey) + '"'
+          + ' aria-expanded="' + (expanded ? 'true' : 'false') + '">'
+          + '<span class="inspector-group-main">'
+          + '<span class="inspector-group-caret" aria-hidden="true">' + (expanded ? '-' : '+') + '</span>'
+          + '<span class="inspector-group-title">' + escapeHtml(sessionLabel) + '</span>'
+          + '</span>'
+          + '<span class="inspector-group-count">' + currentGroupTotal + ' item' + (currentGroupTotal === 1 ? '' : 's') + '</span>'
+          + '</button>';
+      }
+      if (grouped && !expanded) {
+        return groupHtml;
+      }
+      return groupHtml + '<button class="inspector-row ' + (active ? 'active ' : '') + (!call.success ? 'failed' : '') + '" type="button" data-tool-key="' + escapeHtml(key) + '">'
         + '<span class="inspector-dot"></span>'
         + '<span class="inspector-row-main"><span class="inspector-row-title" title="' + escapeHtml(fullName) + '">' + escapeHtml(truncateText(fullName, 48)) + '</span>'
         + '<span class="inspector-row-sub">' + escapeHtml(callKindLabel(call)) + ' · ' + escapeHtml(call.turn_id || 'no turn') + '</span></span>'
@@ -475,11 +543,15 @@
     if (!call) {
       if (inspectorScope === 'sector' && sectorInspectorContext) {
         var total = Number(sectorInspectorContext.count || 0);
+        var retainedRows = filteredCalls().length;
+        var emptyMessage = inspectorSession && inspectorSession.is_all_sessions
+          ? 'Expand a session group, then select a retained row to inspect.'
+          : 'Select a retained row when one is available.';
         inspectorDetail.innerHTML = '<h3>Sector details</h3>' + kvRows([
           ['Sector', sectorInspectorContext.title || categoryLabel(sectorInspectorContext.category)],
           ['Signals', exactNumber(total)],
-          ['Retained rows', '0'],
-        ]) + '<div class="inspector-empty">Select a retained row when one is available.</div>';
+          ['Retained rows', String(retainedRows)],
+        ]) + '<div class="inspector-empty">' + escapeHtml(emptyMessage) + '</div>';
         return;
       }
       inspectorDetail.innerHTML = '<h3>Details</h3><div class="inspector-empty">Select a tool call to inspect.</div>';
@@ -496,6 +568,7 @@
       ['Model', call.model || (turn && turn.model) || 'unknown'],
       ['Call ref', call.call_id || 'not available'],
     ];
+    if (call.source_session_label) rows.unshift(['Session', call.source_session_label]);
     if (turn) rows.push(['Turn status', turn.status + (turn.partial ? ' · partial tail window' : '')]);
     (call.details || []).forEach(function (detail) { rows.push([detail.label, detail.value]); });
     var revealState = activeRevealState(call);
@@ -580,8 +653,9 @@
       if (inspectorSubtitle) {
         var retained = sectorCalls ? sectorCalls.length : 0;
         var total = Number(sectorInspectorContext.count || 0);
+        var signalScope = inspectorSession && inspectorSession.is_all_sessions ? 'signals' : 'selected-session signals';
         inspectorSubtitle.textContent = scope
-          + ' · ' + retained + ' retained rows · ' + exactNumber(total) + ' selected-session signals';
+          + ' · ' + retained + ' retained rows · ' + exactNumber(total) + ' ' + signalScope;
       }
     } else {
       if (inspectorTitle) inspectorTitle.textContent = 'Inspector · ' + heading.title;
@@ -601,6 +675,9 @@
     renderTabs();
     if (inspectorScope === 'sector') {
       var sectorCall = selectedCall(sectorCalls || []);
+      if (inspectorSession && inspectorSession.is_all_sessions) {
+        sectorCall = selectedCall(visibleAggregateCalls(sectorCalls || []));
+      }
       selectedToolKey = sectorCall ? toolKey(sectorCall) : '';
       renderToolList(sectorCalls || [], sectorCall);
       renderToolDetail(sectorCall);
@@ -642,6 +719,7 @@
 
   function openInspector(session, trigger) {
     if (!inspectorOverlay || !session) return false;
+    if (session.is_all_sessions) return false;
     inspectorReturnFocus = trigger || document.activeElement;
     inspectorSession = session;
     inspectorScope = 'session';
@@ -651,6 +729,7 @@
     selectedToolKey = '';
     selectedTurnId = '';
     rawRevealState = null;
+    expandedAggregateSessionGroups = new Set();
     inspectorOverlay.classList.add('visible');
     inspectorOverlay.setAttribute('aria-hidden', 'false');
     renderInspector();
@@ -678,6 +757,7 @@
     selectedToolKey = '';
     selectedTurnId = '';
     rawRevealState = null;
+    expandedAggregateSessionGroups = new Set();
     inspectorOverlay.classList.add('visible');
     inspectorOverlay.setAttribute('aria-hidden', 'false');
     renderInspector();
@@ -695,6 +775,7 @@
     inspectorOverlay.classList.remove('visible');
     inspectorOverlay.setAttribute('aria-hidden', 'true');
     rawRevealState = null;
+    expandedAggregateSessionGroups = new Set();
     if (wasOpen) restoreInspectorFocus();
     sectorInspectorContext = null;
     inspectorScope = 'session';
@@ -712,6 +793,11 @@
     if (!call || !call.event_ref || !inspectorSession) return;
     var invoke = tauriInvoke();
     var key = toolKey(call);
+    if (inspectorSession.is_all_sessions && !call.source_session_id) {
+      rawRevealState = { key: key, status: 'error', error: 'Cannot reveal raw details because the source session is missing.' };
+      renderToolDetail(call);
+      return;
+    }
     if (!invoke) {
       rawRevealState = { key: key, status: 'error', error: 'Raw local details require the Tauri app.' };
       renderToolDetail(call);
@@ -720,8 +806,8 @@
     rawRevealState = { key: key, status: 'loading' };
     renderToolDetail(call);
     invoke('get_raw_tool_call_details', {
-      provider: inspectorSession.provider || 'copilot',
-      sessionId: inspectorSession.id,
+      provider: call.source_session_provider || inspectorSession.provider || 'copilot',
+      sessionId: call.source_session_id || inspectorSession.id,
       eventRef: call.event_ref,
     }).then(function (details) {
       if (!inspectorOverlay || !inspectorOverlay.classList.contains('visible')) return;
@@ -777,6 +863,19 @@
     var tabBtn = target.closest('[data-inspector-tab]');
     if (tabBtn) {
       inspectorTab = tabBtn.getAttribute('data-inspector-tab') || 'all';
+      selectedToolKey = '';
+      rawRevealState = null;
+      renderInspector();
+      return;
+    }
+    var groupBtn = target.closest('[data-inspector-group-key]');
+    if (groupBtn) {
+      var groupKey = groupBtn.getAttribute('data-inspector-group-key') || '';
+      if (expandedAggregateSessionGroups.has(groupKey)) {
+        expandedAggregateSessionGroups.delete(groupKey);
+      } else {
+        expandedAggregateSessionGroups.add(groupKey);
+      }
       selectedToolKey = '';
       rawRevealState = null;
       renderInspector();
@@ -2040,7 +2139,7 @@
 
   function sessionOptionLines(opt) {
     var marker = opt && opt.isActive ? '● ' : '○ ';
-    var shortId = (opt && (opt.shortId || (opt.id || '').slice(0, 8))) || '';
+    var shortId = opt && opt.id === '__all_sessions__' ? '' : (opt && (opt.shortId || (opt.id || '').slice(0, 8))) || '';
     var repository = cleanSessionLabel(opt && opt.repository);
     var branch = cleanSessionLabel(opt && opt.branch);
     var title = cleanSessionLabel(opt && opt.title);
@@ -2397,10 +2496,19 @@
       var outTok = selected.output_tokens || 0;
       var inputPending = !!selected.input_tokens_pending || (!selected.replay_activity && inTok <= 0 && outTok > 0);
       var tcalls = (selected.recent_tool_calls || []).length;
-      var hasGitRoot = !!selected.git_root;
+      var isAggregate = !!selected.is_all_sessions;
+      var hasGitRoot = !!selected.git_root && !isAggregate;
+      var canInspect = tcalls > 0 && !isAggregate;
       var activity = selected.replay_activity || selectedActivity(selected);
       var heading = selectedSessionHeading(selected);
       var model = selected.last_model || '';
+      var modelLabel = modelLabelText(model);
+      var actionsHtml = isAggregate
+        ? ''
+        : '<div class="cmc-actions">'
+          + '<button class="cmc-button accent ' + (hasGitRoot ? '' : 'disabled') + '" aria-label="Open selected session in editor" ' + (hasGitRoot ? 'data-cmc-action="editor"' : 'disabled aria-disabled="true"') + '>↗ Open in Editor</button>'
+          + '<button class="cmc-button ' + (canInspect ? '' : 'disabled') + '" aria-label="Open inspector for selected session" ' + (canInspect ? 'data-cmc-action="inspector"' : 'disabled aria-disabled="true"') + '>Inspector</button>'
+          + '</div>';
       selectedHtml = '<div class="cmc-session-summary">'
         + '<div class="cmc-session-heading">'
         + '<div>'
@@ -2413,14 +2521,11 @@
         + '<span class="cmc-meta-label">Tool: ' + escapeHtml(activity.tool) + '</span>'
         + '<span class="cmc-meta-label">Age: ' + escapeHtml(activity.age) + '</span>'
         + '<span class="cmc-meta-label">Tokens in/out: ' + tokenLabel(inTok, outTok, inputPending) + '</span>'
-        + '<span class="cmc-meta-label cmc-model-meta">Model: <span id="model-chip" class="' + (model ? '' : 'empty') + '" title="Active model for the selected session">' + escapeHtml(model) + '</span></span>'
+        + '<span class="cmc-meta-label cmc-model-meta"><span id="model-label">' + modelLabel + ':</span> <span id="model-chip" class="' + (model ? '' : 'empty') + '" title="Active ' + modelLabel.toLowerCase() + ' for the selected session">' + escapeHtml(model) + '</span></span>'
         + '</div>'
         + '</div>'
         + renderOpsTempo(view)
-        + '<div class="cmc-actions">'
-        + '<button class="cmc-button accent ' + (hasGitRoot ? '' : 'disabled') + '" aria-label="Open selected session in editor" ' + (hasGitRoot ? 'data-cmc-action="editor"' : 'disabled aria-disabled="true"') + '>↗ Open in Editor</button>'
-        + '<button class="cmc-button ' + (tcalls > 0 ? '' : 'disabled') + '" aria-label="Open inspector for selected session" ' + (tcalls > 0 ? 'data-cmc-action="inspector"' : 'disabled aria-disabled="true"') + '>Inspector</button>'
-        + '</div>';
+        + actionsHtml;
     }
     body.innerHTML = alertsHtml + picker + selectedHtml;
     if (selected) updateModelChipElement(selected.last_model || '', true);
@@ -2465,10 +2570,9 @@
     }
     domQuarter.style.setProperty('--quarter-color', q.color || CATEGORY_COLORS[q.category] || '#ffd54a');
     var count = Number(q.count || 0);
+    var hideDetails = !!q.detailsDisabled;
     var disabled = count <= 0;
-    body.innerHTML = '<div class="cmc-quarter-line">' + escapeHtml(q.countLine) + '</div>'
-      + '<div class="cmc-quarter-line">' + escapeHtml(q.line) + '</div>'
-      + '<div class="cmc-actions cmc-quarter-actions">'
+    var actionsHtml = hideDetails ? '' : '<div class="cmc-actions cmc-quarter-actions">'
       + '<button class="cmc-button accent ' + (disabled ? 'disabled' : '') + '" type="button" aria-label="Open details for ' + escapeHtml(q.title || categoryLabel(q.category)) + ' sector" aria-haspopup="dialog" '
       + (disabled ? 'disabled aria-disabled="true"' : 'data-cmc-action="quarter-details"')
       + ' data-sector-category="' + escapeHtml(q.category || '') + '"'
@@ -2476,6 +2580,9 @@
       + ' data-sector-count="' + escapeHtml(count) + '"'
       + ' data-sector-color="' + escapeHtml(q.color || CATEGORY_COLORS[q.category] || '#ffd54a') + '">Details</button>'
       + '</div>';
+    body.innerHTML = '<div class="cmc-quarter-line">' + escapeHtml(q.countLine) + '</div>'
+      + '<div class="cmc-quarter-line">' + escapeHtml(q.line) + '</div>'
+      + actionsHtml;
   }
 
   function renderQuarter(view) {

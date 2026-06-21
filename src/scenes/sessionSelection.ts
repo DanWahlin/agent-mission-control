@@ -1,6 +1,8 @@
 import { errorOrReview } from './opsSignals.js';
 import type { CopilotSessionSummary } from './missionTypes.js';
 
+export const ALL_SESSIONS_ID = '__all_sessions__';
+
 export interface SessionPickerOption {
   session: CopilotSessionSummary;
   index: number;
@@ -75,4 +77,8 @@ export function sessionPickerOptions(sessions: CopilotSessionSummary[]): Session
 
 export function findSessionIndexById(sessions: CopilotSessionSummary[], id: string): number {
   return sessions.findIndex(session => session.id === id);
+}
+
+export function isAllSessionsId(id?: string | null): boolean {
+  return id === ALL_SESSIONS_ID;
 }

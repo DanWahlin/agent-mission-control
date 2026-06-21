@@ -7,7 +7,7 @@ import type { MissionLayout } from './missionLayout.js';
 import { buildOpsSummary, createOpsSummary, errorOrReview } from './opsSignals.js';
 import type { OpsSummary } from './opsSignals.js';
 import { advanceReplayCursor, createReplayViewState, ingestReplayEvents, isReplayAtLive, replayEventKey, seekReplayCursor } from './replayState.js';
-import { findSessionIndexById, pickSelectedSession as resolveSelectedSession, sessionPickerOptions } from './sessionSelection.js';
+import { ALL_SESSIONS_ID, findSessionIndexById, isAllSessionsId, pickSelectedSession as resolveSelectedSession, sessionPickerOptions } from './sessionSelection.js';
 import type {
   CopilotActivity,
   CopilotActivitySignal,
@@ -19,6 +19,8 @@ import type {
   SessionToolCall,
   SessionTurnSummary,
 } from './missionTypes.js';
+
+type SelectedScope = 'single' | 'all';
 
 interface ActivityTokenBaseline {
   input_tokens: number;
@@ -375,6 +377,7 @@ export class MissionControlScene extends Phaser.Scene {
   private seenReplayTimelineKeys = new Set<string>();
   private replayTimeline: CopilotEventSummary[] = [];
   private replaySessionId: string | null = null;
+  private selectedScope: SelectedScope = 'single';
   private eventPulses: EventPulse[] = [];
   /// Active arrival sigils. Pushed in `updateEventPulses` when a live
   /// pulse lands; pruned in the same tick once their age exceeds
@@ -1617,7 +1620,7 @@ export class MissionControlScene extends Phaser.Scene {
 
     const parts: string[] = [];
     if (topTool) parts.push(`top: ${topTool.name} (${topTool.count})`);
-    if (calls > 0) parts.push(`${calls} in selected session`);
+    if (calls > 0) parts.push(`${calls} in ${this.isAllSessionsSelected() ? 'all sessions' : 'selected session'}`);
     if (avgMs > 0) parts.push(`avg ${formatDuration(avgMs)}`);
     const line = parts.length > 0 ? parts.join(' · ') : 'No activity routed here yet.';
 
@@ -1631,6 +1634,7 @@ export class MissionControlScene extends Phaser.Scene {
       short: quarter.short,
       colorCss: colorToCss(quarter.color),
       count: quarter.count,
+      allSessions: this.isAllSessionsSelected(),
       stats: this.computeQuarterStats(quarter.key),
     } : null);
   }
@@ -1684,6 +1688,7 @@ export class MissionControlScene extends Phaser.Scene {
         short: quarter.short,
         colorCss: colorToCss(quarter.color),
         count: quarter.count,
+        allSessions: this.isAllSessionsSelected(),
         stats: this.computeQuarterStats(quarter.key),
       } : null,
       nowMs: Date.now(),
@@ -1764,6 +1769,7 @@ export class MissionControlScene extends Phaser.Scene {
   private ingestActivityEvents(events: CopilotEventSummary[]) {
     const nowMs = performance.now();
     const selectedSessionId = this.selectedSession?.id ?? null;
+    const includeAllSessions = this.isAllSessionsSelected();
     const activityResult = ingestReplayEvents({
       events,
       eventLog: this.eventLog,
@@ -1771,7 +1777,7 @@ export class MissionControlScene extends Phaser.Scene {
       cursor: this.eventLog.length,
       paused: this.replayPaused,
       maxEvents: this.replayMaxEvents,
-      includeEvent: event => this.isAfterReset(event.timestamp) && (!selectedSessionId || event.session_id === selectedSessionId),
+      includeEvent: event => this.isAfterReset(event.timestamp) && (includeAllSessions || !selectedSessionId || event.session_id === selectedSessionId),
     });
     const replayResult = ingestReplayEvents({
       events,
@@ -1783,7 +1789,7 @@ export class MissionControlScene extends Phaser.Scene {
       includeEvent: event =>
         isReplayTimelineEvent(event)
         && this.isAfterReset(event.timestamp)
-        && (!selectedSessionId || event.session_id === selectedSessionId),
+        && (includeAllSessions || !selectedSessionId || event.session_id === selectedSessionId),
     });
     this.replayCursor = replayResult.cursor;
     if (activityResult.appended.length === 0) {
@@ -2162,18 +2168,30 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private pickSelectedSession() {
+    const prefs = loadMissionPrefs();
+    if (this.userSelectedSession && isAllSessionsId(prefs.lastSelectedSessionId) && this.activity.sessions.length > 0) {
+      this.selectedSessionIndex = -1;
+      this.selectedScope = 'all';
+      return this.buildAllSessionsSummary();
+    }
+
     const result = resolveSelectedSession({
       sessions: this.activity.sessions,
       selectedIndex: this.selectedSessionIndex,
       userSelectedSession: this.userSelectedSession,
-      preferredSessionId: loadMissionPrefs().lastSelectedSessionId,
+      preferredSessionId: prefs.lastSelectedSessionId,
     });
     this.selectedSessionIndex = result.selectedIndex;
     this.userSelectedSession = result.userSelectedSession;
+    this.selectedScope = 'single';
     return result.session;
   }
 
   private selectedSessionReplayEvents(): CopilotEventSummary[] {
+    if (this.isAllSessionsSelected()) {
+      return this.allSessionsReplayEvents();
+    }
+
     const selectedSessionId = this.selectedSession?.id ?? null;
     if (!selectedSessionId) return [];
     const events = sortReplayEventsNewestFirst(
@@ -2188,16 +2206,27 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private selectedSessionTurnsAsReplayEvents(): CopilotEventSummary[] {
+    if (this.isAllSessionsSelected()) {
+      return this.activeSessionsForAggregate()
+        .flatMap(session => this.sessionTurnsAsReplayEvents(session))
+        .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    }
+
     const selectedSessionId = this.selectedSession?.id ?? null;
     if (!selectedSessionId) return [];
-    return (this.selectedSession?.recent_turns ?? [])
+    return this.sessionTurnsAsReplayEvents(this.selectedSession);
+  }
+
+  private sessionTurnsAsReplayEvents(session: CopilotSessionSummary | null): CopilotEventSummary[] {
+    if (!session) return [];
+    return (session.recent_turns ?? [])
       .filter(turn => this.isAfterReset(turn.started_at))
-      .map(turn => turnSummaryReplayEvent(selectedSessionId, turn))
+      .map(turn => turnSummaryReplayEvent(session.id, turn))
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }
 
   private resetReplayForSelectedSession() {
-    const nextSessionId = this.selectedSession?.id ?? null;
+    const nextSessionId = this.isAllSessionsSelected() ? ALL_SESSIONS_ID : this.selectedSession?.id ?? null;
     if (nextSessionId === this.replaySessionId) return;
     this.replaySessionId = nextSessionId;
     this.eventLog = [];
@@ -2228,7 +2257,9 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private getSessionPickerOptions() {
-    return sessionPickerOptions(this.activity.sessions);
+    const options = sessionPickerOptions(this.activity.sessions);
+    if (this.activity.sessions.length === 0) return options;
+    return [{ session: this.buildAllSessionsSummary(), index: -1 }, ...options];
   }
 
   private selectSession(index: number) {
@@ -2243,11 +2274,24 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private selectSessionById(id: string) {
+    if (isAllSessionsId(id)) {
+      this.selectedSessionIndex = -1;
+      this.selectedScope = 'all';
+      this.userSelectedSession = true;
+      savePref('lastSelectedSessionId', ALL_SESSIONS_ID);
+      this.selectedSession = this.pickSelectedSession();
+      this.resetReplayForSelectedSession();
+      this.ingestActivityEvents(this.selectedSessionReplayEvents());
+      this.renderActivity();
+      return;
+    }
+
     const index = findSessionIndexById(this.activity.sessions, id);
     if (index >= 0) this.selectSession(index);
   }
 
   private openSelectedSessionInEditor() {
+    if (this.isAllSessionsSelected()) return;
     const session = this.selectedSession;
     if (!session?.git_root) return;
     const ti = (window as any).__TAURI_INTERNALS__;
@@ -2262,6 +2306,109 @@ export class MissionControlScene extends Phaser.Scene {
     } else {
       try { window.open(`vscode://file/${session.git_root}`, '_blank'); } catch { /* ignore */ }
     }
+  }
+
+  private isAllSessionsSelected(): boolean {
+    return this.selectedScope === 'all' || this.selectedSession?.id === ALL_SESSIONS_ID || this.selectedSession?.is_all_sessions === true;
+  }
+
+  private allSessionsReplayEvents(): CopilotEventSummary[] {
+    const activeSessions = this.activeSessionsForAggregate();
+    const activeSessionIds = new Set(activeSessions.map(session => session.id));
+    const events = sortReplayEventsNewestFirst(
+      this.activity.recent_events.filter(event => activeSessionIds.has(event.session_id))
+    );
+    const turnEvents = this.selectedSessionTurnsAsReplayEvents();
+    const rawCheckpoints = activeSessions.flatMap(session => {
+      const sessionEvents = events.filter(event => event.session_id === session.id);
+      return rawEventsAsReplayCheckpoint(session.id, sessionEvents);
+    });
+    return mergeReplayEvents(events, turnEvents.length > 0 ? turnEvents : rawCheckpoints);
+  }
+
+  private buildAllSessionsSummary(): CopilotSessionSummary {
+    const allVisibleSessions = this.activity.sessions;
+    const sessions = this.activeSessionsForAggregate();
+    const activeSessionIds = new Set(sessions.map(session => session.id));
+    const latestSession = [...sessions].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0]
+      ?? [...allVisibleSessions].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+    const latestEvent = sortReplayEventsNewestFirst(
+      this.activity.recent_events.filter(event => activeSessionIds.has(event.session_id))
+    )[0];
+    const recentToolCalls = sessions
+      .flatMap(session => (session.recent_tool_calls ?? []).map(call => ({
+        ...call,
+        source_session_id: session.id,
+        source_session_label: aggregateSessionLabel(session),
+        source_session_provider: session.provider,
+      })))
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    const allTokenCheckpoints = sessions
+      .flatMap(session => session.token_checkpoints ?? [])
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    const activeCount = sessions.length;
+    const errorCount = sessions.reduce((sum, session) => sum + session.error_count, 0);
+    const inputTokens = sessions.reduce((sum, session) => sum + (session.input_tokens ?? 0), 0);
+    const outputTokens = sessions.reduce((sum, session) => sum + session.output_tokens, 0);
+    const hasPendingInput = inputTokens <= 0 && outputTokens > 0 && sessions.some(session => session.input_tokens_pending);
+    const activeModels = this.activeSessionModels(sessions);
+
+    return {
+      id: ALL_SESSIONS_ID,
+      title: 'All Active Sessions',
+      session_name: 'All Active Sessions',
+      repository: allSessionsCountLabel(activeCount),
+      branch: '',
+      updated_at: latestSession?.updated_at ?? '',
+      is_active: activeCount > 0,
+      status: activeCount > 0 ? 'working' : 'idle',
+      event_count: sessions.reduce((sum, session) => sum + session.event_count, 0),
+      tool_count: sessions.reduce((sum, session) => sum + session.tool_count, 0),
+      write_count: sessions.reduce((sum, session) => sum + session.write_count, 0),
+      read_count: sessions.reduce((sum, session) => sum + session.read_count, 0),
+      command_count: sessions.reduce((sum, session) => sum + session.command_count, 0),
+      web_count: sessions.reduce((sum, session) => sum + session.web_count, 0),
+      task_count: sessions.reduce((sum, session) => sum + session.task_count, 0),
+      delegates_count: sessions.reduce((sum, session) => sum + (session.delegates_count ?? session.task_count ?? 0), 0),
+      skills_count: sessions.reduce((sum, session) => sum + (session.skills_count ?? 0), 0),
+      court_count: sessions.reduce((sum, session) => sum + (session.court_count ?? 0), 0),
+      mcp_count: sessions.reduce((sum, session) => sum + (session.mcp_count ?? 0), 0),
+      hooks_count: sessions.reduce((sum, session) => sum + (session.hooks_count ?? 0), 0),
+      error_count: errorCount,
+      turn_count: sessions.reduce((sum, session) => sum + (session.turn_count ?? 0), 0),
+      input_tokens: inputTokens,
+      input_tokens_pending: hasPendingInput,
+      output_tokens: outputTokens,
+      last_tool: latestEvent?.tool || latestSession?.last_tool || 'none',
+      last_event_kind: latestEvent?.kind ?? latestSession?.last_event_kind ?? '',
+      last_event_category: latestEvent?.category ?? latestSession?.last_event_category,
+      last_event_timestamp: latestEvent?.timestamp ?? latestSession?.last_event_timestamp ?? '',
+      stale_seconds: latestSession?.stale_seconds,
+      last_model: activeModels.join(', '),
+      recent_tool_calls: recentToolCalls,
+      recent_turns: sessions.flatMap(session => session.recent_turns ?? []),
+      token_checkpoints: allTokenCheckpoints,
+      activity_signal: this.activity.activity_signal,
+      is_all_sessions: true,
+      replay_activity: undefined,
+    };
+  }
+
+  private activeSessionsForAggregate(): CopilotSessionSummary[] {
+    return this.activity.sessions.filter(session => session.is_active);
+  }
+
+  private activeSessionModels(sessions: CopilotSessionSummary[]): string[] {
+    const seen = new Set<string>();
+    const models: string[] = [];
+    for (const session of sessions) {
+      if (!session.is_active) continue;
+      const model = cleanModelLabel(session.last_model);
+      if (!model || seen.has(model)) continue;
+      seen.add(model);
+      models.push(model);
+    }
+    return models;
   }
 
   private pickQuarterForSession(session: CopilotSessionSummary) {
@@ -2746,6 +2893,23 @@ function summarizeToolCalls(calls: SessionToolCall[]): CopilotToolMetric[] {
     }
   }
   return Array.from(metrics.values()).sort((a, b) => b.count - a.count);
+}
+
+function cleanModelLabel(model?: string | null): string {
+  const text = String(model || '').trim();
+  const normalized = text.toLowerCase();
+  return !text || normalized === 'unknown' ? '' : text;
+}
+
+function aggregateSessionLabel(session: CopilotSessionSummary): string {
+  const label = cleanModelLabel(session.session_name)
+    || cleanModelLabel(session.title)
+    || cleanModelLabel(session.repository);
+  return label || `Session ${session.id.slice(0, 8)}`;
+}
+
+function allSessionsCountLabel(activeCount: number): string {
+  return `${activeCount} active`;
 }
 
 function validResetAtMs(value: unknown): number | null {

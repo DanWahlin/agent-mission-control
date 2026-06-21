@@ -2356,6 +2356,97 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(page.locator('#dom-session [data-cmc-action="editor"]')).toBeEnabled();
   });
 
+  test('All Sessions aggregates active metrics, feed rows, replay, and sector counts', async ({ page }) => {
+    await page.addInitScript((activity) => { (window as any).__missionControlFixture = activity; }, MISSION_FIXTURE);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
+    const options = page.locator('#dom-session .cmc-session-option');
+    await expect(options.first()).toContainText('All Active Sessions');
+    await expect(options.first()).toContainText('2 active');
+    await expect(options.first()).not.toContainText('inactive');
+    await expect(options.first().locator('.cmc-session-status-label')).toHaveCount(0);
+    await expect(options.first()).not.toContainText('all');
+    await page.locator('#dom-session [data-session-id="__all_sessions__"]').click();
+
+    await expect.poll(async () => (await getMissionState(page))!.selectedSessionId).toBe('__all_sessions__');
+    const state = await getMissionState(page);
+    expect(state!.selectedInputTokens).toBe(2800);
+    expect(state!.selectedOutputTokens).toBe(7120);
+    expect(state!.selectedToolCount).toBe(40);
+    expect(state!.eventLogSessionIds.sort()).toEqual(['alpha123', 'beta4567']);
+    expect(state!.replayTimelineLength).toBeGreaterThanOrEqual(3);
+    expect(state!.quarterCounts).toMatchObject({
+      edits: 10,
+      library: 16,
+      terminal: 10,
+      signal: 1,
+      hooks: 5,
+      delegates: 3,
+      skills: 5,
+      court: 5,
+      mcp: 5,
+    });
+
+    const sessionText = await page.locator('#dom-session').innerText();
+    expect(sessionText).toContain('All Active Sessions');
+    expect(sessionText).toContain('2 active');
+    expect(sessionText).not.toContain('inactive');
+    await expect(page.locator('#dom-session .cmc-session-summary .cmc-actions')).toHaveCount(0);
+    await expect(page.locator('#dom-session [data-cmc-action="editor"]')).toHaveCount(0);
+    await expect(page.locator('#dom-session [data-cmc-action="inspector"]')).toHaveCount(0);
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
+    await expect(page.locator('#dom-session .cmc-session-menu')).toContainText('Build Mission Control');
+    await expect(page.locator('#dom-session .cmc-session-menu')).toContainText('Review Tests');
+    await expect(page.locator('#dom-session .cmc-session-menu')).not.toContainText('Research UI');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#dom-quarter .cmc-quarter-actions')).toHaveCount(1);
+    await expect(page.locator('#dom-quarter [data-cmc-action="quarter-details"]')).toBeVisible();
+    await expect(page.locator('#dom-quarter')).not.toContainText('all-sessions');
+    await expect(page.locator('#dom-feed')).toContainText('Build Mission Control · apply_patch');
+    await expect(page.locator('#dom-feed')).toContainText('Review Tests · tool failed');
+    await expect(page.locator('#dom-feed')).not.toContainText('Research UI · web_fetch');
+    await expect(page.locator('#dom-replay')).toContainText('All sessions turn replay');
+  });
+
+  test('All Sessions animates live events from multiple active sessions', async ({ page }) => {
+    const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
+    await page.addInitScript((activity) => { (window as any).__missionControlFixture = activity; }, fixture);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+    await selectSession(page, '__all_sessions__');
+
+    const nextFixture = JSON.parse(JSON.stringify(fixture));
+    nextFixture.recent_events.unshift(
+      { session_id: 'alpha123', timestamp: '2026-05-21T07:16:00Z', kind: 'tool.execution_start', tool: 'apply_patch', category: 'edits', success: true },
+      { session_id: 'beta4567', timestamp: '2026-05-21T07:16:05Z', kind: 'tool.execution_start', tool: 'browser_navigate', category: 'mcp', success: true },
+    );
+    nextFixture.sessions[0].write_count += 1;
+    nextFixture.sessions[0].tool_count += 1;
+    nextFixture.sessions[0].event_count += 1;
+    nextFixture.sessions[1].mcp_count += 1;
+    nextFixture.sessions[1].tool_count += 1;
+    nextFixture.sessions[1].event_count += 1;
+    await page.evaluate((activity) => {
+      (window as any).__missionControlFixture = activity;
+      (window as any).__cmcOnAgentActivityChanged();
+    }, nextFixture);
+
+    await expect.poll(async () => {
+      const state = await getMissionState(page);
+      return {
+        selected: state!.selectedSessionId,
+        activePulses: state!.activeEventPulseCount > 0,
+        sessions: state!.eventLogSessionIds.sort(),
+      };
+    }).toEqual({
+      selected: '__all_sessions__',
+      activePulses: true,
+      sessions: ['alpha123', 'beta4567'],
+    });
+  });
+
   test('inspector reveals raw local details only after explicit opt-in', async ({ page }) => {
     await page.addInitScript((fixture) => {
       (window as any).__missionControlFixture = fixture;
@@ -2527,6 +2618,108 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(page.locator('#inspector-tabs')).toBeHidden();
   });
 
+  test('All Active Sessions quarter Details groups sector rows by source session', async ({ page }) => {
+    const fixture = inspectorFixture();
+    const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
+    const gamma = fixture.sessions.find((session: any) => session.id === 'gamma890');
+    alpha.recent_tool_calls = [
+      {
+        tool: 'search_docs',
+        category: 'mcp',
+        timestamp: '2026-05-21T07:09:00Z',
+        completed_at: '2026-05-21T07:09:01Z',
+        success: true,
+        duration_ms: 1000,
+        model: 'gpt-5.5',
+        call_id: 'call-alpha-mcp',
+        event_ref: 'evt-alpha-mcp',
+        turn_id: 'turn-alpha',
+        target: 'search_docs',
+        details: [
+          { label: 'Type', value: 'MCP tool' },
+          { label: 'Provider', value: 'copilot' },
+          { label: 'Privacy', value: 'arguments/output hidden' },
+        ],
+      },
+    ];
+    gamma.mcp_count = 1;
+    gamma.recent_tool_calls = [
+      {
+        tool: 'stale_automation_tool',
+        category: 'mcp',
+        timestamp: '2026-05-21T07:12:00Z',
+        completed_at: '2026-05-21T07:12:01Z',
+        success: true,
+        duration_ms: 1000,
+        model: 'gpt-5.5',
+        call_id: 'call-stale-mcp',
+        event_ref: 'evt-stale-mcp',
+        turn_id: 'turn-stale',
+        target: 'stale_automation_tool',
+        details: [
+          { label: 'Type', value: 'MCP tool' },
+          { label: 'Provider', value: 'copilot' },
+          { label: 'Privacy', value: 'arguments/output hidden' },
+        ],
+      },
+    ];
+    await page.addInitScript((fixtureArg) => {
+      (window as any).__missionControlFixture = fixtureArg;
+      (window as any).__TAURI_INTERNALS__ = {
+        invoke: async (command: string, args: any) => {
+          if (command !== 'get_raw_tool_call_details') throw new Error(`unexpected command ${command}`);
+          if (args.sessionId !== 'beta4567') throw new Error(`unexpected session ${args.sessionId}`);
+          if (args.eventRef !== 'evt-1') throw new Error(`unexpected event ref ${args.eventRef}`);
+          return {
+            raw_args: '{"url":"SECRET_AGGREGATE_MCP"}',
+            raw_output: 'SECRET_AGGREGATE_OUTPUT',
+          };
+        },
+      };
+    }, fixture);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await selectSession(page, '__all_sessions__');
+    await openQuarterDetails(page, 'mcp');
+
+    const text = await page.locator('#inspector-dialog').innerText();
+    expect(text).toContain('MCP details · All Active Sessions');
+    expect(text).not.toContain('inactive');
+    expect(text).toContain('2 retained rows');
+    expect(text).toContain('5 signals');
+    expect(text).toContain('Build Mission Control');
+    expect(text).toContain('Review Tests');
+    expect(text.indexOf('Build Mission Control')).toBeLessThan(text.indexOf('Review Tests'));
+    expect(text).not.toContain('search_docs');
+    expect(text).not.toContain('browser_navigate');
+    expect(text).not.toContain('Research UI');
+    expect(text).not.toContain('stale_automation_tool');
+    await expect(page.locator('[data-inspector-group-key]')).toHaveCount(2);
+    await expect(page.locator('[data-inspector-group-key]').first()).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('.inspector-row')).toHaveCount(0);
+
+    await page.locator('[data-inspector-group-key]').filter({ hasText: 'Build Mission Control' }).click();
+    await expect(page.locator('[data-inspector-group-key]').filter({ hasText: 'Build Mission Control' })).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.locator('.inspector-row')).toHaveCount(1);
+    await expect(page.locator('.inspector-row')).toContainText('search_docs');
+    await expect(page.locator('.inspector-row')).not.toContainText('browser_navigate');
+
+    await page.locator('[data-inspector-group-key]').filter({ hasText: 'Review Tests' }).click();
+    await expect(page.locator('[data-inspector-group-key]').filter({ hasText: 'Review Tests' })).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.locator('.inspector-row')).toHaveCount(2);
+
+    await page.locator('.inspector-row').filter({ hasText: 'browser_navigate' }).click();
+    await expect(page.locator('.inspector-detail')).toContainText('Session');
+    await expect(page.locator('.inspector-detail')).toContainText('Review Tests');
+    await expect(page.locator('.inspector-detail')).toContainText('browser_navigate');
+    await expect(page.locator('.inspector-detail')).not.toContainText('SECRET_AGGREGATE_MCP');
+    await expect(page.locator('.inspector-detail')).not.toContainText('SECRET_AGGREGATE_OUTPUT');
+    await page.locator('[data-inspector-reveal]').click();
+    await expect(page.locator('.inspector-detail')).toContainText('SECRET_AGGREGATE_MCP');
+    await expect(page.locator('.inspector-detail')).toContainText('SECRET_AGGREGATE_OUTPUT');
+  });
+
   test('quarter Details explains when sector signals outlive retained rows', async ({ page }) => {
     const fixture = inspectorFixture();
     const beta = fixture.sessions.find((session: any) => session.id === 'beta4567');
@@ -2616,6 +2809,11 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await selectSession(page, 'alpha123');
 
     await expect(page.locator('#dom-session #model-chip')).toHaveText('gpt-5.5');
+
+    await selectSession(page, '__all_sessions__');
+
+    await expect(page.locator('#dom-session .cmc-model-meta')).toContainText('Models:');
+    await expect(page.locator('#dom-session #model-chip')).toHaveText('gpt-5.5, claude-sonnet-4.6');
   });
 
   test('selected session model chip stays hidden when no session reports a model', async ({ page }) => {
