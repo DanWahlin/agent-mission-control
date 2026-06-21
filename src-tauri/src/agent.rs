@@ -2540,14 +2540,30 @@ impl AgentProvider for CopilotProvider {
 }
 
 fn scan_copilot(include_history: bool) -> ProviderScan {
-    let provider = "copilot";
     let (schema, schema_alerts) = load_copilot_schema();
     let executable_available = is_copilot_available();
+    let discovery = discover_copilot_state_roots(&schema);
+    scan_copilot_from_discovery(
+        include_history,
+        schema,
+        schema_alerts,
+        executable_available,
+        discovery,
+    )
+}
+
+fn scan_copilot_from_discovery(
+    include_history: bool,
+    schema: ProviderSchema,
+    schema_alerts: Vec<String>,
+    executable_available: bool,
+    discovery: CopilotRootDiscovery,
+) -> ProviderScan {
+    let provider = "copilot";
     let mut scan = ProviderScan::unavailable(provider);
     scan.available = executable_available;
     scan.alerts.extend(schema_alerts);
 
-    let discovery = discover_copilot_state_roots(&schema);
     scan.alerts.extend(discovery.alerts);
     if discovery.roots.is_empty() {
         scan.alerts
@@ -2694,7 +2710,11 @@ fn scan_copilot(include_history: bool) -> ProviderScan {
             updated_at: workspace.get("updated_at").cloned().unwrap_or_default(),
             is_active: age_seconds < 10 * 60,
             stale_seconds: age_seconds,
-            git_root: workspace.get("git_root").cloned().unwrap_or_default(),
+            git_root: workspace
+                .get("git_root")
+                .or_else(|| workspace.get("cwd"))
+                .cloned()
+                .unwrap_or_default(),
             ..Default::default()
         };
         summary.title =
@@ -3340,14 +3360,15 @@ fn workspace_repository_label(workspace: &BTreeMap<String, String>) -> Option<St
         .get("repository")
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .or_else(|| {
-            workspace
-                .get("git_root")
-                .and_then(|p| Path::new(p).file_name()?.to_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        })
+        .or_else(|| workspace_folder_name(workspace.get("git_root")))
+        .or_else(|| workspace_folder_name(workspace.get("cwd")))
+}
+
+fn workspace_folder_name(path: Option<&String>) -> Option<String> {
+    path.and_then(|p| Path::new(p).file_name()?.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn workspace_marks_mission_control_analytics_session(workspace: &BTreeMap<String, String>) -> bool {
@@ -5027,21 +5048,22 @@ mod tests {
     fn bundled_provider_schema_parses_and_validates() {
         let schema = test_schema();
         assert_eq!(schema.provider, "copilot");
-        assert_eq!(schema.schema_version, "1.2.1");
+        assert_eq!(schema.schema_version, "1.2.2");
         assert!(schema
             .session
             .relevant_files
             .contains(&"events.jsonl".to_string()));
         assert!(schema.workspace.allowed_keys.contains(&"name".to_string()));
+        assert!(schema.workspace.allowed_keys.contains(&"cwd".to_string()));
     }
 
     #[test]
     fn published_provider_schema_matches_bundled_schema() {
-        let published = include_str!("../../docs/provider-schemas/copilot/1.2.1.json");
+        let published = include_str!("../../docs/provider-schemas/copilot/1.2.2.json");
         assert_eq!(published, BUNDLED_COPILOT_SCHEMA);
         assert_eq!(
             sha256_hex(published),
-            "7c4d45b7882705bdbf4b235cd63f3dca2fed94e32807e2b591c245b05b0b30de"
+            "b9f7391a340636e03293b5a2f07ff0f28ba4b3ab159e42e770914df406a1a186"
         );
     }
 
@@ -5100,13 +5122,86 @@ mod tests {
     }
 
     #[test]
-    fn workspace_without_repository_or_git_root_has_no_session_scope() {
+    fn workspace_without_repository_git_root_or_cwd_has_no_session_scope() {
         let workspace = BTreeMap::from([
             ("name".to_string(), "Mission Control Chat".to_string()),
             ("branch".to_string(), "main".to_string()),
         ]);
 
         assert_eq!(workspace_repository_label(&workspace), None);
+    }
+
+    #[test]
+    fn workspace_uses_cwd_folder_name_when_repository_and_git_root_are_missing() {
+        let workspace = BTreeMap::from([
+            (
+                "cwd".to_string(),
+                "/Users/danwahlin/Desktop/projects/github-copilot-app-for-beginners".to_string(),
+            ),
+            (
+                "name".to_string(),
+                "Planning copilot app course".to_string(),
+            ),
+        ]);
+
+        assert_eq!(
+            workspace_repository_label(&workspace),
+            Some("github-copilot-app-for-beginners".to_string())
+        );
+    }
+
+    #[test]
+    fn copilot_scan_includes_workspace_with_only_cwd_scope() {
+        let mut root = std::env::temp_dir();
+        root.push(format!("cmc_scan_cwd_root_test_{}", std::process::id()));
+        let session_dir = root.join("be225fae-fca3-42e3-9346-0150cd953a9e");
+        std::fs::create_dir_all(&session_dir).expect("create temp session dir");
+        std::fs::write(
+            session_dir.join("workspace.yaml"),
+            concat!(
+                "cwd: /Users/danwahlin/Desktop/projects/github-copilot-app-for-beginners\n",
+                "name: Planning copilot app course\n",
+                "updated_at: 2026-06-21T01:19:36.912Z\n",
+            ),
+        )
+        .expect("write workspace");
+        std::fs::write(
+            session_dir.join("events.jsonl"),
+            concat!(
+                "{\"type\":\"session.start\",\"timestamp\":\"2026-06-21T01:19:27Z\"}\n",
+                "{\"type\":\"tool.execution_start\",\"timestamp\":\"2026-06-21T01:19:28Z\",\"data\":{\"toolName\":\"list_projects\",\"turnId\":\"turn-1\",\"toolCallId\":\"call-1\"}}\n",
+                "{\"type\":\"tool.execution_complete\",\"timestamp\":\"2026-06-21T01:19:29Z\",\"data\":{\"toolName\":\"list_projects\",\"turnId\":\"turn-1\",\"toolCallId\":\"call-1\",\"success\":true}}\n",
+            ),
+        )
+        .expect("write events");
+
+        let scan = scan_copilot_from_discovery(
+            false,
+            test_schema(),
+            Vec::new(),
+            false,
+            CopilotRootDiscovery {
+                roots: vec![CopilotStateRoot {
+                    path: root.clone(),
+                    label: "test".to_string(),
+                }],
+                alerts: Vec::new(),
+            },
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        let session = scan
+            .sessions
+            .iter()
+            .find(|session| session.repository == "github-copilot-app-for-beginners")
+            .expect("cwd-only session should be visible");
+        assert_eq!(session.session_name, "Planning copilot app course");
+        assert_eq!(session.title, "Planning copilot app course");
+        assert_eq!(
+            session.git_root,
+            "/Users/danwahlin/Desktop/projects/github-copilot-app-for-beginners"
+        );
+        assert_eq!(session.tool_count, 1);
     }
 
     #[test]
@@ -5124,6 +5219,28 @@ mod tests {
 
         assert!(workspace_marks_mission_control_analytics_session(
             &workspace
+        ));
+    }
+
+    #[test]
+    fn watcher_relevance_is_limited_to_events_and_workspace_files() {
+        let relevant = vec!["events.jsonl".to_string(), "workspace.yaml".to_string()];
+
+        assert!(is_relevant_path(
+            Path::new("/tmp/session-state/session-a/events.jsonl"),
+            &relevant
+        ));
+        assert!(is_relevant_path(
+            Path::new("/tmp/session-state/session-a/workspace.yaml"),
+            &relevant
+        ));
+        assert!(!is_relevant_path(
+            Path::new("/tmp/session-state/session-a/session.db"),
+            &relevant
+        ));
+        assert!(!is_relevant_path(
+            Path::new("/tmp/session-state/session-a/checkpoints/index.md"),
+            &relevant
         ));
     }
 

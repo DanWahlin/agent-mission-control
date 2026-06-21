@@ -21,6 +21,11 @@
       "version": "1.2.1",
       "url": "1.2.1.json",
       "sha256": "7c4d45b7882705bdbf4b235cd63f3dca2fed94e32807e2b591c245b05b0b30de"
+    },
+    {
+      "version": "1.2.2",
+      "url": "1.2.2.json",
+      "sha256": "b9f7391a340636e03293b5a2f07ff0f28ba4b3ab159e42e770914df406a1a186"
     }
   ]
 }

@@ -2256,7 +2256,7 @@ test.describe('Agent Mission Control — Dashboard', () => {
     expect(text).toContain('Age: 2h');
   });
 
-  test('inspector filters MCP, skills, and sub-agent calls with safe details', async ({ page }) => {
+  test('inspector filters MCP, skills, and sub-agent calls with details', async ({ page }) => {
     await page.addInitScript((fixture) => { (window as any).__missionControlFixture = fixture; }, inspectorFixture());
     await page.goto(GAME_URL);
     await waitForGame(page);
@@ -2268,7 +2268,7 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(page.locator('#inspector-title')).toContainText('Review Tests');
 
     let text = await page.locator('#inspector-dialog').innerText();
-    expect(text).toContain('Safe details');
+    expect(text).toContain('Details');
     expect(text).toContain('code-reviewer');
     expect(text).toContain('Sub-agent');
     expect(text).toContain('arguments/output hidden');
@@ -2292,6 +2292,68 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#inspector-overlay')).not.toHaveClass(/visible/);
     await expect(page.locator('#dom-session [data-cmc-action="inspector"]')).toBeFocused();
+  });
+
+  test('dashboard renders Copilot App sessions that only have a cwd-derived scope', async ({ page }) => {
+    const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
+    fixture.sessions.unshift({
+      id: 'appcwd12',
+      session_name: 'Planning copilot app course',
+      title: 'Planning copilot app course',
+      repository: 'github-copilot-app-for-beginners',
+      branch: '',
+      git_root: '/Users/danwahlin/Desktop/projects/github-copilot-app-for-beginners',
+      updated_at: '2026-06-21T01:19:36.912Z',
+      is_active: true,
+      status: 'working',
+      event_count: 12,
+      tool_count: 4,
+      write_count: 0,
+      read_count: 2,
+      command_count: 2,
+      web_count: 0,
+      task_count: 0,
+      delegates_count: 0,
+      skills_count: 0,
+      court_count: 0,
+      mcp_count: 0,
+      hooks_count: 0,
+      error_count: 0,
+      input_tokens: 0,
+      output_tokens: 120,
+      last_tool: 'list_projects',
+      last_event_kind: 'tool.execution_complete',
+      last_event_category: 'intent',
+      stale_seconds: 30,
+      recent_tool_calls: [],
+      token_checkpoints: [{ timestamp: '2026-06-21T01:19:36Z', output_tokens: 120 }],
+    });
+    fixture.recent_events.unshift({
+      session_id: 'appcwd12',
+      timestamp: '2026-06-21T01:19:36Z',
+      kind: 'tool.execution_complete',
+      tool: 'list_projects',
+      category: 'intent',
+      success: true,
+    });
+
+    await page.addInitScript((activity) => { (window as any).__missionControlFixture = activity; }, fixture);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    await page.locator('[data-cmc-action="session-menu"]').click();
+    await expect(page.locator('.cmc-session-menu')).toContainText('Planning copilot app course');
+    await expect(page.locator('.cmc-session-menu')).toContainText('github-copilot-app-for-beginners');
+    await page.locator('[data-session-id="appcwd12"]').click();
+
+    const state = await getMissionState(page);
+    expect(state!.selectedSessionId).toBe('appcwd12');
+    const sessionText = await page.locator('#dom-session').innerText();
+    expect(sessionText).toContain('Planning copilot app course');
+    expect(sessionText).toContain('github-copilot-app-for-beginners');
+    expect(sessionText).not.toContain('Unknown');
+    expect(sessionText).not.toContain('github-copilot-app-for-beginners / unknown');
+    await expect(page.locator('#dom-session [data-cmc-action="editor"]')).toBeEnabled();
   });
 
   test('inspector reveals raw local details only after explicit opt-in', async ({ page }) => {

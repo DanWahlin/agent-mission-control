@@ -482,7 +482,7 @@
         ]) + '<div class="inspector-empty">Select a retained row when one is available.</div>';
         return;
       }
-      inspectorDetail.innerHTML = '<h3>Safe details</h3><div class="inspector-empty">Select a tool call to inspect.</div>';
+      inspectorDetail.innerHTML = '<h3>Details</h3><div class="inspector-empty">Select a tool call to inspect.</div>';
       return;
     }
     var turn = ((inspectorSession && inspectorSession.recent_turns) || []).find(function (t) { return t.id === call.turn_id; });
@@ -501,7 +501,7 @@
     var revealState = activeRevealState(call);
     rows.push(['Raw args', revealArgsText(revealState)]);
     rows.push(['Output', revealOutputText(revealState)]);
-    inspectorDetail.innerHTML = '<h3>Safe details</h3>' + kvRows(rows) + renderRevealPanel(call, revealState);
+    inspectorDetail.innerHTML = '<h3>Details</h3>' + kvRows(rows) + renderRevealPanel(call, revealState);
   }
 
   function renderTurnList(turns, selected) {
