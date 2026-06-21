@@ -3026,7 +3026,9 @@
   }
 
   function analyticsHistoryModelMix(summary) {
-    var rows = Array.isArray(summary && summary.model_mix) ? summary.model_mix : [];
+    var rows = Array.isArray(summary && summary.model_mix) ? summary.model_mix.filter(function (item) {
+      return Number(item && item.secondary_value || 0) > 0;
+    }) : [];
     var total = rows.reduce(function (sum, item) { return sum + Number(item.secondary_value || 0); }, 0);
     return rows.map(function (item) {
       var count = Number(item.secondary_value || 0);

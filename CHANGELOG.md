@@ -1,6 +1,22 @@
 # Changelog
 
 All notable changes to Agent Mission Control.
+## [0.2.8] - 2026-06-21
+
+### 🚀 Features & Improvements
+
+- Add all active sessions dashboard
+## [0.2.7] - 2026-06-21
+
+### 🚀 Features & Improvements
+
+- Support Copilot App cwd sessions
+- Support Copilot App cwd sessions
+## [0.2.6] - 2026-06-20
+
+### ⚙️ CI/CD & Build
+
+- Release v0.2.6
 ## [0.2.5] - 2026-06-19
 
 ### ⚙️ CI/CD & Build

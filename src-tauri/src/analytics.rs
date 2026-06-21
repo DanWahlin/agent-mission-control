@@ -3782,6 +3782,14 @@ fn digest_token_pair(input_tokens: u64, output_tokens: u64) -> String {
     format!("{} / {} output tokens", input_label, output_tokens)
 }
 
+fn input_token_artifact_value(input_tokens: u64, output_tokens: u64) -> String {
+    if input_tokens == 0 && output_tokens > 0 {
+        "pending".to_string()
+    } else {
+        input_tokens.to_string()
+    }
+}
+
 fn digest_exports(
     selected_day: &str,
     narrative: &str,
@@ -4740,6 +4748,7 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
                 columns: vec![
                     "Session".to_string(),
                     "Model".to_string(),
+                    "Input Tokens".to_string(),
                     "Output Tokens".to_string(),
                 ],
                 rows: summary
@@ -4749,6 +4758,7 @@ fn artifacts_for_keys(summary: &AnalyticsUsageSummary, keys: &[String]) -> Vec<A
                         vec![
                             item.label.clone(),
                             item.category.clone(),
+                            input_token_artifact_value(item.secondary_value, item.value),
                             item.value.to_string(),
                         ]
                     })
@@ -6531,6 +6541,60 @@ mod tests {
         assert_eq!(
             model_mix.rows[0],
             vec!["gpt-5.5", "4848", "812345", "4250783"]
+        );
+    }
+
+    #[test]
+    fn token_hotspots_artifact_includes_input_tokens_and_pending() {
+        let summary = AnalyticsUsageSummary {
+            token_hotspots: vec![
+                AnalyticsRankedItem {
+                    label: "Jun 21, 10:17 AM - 375 turns\nCompare session storage (c7d43d08)"
+                        .to_string(),
+                    category: "gpt-5.5".to_string(),
+                    value: 176_880,
+                    secondary_value: 42_123,
+                    ..Default::default()
+                },
+                AnalyticsRankedItem {
+                    label: "Jun 21, 11:58 AM - 354 turns\nPlanning copilot app course (85744c69)"
+                        .to_string(),
+                    category: "gpt-5.5".to_string(),
+                    value: 342_256,
+                    secondary_value: 0,
+                    partial: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let artifacts = artifacts_for_keys(&summary, &["token_hotspots".to_string()]);
+        let hotspots = artifacts
+            .iter()
+            .find(|artifact| artifact.title == "Session Token Hotspots")
+            .expect("token hotspots artifact");
+        assert_eq!(
+            hotspots.columns,
+            vec!["Session", "Model", "Input Tokens", "Output Tokens"]
+        );
+        assert_eq!(
+            hotspots.rows[0],
+            vec![
+                "Jun 21, 10:17 AM - 375 turns\nCompare session storage (c7d43d08)",
+                "gpt-5.5",
+                "42123",
+                "176880",
+            ]
+        );
+        assert_eq!(
+            hotspots.rows[1],
+            vec![
+                "Jun 21, 11:58 AM - 354 turns\nPlanning copilot app course (85744c69)",
+                "gpt-5.5",
+                "pending",
+                "342256",
+            ]
         );
     }
 

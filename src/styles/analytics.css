@@ -395,8 +395,10 @@ body.theme-light .analytics-artifact-copy { color: #475569; }
   line-height: 1.05;
   white-space: nowrap;
 }
-.analytics-table-token-hotspots th:last-child,
-.analytics-table-token-hotspots td:last-child {
+.analytics-table-token-hotspots th:nth-child(3),
+.analytics-table-token-hotspots td:nth-child(3),
+.analytics-table-token-hotspots th:nth-child(4),
+.analytics-table-token-hotspots td:nth-child(4) {
   min-width: 112px;
   width: 132px;
   text-align: right;
