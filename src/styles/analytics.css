@@ -242,9 +242,13 @@ body.theme-light .analytics-chip {
   align-self: stretch;
   gap: 14px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
 }
 .analytics-message {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
   padding: 14px;
   color: #e8ecff;
   line-height: 1.48;

@@ -6,6 +6,10 @@ All notable changes to Agent Mission Control.
 ### 🚀 Features & Improvements
 
 - Add all active sessions dashboard
+
+### ⚙️ CI/CD & Build
+
+- Release v0.2.8
 ## [0.2.7] - 2026-06-21
 
 ### 🚀 Features & Improvements

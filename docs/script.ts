@@ -7,6 +7,40 @@
 (function () {
   'use strict';
 
+  function guardLocalLiveServerReloads() {
+    if (!['127.0.0.1', 'localhost'].includes(window.location.hostname) || !('WebSocket' in window)) return;
+    const NativeWebSocket = window.WebSocket;
+    if (NativeWebSocket.__amcLiveServerGuarded) return;
+
+    class GuardedWebSocket extends NativeWebSocket {
+      constructor(url, protocols) {
+        super(url, protocols);
+        const socketUrl = String(url);
+        this.amcIsLiveServerSocket = socketUrl.endsWith('/ws') && socketUrl.includes(window.location.host);
+      }
+
+      set onmessage(handler) {
+        if (!this.amcIsLiveServerSocket || !handler) {
+          super.onmessage = handler;
+          return;
+        }
+        super.onmessage = function (event) {
+          if (event.data === 'reload') return;
+          return handler.call(this, event);
+        };
+      }
+
+      get onmessage() {
+        return super.onmessage;
+      }
+    }
+
+    GuardedWebSocket.__amcLiveServerGuarded = true;
+    window.WebSocket = GuardedWebSocket;
+  }
+
+  guardLocalLiveServerReloads();
+
   // ---------- Starfield (night sky) ----------
   const canvas = document.getElementById('starfield');
   const ctx = canvas.getContext('2d');
@@ -133,7 +167,7 @@
   }
 
   // ---------- Screenshot carousel ----------
-  // Two animated previews of the dashboard. Each GIF runs a fixed
+  // Animated previews of the dashboard. Each GIF runs a fixed
   // ~10-second loop, so the carousel dwells on each one long enough
   // for a viewer to see the loop play through. Order is fixed —
   // dashboard.gif is always shown first so a visitor's first impression
@@ -141,6 +175,8 @@
   const SHOTS = [
     { src: 'img/dashboard.gif',  label: '🛰 Full dashboard', duration: 10000 },
     { src: 'img/focus-mode.gif', label: '👁 Focus mode',     duration: 10000 },
+    { src: 'img/history.gif',    label: '📊 History analytics', duration: 10000 },
+    { src: 'img/chat.gif',       label: '💬 Analytics chat', duration: 10000 },
   ];
 
   function initCarousel() {
@@ -148,13 +184,23 @@
     const label = document.getElementById('gif-label');
     const indicatorWrap = document.getElementById('gif-indicators');
     if (!display || !label || !indicatorWrap) return;
+    if (display.dataset.carouselInitialized === 'true') return;
+    display.dataset.carouselInitialized = 'true';
 
     const order = [...Array(SHOTS.length).keys()];
-    let currentIdx = 0;
+    const storageKey = 'amc_docs_carousel_index';
+    const navEntry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+    const storedIdx = navEntry && navEntry.type === 'reload'
+      ? Number(sessionStorage.getItem(storageKey))
+      : 0;
+    let currentIdx = Number.isInteger(storedIdx) && storedIdx >= 0 && storedIdx < order.length ? storedIdx : 0;
+    let transitionTimer: ReturnType<typeof setTimeout> | null = null;
+    let fadeTimer: ReturnType<typeof setTimeout> | null = null;
+    let transitionSeq = 0;
 
     order.forEach((_, i) => {
       const dot = document.createElement('span');
-      dot.className = 'gif-dot' + (i === 0 ? ' active' : '');
+      dot.className = 'gif-dot' + (i === currentIdx ? ' active' : '');
       dot.addEventListener('click', () => goTo(i));
       indicatorWrap.appendChild(dot);
     });
@@ -165,10 +211,13 @@
     toolbar.parentNode.insertBefore(progressBar, toolbar.nextSibling);
 
     const FADE_MS = 350;
-    let timer = null;
 
     function showShot(idx) {
+      if (transitionTimer) clearTimeout(transitionTimer);
+      if (fadeTimer) clearTimeout(fadeTimer);
+      const seq = ++transitionSeq;
       currentIdx = idx;
+      sessionStorage.setItem(storageKey, String(currentIdx));
       const data = SHOTS[order[idx]];
       const dur = data.duration;
 
@@ -177,18 +226,22 @@
       progressBar.style.transition = 'none';
       progressBar.style.width = '0%';
 
-      setTimeout(() => {
+      fadeTimer = setTimeout(() => {
+        if (seq !== transitionSeq) return;
         display.src = data.src;
         label.textContent = data.label;
 
         const onLoad = () => {
           display.removeEventListener('load', onLoad);
+          if (seq !== transitionSeq) return;
           display.classList.add('visible');
           label.style.opacity = '1';
           requestAnimationFrame(() => {
+            if (seq !== transitionSeq) return;
             progressBar.style.transition = `width ${dur}ms linear`;
             progressBar.style.width = '100%';
           });
+          transitionTimer = setTimeout(next, dur);
         };
 
         display.addEventListener('load', onLoad);
@@ -200,16 +253,13 @@
         indicatorWrap.querySelectorAll('.gif-dot').forEach((d, i) => {
           d.classList.toggle('active', i === idx);
         });
-
-        clearTimeout(timer);
-        timer = setTimeout(next, dur + FADE_MS);
       }, FADE_MS);
     }
 
     function next() { showShot((currentIdx + 1) % order.length); }
-    function goTo(idx) { clearTimeout(timer); showShot(idx); }
+    function goTo(idx) { showShot(idx); }
 
-    showShot(0);
+    showShot(currentIdx);
 
     // Lightbox
     const lightbox = document.getElementById('lightbox');
@@ -221,7 +271,8 @@
       lbImg.src = data.src;
       lbLabel.textContent = data.label;
       lightbox.classList.add('open');
-      clearTimeout(timer);
+      if (transitionTimer) clearTimeout(transitionTimer);
+      if (fadeTimer) clearTimeout(fadeTimer);
     });
 
     function closeLightbox() {

@@ -53,7 +53,10 @@
   --font-mono:    'JetBrains Mono', monospace;
 }
 
-html { scroll-behavior: smooth; }
+html {
+  scroll-behavior: smooth;
+  overflow-x: hidden;
+}
 
 body {
   font-family: var(--font-body);
@@ -340,7 +343,7 @@ code {
 .hero-grid .hero-stage   { grid-column: 1;     grid-row: 2; }
 .hero-grid .hero-copy    { grid-column: 2;     grid-row: 2; }
 
-.hero-heading { text-align: left; max-width: 900px; }
+.hero-heading { text-align: left; max-width: 1100px; }
 
 .hero-copy { text-align: left; }
 
@@ -381,6 +384,13 @@ code {
   color: var(--white);
 }
 
+.hero-subtitle {
+  max-width: 760px;
+  color: var(--white-dim);
+  font-size: 1.08rem;
+  line-height: 1.65;
+}
+
 .highlight {
   /* Signature sunrise gradient — sets the brand apart from a flat-gold
      treatment and ties the hero copy back to the banner's horizon hue. */
@@ -415,9 +425,12 @@ code {
 }
 
 .built-with {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  max-width: 100%;
+  width: fit-content;
   padding: 8px 20px;
   margin-bottom: 20px;
   border-radius: 50px;
@@ -994,6 +1007,7 @@ code {
 @media (max-width: 768px) {
   .hero { padding: 70px 16px 30px; min-height: auto; }
   .hero-title { font-size: 1.8rem; }
+  .hero-subtitle { font-size: 1rem; margin-left: auto; margin-right: auto; }
   .hero-desc { font-size: 1rem; }
   .section { padding: 40px 0; }
   .section-title { font-size: 1.5rem; margin-bottom: 12px; }
@@ -1017,6 +1031,7 @@ code {
   .container { padding: 0 16px; }
   .hero { padding: 68px 12px 20px; }
   .hero-title { font-size: 1.45rem; }
+  .hero-subtitle { font-size: 0.95rem; }
   .hero-desc { font-size: 0.92rem; margin-bottom: 20px; }
   .hero-cta { flex-direction: column; align-items: center; }
   .btn { width: 100%; max-width: 280px; justify-content: center; }

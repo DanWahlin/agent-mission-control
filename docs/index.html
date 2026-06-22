@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Agent Mission Control — Live dashboard for GitHub Copilot CLI</title>
-  <meta name="description" content="Keep an eye on your GitHub Copilot CLI session without losing focus. Every tool call, sub-agent dispatch, and permission prompt becomes a live signal on a second monitor — so you spot stalls and 'needs attention' the moment they happen." />
+  <title>Agent Mission Control — Live agentic coding dashboard</title>
+  <meta name="description" content="Keep an eye on your GitHub Copilot CLI and GitHub Copilot App sessions without losing focus. Every tool call, sub-agent dispatch, and permission prompt becomes a live signal on a second monitor — so you spot stalls and 'needs attention' the moment they happen." />
   <meta property="og:title" content="Agent Mission Control" />
-  <meta property="og:description" content="Watch your live GitHub Copilot CLI activity become a live signal of tools, agents, and alerts." />
+  <meta property="og:description" content="Watch your live GitHub Copilot CLI and GitHub Copilot App activity become a live signal of tools, agents, and alerts." />
   <meta property="og:image" content="img/dashboard.png" />
   <link rel="icon" href="img/icon.png" type="image/png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -49,8 +49,8 @@
 
     <div class="container hero-grid">
       <div class="hero-heading">
-        <div class="hero-kicker"><span class="kicker-dot"></span> Live Copilot CLI dashboard</div>
-        <h1 class="hero-title">Watch your <span class="highlight">Copilot CLI</span> come alive</h1>
+        <h1 class="hero-title">Monitor and analyze your <span class="highlight">AI coding agents</span></h1>
+        <p class="hero-subtitle">Track live agent activity, review session history, and chat with your usage analytics to spot trends, token hotspots, model shifts, and recurring failures.</p>
       </div>
 
       <div class="hero-stage">
@@ -69,7 +69,7 @@
       </div>
 
       <div class="hero-copy">
-        <p class="hero-desc">Keep an eye on your Copilot CLI session without breaking focus. Every tool call, sub-agent dispatch, and permission prompt becomes a live signal on a second monitor — so you spot stalls, surprises, and "needs attention" the moment they happen, instead of scrolling back through terminal output.</p>
+        <p class="hero-desc">Keep an eye on your <a href="https://github.com/features/copilot/cli" target="_blank">Copilot CLI</a> and <a href="https://github.com/features/ai/github-app" target="_blank">Copilot App</a> agentic coding sessions without breaking focus. Every tool call, sub-agent dispatch, and permission prompt becomes a live signal on a second monitor — so you spot stalls, surprises, and "needs attention" the moment they happen, instead of scrolling back through terminal output.</p>
 
         <div class="hero-cta">
           <a href="https://github.com/DanWahlin/agent-mission-control/releases" class="btn btn-primary btn-glow">
@@ -80,12 +80,12 @@
           </a>
         </div>
 
-        <div class="built-with">
+        <!-- <div class="built-with">
           <span class="built-with-icon">⚡</span>
-          Built for the <a href="https://github.com/github/copilot-cli" target="_blank">GitHub Copilot CLI</a>
+          Built for the <a href="https://github.com/features/copilot/cli" target="_blank">GitHub Copilot CLI</a> and <a href="https://github.com/features/ai/github-app" target="_blank">GitHub Copilot App</a>
           <span class="built-with-separator">·</span>
           <a href="https://github.com/github/copilot-cli-for-beginners" target="_blank">Free course →</a>
-        </div>
+        </div> -->
 
         <div class="hero-badges">
           <span class="badge">Tauri 2</span>
@@ -262,7 +262,7 @@
       <h2 class="section-title"><span class="title-icon">🛠️</span> How This Was Made</h2>
       <div class="story-card">
         <div class="story-text">
-          <p><strong>Built with <a href="https://github.com/github/copilot-cli" target="_blank">GitHub Copilot CLI</a></strong>, which scaffolded the Tauri 2 + Phaser 4 + TypeScript shell and then iteratively designed the mission layout, the privacy-safe <code>AgentProvider</code> trait, and the replay timeline.</p>
+          <p><strong>Built with <a href="https://github.com/github/copilot-cli" target="_blank">GitHub Copilot CLI</a> and <a href="https://github.com/features/ai/github-app" target="_blank">GitHub Copilot App</a></strong>, which scaffolded the Tauri 2 + Phaser 4 + TypeScript shell and then iteratively designed the mission layout, the privacy-safe <code>AgentProvider</code> trait, and the replay timeline.</p>
         </div>
       </div>
     </div>
@@ -285,12 +285,12 @@
         <div class="credit-item">
           <div class="credit-icon">🤖</div>
           <h4>Copilot CLI</h4>
-          <p><a href="https://github.com/github/copilot-cli" target="_blank">GitHub Copilot CLI</a> — the source of every event the mission visualizes.</p>
+          <p><a href="https://github.com/github/copilot-cli" target="_blank">GitHub Copilot CLI</a> — AI-powered command-line assistance.</p>
         </div>
         <div class="credit-item">
-          <div class="credit-icon">📚</div>
-          <h4>Free Course</h4>
-          <p><a href="https://github.com/github/copilot-cli-for-beginners" target="_blank">Copilot CLI for Beginners</a> — learn the CLI this dashboard visualizes.</p>
+          <div class="credit-icon">🧭</div>
+          <h4>GitHub Copilot App</h4>
+          <p><a href="https://github.com/features/ai/github-app" target="_blank">GitHub Copilot App</a> — orchestrate AI coding agents from a single desktop app.</p>
         </div>
       </div>
     </div>
@@ -300,7 +300,7 @@
     <div class="container">
       <div class="footer-content">
         <p class="footer-title">Agent Mission Control</p>
-        <p class="footer-sub">Built by Dan Wahlin using <a href="https://github.com/github/copilot-cli" target="_blank">GitHub Copilot CLI</a></p>
+        <p class="footer-sub">Built by Dan Wahlin</p>
         <div class="footer-links">
           <a href="https://github.com/DanWahlin/agent-mission-control" target="_blank">GitHub</a>
           <a href="https://github.com/DanWahlin/agent-mission-control/releases" target="_blank">Releases</a>

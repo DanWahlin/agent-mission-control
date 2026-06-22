@@ -276,6 +276,10 @@ test.describe('Agent Mission Control app shell', () => {
       const transcript = el as HTMLElement;
       return Math.round(transcript.scrollTop + transcript.clientHeight - transcript.scrollHeight);
     })).toBeGreaterThanOrEqual(-80);
+    await expect.poll(() => page.locator('#analytics-chat-transcript').evaluate((el) => {
+      const transcript = el as HTMLElement;
+      return transcript.scrollWidth - transcript.clientWidth;
+    })).toBeLessThanOrEqual(1);
 
     await page.locator('#analytics-chat-input').fill('second prompt');
     await page.locator('#analytics-chat-form').evaluate((form) => (form as HTMLFormElement).requestSubmit());
