@@ -2,7 +2,7 @@
 
 # 🛰️ Agent Mission Control
 
-A live dashboard that provides insights into the activity of [GitHub Copilot CLI](https://github.com/github/copilot-cli). Tool calls, hook callbacks, sub-agent dispatches, skills, edits, reads and more become live signals so you can spot stalls, follow active work, and catch actionable provider issues without scrolling back through terminal output.
+A live dashboard, history viewer, and analytics chat that provides insights into the activity of [GitHub Copilot CLI](https://github.com/github/copilot-cli) and [GitHub Copilot App](https://github.com/features/ai/github-app) agent sessions. Tool calls, hook callbacks, sub-agent dispatches, skills, edits, reads and more become live signals so you can spot stalls, follow active work, and catch actionable provider issues without scrolling back through terminal output.
 
 Built with [Tauri 2](https://v2.tauri.app/), [Phaser 4](https://phaser.io/), and TypeScript.
 
