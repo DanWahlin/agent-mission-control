@@ -296,8 +296,7 @@ async function installFlightLogFixture(page: Page) {
       useful_sessions: [{ session_hash: 'beta4567', title: 'Review Tests', repository: 'copilot-mission-control', branch: 'main', status: 'needs-attention', is_active: true, events: 64, failures: 2, turns: 3, tool_calls: 17, input_tokens: 1200, output_tokens: 2920, last_model: 'gpt-5.5', first_seen_ms: Date.parse('2026-05-21T07:12:00Z'), last_seen_ms: Date.parse('2026-05-21T07:14:00Z') }],
       narrative: 'On 2026-05-21, you worked mostly in copilot-mission-control on main, across 3 sessions. gpt-5.5 handled most observed model activity, and view was the busiest tool.',
       exports: [
-        { kind: 'daily-digest', label: 'Copy Daily Digest', body: '## Daily Digest - 2026-05-21\n\nDaily Log work in copilot-mission-control.\n\n### AI usage\n3 sessions, 7 turns, 7120 output tokens.\n\n### Models\ngpt-5.5 (2800 input tokens / 7120 output tokens)' },
-        { kind: 'resume', label: 'Copy resume prompt', body: 'Continue from Daily Log 2026-05-21.' },
+        { kind: 'daily-digest', label: 'Copy Daily Digest', body: '## Daily Digest - 2026-05-21\n\nOn 2026-05-21, you worked mostly in copilot-mission-control on main, across 3 sessions. gpt-5.5 handled most observed model activity, and view was the busiest tool.\n\n### Highlights\n- copilot-mission-control (main): Build Mission Control; Review Tests\n\n### By the numbers\n3 sessions across 1 repo · 7 turns · 25 tool calls · 2800 / 7120 tokens\n\n### Models\ngpt-5.5 (2800 input tokens / 7120 output tokens)\n\n### Tools\nview (14), bash (7), github-mcp-server-get_file_contents (4)' },
       ],
     };
     const emptyDay = {
@@ -925,13 +924,11 @@ test.describe('Agent Mission Control — History', () => {
     await expect(page.getByRole('heading', { name: 'Transmit' })).toHaveCount(0);
     const workedOn = page.locator('.flight-log-section').filter({ hasText: 'What I Worked On' });
     const dailyDigestPanel = workedOn.locator('[data-flight-log-export-panel="daily-digest"]');
-    const resumePanel = workedOn.locator('[data-flight-log-export-panel="resume"]');
     const dailyDigestPreview = dailyDigestPanel.locator('textarea');
-    const resumePreview = resumePanel.locator('textarea');
-    await expect(workedOn.locator('[data-flight-log-export]')).toHaveCount(2);
+    await expect(workedOn.locator('[data-flight-log-export]')).toHaveCount(1);
     await expect(workedOn).toContainText('Expand a section to preview it before copying.');
     await expect(workedOn).toContainText('Daily Digest');
-    await expect(workedOn).toContainText('Resume Prompt');
+    await expect(workedOn).not.toContainText('Resume Prompt');
     await expect(workedOn).not.toContainText('standup update');
     await expect(workedOn).not.toContainText('Markdown digest');
     await expect(workedOn).not.toContainText('PR summary');
@@ -940,14 +937,12 @@ test.describe('Agent Mission Control — History', () => {
     await expect(dailyDigestPreview).not.toBeVisible();
     await dailyDigestPanel.locator('summary').click();
     await expect(dailyDigestPreview).toBeVisible();
-    await expect(dailyDigestPreview).toHaveValue(/Daily Log work in copilot-mission-control/);
+    await expect(dailyDigestPreview).toHaveValue(/On 2026-05-21, you worked mostly in copilot-mission-control/);
+    await expect(dailyDigestPreview).toHaveValue(/### Highlights/);
     await expect(dailyDigestPreview).toHaveJSProperty('readOnly', true);
     const dailyDigestHeight = await dailyDigestPreview.evaluate((textarea) => Math.round((textarea as HTMLTextAreaElement).getBoundingClientRect().height));
     expect(dailyDigestHeight).toBeGreaterThanOrEqual(80);
     expect(dailyDigestHeight).toBeLessThanOrEqual(170);
-    await resumePanel.locator('summary').click();
-    await expect(resumePreview).toBeVisible();
-    await expect(resumePreview).toHaveValue('Continue from Daily Log 2026-05-21.');
     await expect(page.getByRole('heading', { name: 'Models' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Token Hotspots' })).toBeVisible();
     const models = page.locator('.flight-log-section').filter({ has: page.getByRole('heading', { name: 'Models' }) });
@@ -1067,9 +1062,10 @@ test.describe('Agent Mission Control — History', () => {
     await expect(page.locator('.flight-log-copy-status')).toContainText('Daily Digest copied');
     await expect(dailyDigestPanel).toHaveAttribute('open', '');
     await expect(page.locator('.flight-log-copy-status')).not.toContainText('copied.');
-    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('Daily Log work in copilot-mission-control');
+    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('On 2026-05-21, you worked mostly in copilot-mission-control');
     await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('## Daily Digest - 2026-05-21');
-    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('### AI usage');
+    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('### Highlights');
+    await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('### By the numbers');
     await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).toContain('gpt-5.5 (2800 input tokens / 7120 output tokens)');
     await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).not.toContain('### Follow-up');
     await expect.poll(async () => page.evaluate(() => (window as any).__copiedFlightLogText)).not.toContain('Yesterday/Today:');

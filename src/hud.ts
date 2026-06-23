@@ -3763,7 +3763,6 @@
   function flightLogExportTitle(item) {
     if (!item) return 'Export';
     if (item.kind === 'daily-digest') return 'Daily Digest';
-    if (item.kind === 'resume') return 'Resume Prompt';
     return String(item.label || 'Export').replace(/^Copy\s+/i, '');
   }
 

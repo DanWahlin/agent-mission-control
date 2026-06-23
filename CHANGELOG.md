@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to Agent Mission Control.
+## [0.2.9] - 2026-06-22
+
+### 📚 Documentation
+
+- Update README.md
+
+### ⚙️ CI/CD & Build
+
+- Release v0.2.9
 ## [0.2.8] - 2026-06-21
 
 ### 🚀 Features & Improvements

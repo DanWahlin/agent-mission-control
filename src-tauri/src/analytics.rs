@@ -3285,7 +3285,6 @@ fn engineering_digest_day(
         &repos,
         &models,
         &tools,
-        &failures,
     );
     Ok(EngineeringDigestDay {
         local_day: selected_day.to_string(),
@@ -3790,6 +3789,51 @@ fn input_token_artifact_value(input_tokens: u64, output_tokens: u64) -> String {
     }
 }
 
+fn digest_highlight_titles(repo: &EngineeringDigestRepoGroup) -> Vec<String> {
+    let fallback = format!("{} {}", repo.repository.trim(), repo.branch.trim());
+    let mut titles: Vec<String> = Vec::new();
+    for session in &repo.sessions {
+        let title = sanitize_title_label(&session.title);
+        if title == "Untitled"
+            || title.eq_ignore_ascii_case(repo.repository.trim())
+            || title.eq_ignore_ascii_case(repo.branch.trim())
+            || title.eq_ignore_ascii_case(fallback.trim())
+        {
+            continue;
+        }
+        if titles
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&title))
+        {
+            continue;
+        }
+        titles.push(title);
+        if titles.len() >= 3 {
+            break;
+        }
+    }
+    titles
+}
+
+fn digest_highlight_line(repo: &EngineeringDigestRepoGroup) -> String {
+    let head = format!("- {} ({})", repo.repository, repo.branch);
+    let titles = digest_highlight_titles(repo);
+    if titles.is_empty() {
+        let session_count = repo.sessions.len() as u64;
+        format!(
+            "{}: {} session{}, {} event{}, {} output tokens",
+            head,
+            session_count,
+            plural(session_count),
+            repo.events,
+            plural(repo.events),
+            repo.output_tokens
+        )
+    } else {
+        format!("{}: {}", head, titles.join("; "))
+    }
+}
+
 fn digest_exports(
     selected_day: &str,
     narrative: &str,
@@ -3797,17 +3841,22 @@ fn digest_exports(
     repos: &[EngineeringDigestRepoGroup],
     models: &[AnalyticsRankedItem],
     tools: &[EngineeringDigestTool],
-    failures: &[EngineeringDigestFailure],
 ) -> Vec<EngineeringDigestExport> {
     let sessions = metric_value(totals, "Sessions");
     let turns = metric_value(totals, "Turns");
+    let tool_calls = metric_value(totals, "Tool calls");
+    let input_tokens = metric_value(totals, "Input tokens");
     let output_tokens = metric_value(totals, "Output tokens");
-    let repo_line = repos
-        .iter()
-        .take(3)
-        .map(|repo| format!("{} ({})", repo.repository, repo.branch))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let highlight_line = if repos.is_empty() {
+        "No indexed project activity.".to_string()
+    } else {
+        repos
+            .iter()
+            .take(5)
+            .map(digest_highlight_line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let model_line = models
         .iter()
         .take(3)
@@ -3826,54 +3875,34 @@ fn digest_exports(
         .map(|tool| format!("{} ({})", tool.name, tool.calls))
         .collect::<Vec<_>>()
         .join(", ");
-    let failure_line = if failures.is_empty() {
-        "No repeated failure pattern stood out.".to_string()
-    } else {
-        failures
-            .iter()
-            .take(3)
-            .map(|failure| {
-                format!(
-                    "{} / {}: {}",
-                    category_label(&failure.category),
-                    failure.tool,
-                    failure.count
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let daily_digest = format!(
-        "## Daily Digest - {}\n\n{}\n\n### Scope\n{}\n\n### AI usage\n{} session{}, {} turn{}, {} output tokens.\n\n### Models\n{}\n\n### Tools\n{}",
-        selected_day,
-        narrative,
-        if repo_line.is_empty() { "No indexed project activity." } else { &repo_line },
+    let repo_count = repos.len() as u64;
+    let by_the_numbers = format!(
+        "{} session{} across {} repo{} · {} turn{} · {} tool call{} · {} / {} tokens",
         sessions,
         plural(sessions),
+        repo_count,
+        plural(repo_count),
         turns,
         plural(turns),
-        output_tokens,
+        tool_calls,
+        plural(tool_calls),
+        input_token_artifact_value(input_tokens, output_tokens),
+        output_tokens
+    );
+    let daily_digest = format!(
+        "## Daily Digest - {}\n\n{}\n\n### Highlights\n{}\n\n### By the numbers\n{}\n\n### Models\n{}\n\n### Tools\n{}",
+        selected_day,
+        narrative,
+        highlight_line,
+        by_the_numbers,
         if model_line.is_empty() { "No model activity indexed." } else { &model_line },
         if tool_line.is_empty() { "No tool activity indexed." } else { &tool_line }
     );
-    let resume = format!(
-        "Use the Mission Control Daily Log for {} as context. Continue from this summary: {} Focus first on: {}",
-        selected_day,
-        narrative,
-        failure_line
-    );
-    vec![
-        EngineeringDigestExport {
-            kind: "daily-digest".to_string(),
-            label: "Copy Daily Digest".to_string(),
-            body: daily_digest,
-        },
-        EngineeringDigestExport {
-            kind: "resume".to_string(),
-            label: "Copy resume prompt".to_string(),
-            body: resume,
-        },
-    ]
+    vec![EngineeringDigestExport {
+        kind: "daily-digest".to_string(),
+        label: "Copy Daily Digest".to_string(),
+        body: daily_digest,
+    }]
 }
 
 fn chat_response_from_summary(
@@ -7118,10 +7147,18 @@ mod tests {
             .any(|export| export.kind == "daily-digest"
                 && export.body.contains("copilot-mission-control")
                 && export.body.contains("## Daily Digest - 2026-06-03")
-                && export.body.contains("### AI usage")
+                && export.body.contains("### Highlights")
+                && export.body.contains("Build Daily Log")
+                && export.body.contains("### By the numbers")
+                && export.body.contains("2 sessions across 1 repo")
+                && export.body.contains("### Models")
                 && export
                     .body
                     .contains("gpt-5.5 (1200 input tokens / 3400 output tokens)")
+                && export.body.contains("### Tools")
+                && !export.body.contains("### Blockers")
+                && !export.body.contains("bash failed")
+                && !export.body.contains("failure")
                 && !export.body.contains("### Follow-up")
                 && !export.body.contains("Yesterday/Today:")));
         assert_eq!(
