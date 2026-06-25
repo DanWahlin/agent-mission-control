@@ -1,7 +1,16 @@
 # Changelog
 
 All notable changes to Agent Mission Control.
+## [0.2.14] - 2026-06-25
+
+### 💼 Other
+
+- Replay older sessions with real pulses by reconstructing from recent_tool_calls
 ## [0.2.13] - 2026-06-25
+
+### ⚙️ CI/CD & Build
+
+- Release v0.2.13
 
 ### 💼 Other
 
