@@ -2231,11 +2231,28 @@ export class MissionControlScene extends Phaser.Scene {
       this.activity.recent_events.filter(event => event.session_id === selectedSessionId)
     );
     if (events.some(isReplayTimelineEvent)) return events;
+    // The session's raw events have scrolled out of the global, top-N
+    // recent_events window (an older/idle session). Reconstruct a full,
+    // pulse-able timeline from the per-session snapshots that ARE still
+    // retained so replaying it shows the real activity, not just turn
+    // boundaries:
+    //   - recent_tool_calls -> tool.execution_start / hook.start events.
+    //     Only start events drive the sector pulses (see queueEventPulse),
+    //     so without these an idle session replayed with no flying pulses.
+    //   - recent_turns -> assistant.turn_start events. ingestActivityEvents
+    //     keeps only turn_start events in the scrubber timeline, so these
+    //     become the slider positions.
+    // The activity log (this.eventLog) keeps every event, so crossing each
+    // turn during playback fires pulses for the tool calls inside its window.
+    const toolCallEvents = this.selectedSessionToolCallsAsReplayEvents();
     const turnEvents = this.selectedSessionTurnsAsReplayEvents();
-    return mergeReplayEvents(
-      events,
-      turnEvents.length > 0 ? turnEvents : rawEventsAsReplayCheckpoint(selectedSessionId, events)
-    );
+    const pulseEvents = mergeReplayEvents(events, toolCallEvents);
+    const timelineAnchors = turnEvents.length > 0
+      ? turnEvents
+      : rawEventsAsReplayCheckpoint(selectedSessionId, sortReplayEventsNewestFirst(pulseEvents));
+    const reconstructed = mergeReplayEvents(timelineAnchors, pulseEvents);
+    if (reconstructed.length > 0) return reconstructed;
+    return mergeReplayEvents(events, rawEventsAsReplayCheckpoint(selectedSessionId, events));
   }
 
   private selectedSessionTurnsAsReplayEvents(): CopilotEventSummary[] {
@@ -2255,6 +2272,23 @@ export class MissionControlScene extends Phaser.Scene {
     return (session.recent_turns ?? [])
       .filter(turn => this.isAfterReset(turn.started_at))
       .map(turn => turnSummaryReplayEvent(session.id, turn))
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }
+
+  private selectedSessionToolCallsAsReplayEvents(): CopilotEventSummary[] {
+    if (this.isAllSessionsSelected()) {
+      return this.activeSessionsForAggregate()
+        .flatMap(session => this.sessionToolCallsAsReplayEvents(session))
+        .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    }
+    return this.sessionToolCallsAsReplayEvents(this.selectedSession);
+  }
+
+  private sessionToolCallsAsReplayEvents(session: CopilotSessionSummary | null): CopilotEventSummary[] {
+    if (!session) return [];
+    return (session.recent_tool_calls ?? [])
+      .filter(call => this.isAfterReset(call.timestamp))
+      .map(call => toolCallSignalEvent(session.id, call))
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }
 
@@ -2351,12 +2385,22 @@ export class MissionControlScene extends Phaser.Scene {
     const events = sortReplayEventsNewestFirst(
       this.activity.recent_events.filter(event => activeSessionIds.has(event.session_id))
     );
+    // Mirror the single-session reconstruction: fold in each active
+    // session's retained recent_tool_calls so the activity log carries
+    // pulse-able tool events across the FULL turn history. recent_turns
+    // span far more history than the global recent_events slice, so without
+    // this the older turn positions had no tool events to fire and aggregate
+    // replay looked empty until the cursor reached the recent slice.
+    const toolCallEvents = this.selectedSessionToolCallsAsReplayEvents();
     const turnEvents = this.selectedSessionTurnsAsReplayEvents();
-    const rawCheckpoints = activeSessions.flatMap(session => {
-      const sessionEvents = events.filter(event => event.session_id === session.id);
-      return rawEventsAsReplayCheckpoint(session.id, sessionEvents);
-    });
-    return mergeReplayEvents(events, turnEvents.length > 0 ? turnEvents : rawCheckpoints);
+    const pulseEvents = mergeReplayEvents(events, toolCallEvents);
+    const timelineAnchors = turnEvents.length > 0
+      ? turnEvents
+      : activeSessions.flatMap(session => {
+          const sessionPulses = pulseEvents.filter(event => event.session_id === session.id);
+          return rawEventsAsReplayCheckpoint(session.id, sortReplayEventsNewestFirst(sessionPulses));
+        });
+    return mergeReplayEvents(timelineAnchors, pulseEvents);
   }
 
   private buildAllSessionsSummary(): CopilotSessionSummary {

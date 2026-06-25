@@ -1487,6 +1487,61 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await waitForGame(page);
   });
 
+  test('aggregate replay fires pulses across older turns by reconstructing from recent_tool_calls', async ({ page }) => {
+    // Mirror the real mismatch: recent_turns span MORE history than the
+    // global recent_events slice, and the older tool activity only survives
+    // in recent_tool_calls. The aggregate replay must reconstruct from
+    // recent_tool_calls so the early (older) turn windows still fire pulses,
+    // instead of looking empty until the cursor reaches the recent slice.
+    await page.evaluate(() => {
+      const f = (window as any).__missionControlFixture;
+      const alpha = f.sessions.find((s: any) => s.id === 'alpha123');
+      // Older turns whose tools are NOT in recent_events.
+      alpha.recent_turns = [
+        { id: 'a-old1', started_at: '2026-05-21T06:00:00Z', ended_at: '2026-05-21T06:20:00Z', status: 'complete', tool_count: 1, tools: ['view'], failure_count: 0, categories: ['library'], output_tokens: 100 },
+        { id: 'a-old2', started_at: '2026-05-21T06:30:00Z', ended_at: '2026-05-21T06:50:00Z', status: 'complete', tool_count: 1, tools: ['rg'], failure_count: 0, categories: ['library'], output_tokens: 100 },
+      ];
+      // Older tool calls retained per-session (cover the older turn windows).
+      alpha.recent_tool_calls = [
+        { tool: 'view', category: 'library', timestamp: '2026-05-21T06:15:00Z', success: true },
+        { tool: 'rg', category: 'library', timestamp: '2026-05-21T06:45:00Z', success: true },
+      ];
+      // Make alpha the ONLY active session.
+      const beta = f.sessions.find((s: any) => s.id === 'beta4567');
+      beta.is_active = false;
+      f.sessions = f.sessions.filter((s: any) => s.id !== 'gamma890');
+      window.__cmcOnAgentActivityChanged?.();
+    });
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+
+    const result = await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control') as any;
+      scene.replayPaused = false;
+      scene.seekReplay(0);
+      // Clear any leftover live pulses so we count ONLY pulses fired by
+      // crossing the older turn windows below.
+      scene.eventPulses = [];
+      // Advance two playback steps (2 x 700ms) to cross only the two OLDER
+      // turn windows — these have no events in the recent_events slice, so
+      // pulses here prove reconstruction from recent_tool_calls.
+      scene.advanceReplay(1500);
+      return {
+        cursor: scene.replayCursor,
+        // tools that exist as real start events (these drive pulses), not
+        // the tool labels carried by turn-summary positions.
+        startEventTools: Array.from(new Set(
+          scene.eventLog.filter((e: any) => e.kind === 'tool.execution_start').map((e: any) => e.tool)
+        )),
+        replayPulses: scene.eventPulses.filter((p: any) => p.source === 'replay').length,
+      };
+    });
+    expect(result.cursor).toBe(2);
+    // 'rg' only exists as a real tool.execution_start via recent_tool_calls
+    // (older window); without reconstruction it would only be a turn label.
+    expect(result.startEventTools).toContain('rg');
+    expect(result.replayPulses).toBeGreaterThan(0);
+  });
+
   test('dashboard renders fixture activity without manual refresh', async ({ page }) => {
     const state = await getMissionState(page);
     expect(state!.toolCalls).toBe(47);
@@ -1714,6 +1769,39 @@ test.describe('Agent Mission Control — Dashboard', () => {
 
     await idleOption.click();
     await expect.poll(async () => (await getMissionState(page))!.selectedSessionId).toBe('gamma890');
+  });
+
+  test('idle session replay reconstructs pulse-able tool events from recent_tool_calls when raw events have aged out', async ({ page }) => {
+    // Simulate a real idle/older session: its raw events have scrolled out
+    // of the global recent_events window, but its per-session
+    // recent_tool_calls + recent_turns snapshots are still retained. The
+    // replay must rebuild a pulse-able timeline from those snapshots rather
+    // than degrade to turn summaries that fire no pulses.
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      const gamma = fixture.sessions.find((session: any) => session.id === 'gamma890');
+      gamma.recent_tool_calls = [
+        { tool: 'rg', category: 'library', timestamp: '2026-05-21T07:10:30Z', success: true },
+        { tool: 'apply_patch', category: 'edits', timestamp: '2026-05-21T07:11:40Z', success: true },
+      ];
+      // Drop gamma890 from the global recent_events window so the replay is
+      // forced down the reconstruction path.
+      fixture.recent_events = fixture.recent_events.filter((event: any) => event.session_id !== 'gamma890');
+      window.__cmcOnAgentActivityChanged?.();
+    });
+
+    await page.evaluate(() => (window as any).__cmcSelectSession('gamma890'));
+    await expect.poll(async () => (await getMissionState(page))!.selectedSessionId).toBe('gamma890');
+
+    const state = await getMissionState(page);
+    // The activity log now carries the retained tool calls as pulse-able
+    // events (this is what drives the Phaser sector pulses).
+    expect(state!.eventLogTools).toContain('rg');
+    expect(state!.eventLogTools).toContain('apply_patch');
+    expect(state!.eventLogSessionIds).toEqual(['gamma890']);
+    // The scrubber positions still come from the session's turn boundaries.
+    expect(state!.replayTimelineKinds).toEqual(['assistant.turn_start']);
+    expect(state!.replayTimelineLength).toBe(2);
   });
 
   test('session dropdown stays open when live activity refreshes', async ({ page }) => {
