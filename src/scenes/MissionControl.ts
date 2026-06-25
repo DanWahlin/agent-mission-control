@@ -1111,15 +1111,15 @@ export class MissionControlScene extends Phaser.Scene {
     this.loading = true;
     try {
       const fixture = this.resolveFixture(false);
-      // `gotData` = we obtained a real activity (fixture or a resolved
-      // invoke) and should mark the initial load complete.
-      // `renderApplied` = we called setActivity this cycle and therefore
-      // need to run the downstream selection/render pass.
-      let gotData = false;
+      // `renderApplied` = we called setActivity this cycle (real data, the
+      // browser-empty answer, or a cold-start empty shell) and therefore
+      // need to run the downstream selection/render pass AND release the
+      // loading splash. The ONLY path that leaves it false is a transient
+      // invoke failure when we already have good data — there we keep the
+      // last-good activity untouched.
       let renderApplied = false;
       if (fixture.source !== 'browser-empty') {
         this.setActivity(fixture);
-        gotData = true;
         renderApplied = true;
       } else {
         const ti = (window as any).__TAURI_INTERNALS__;
@@ -1127,7 +1127,6 @@ export class MissionControlScene extends Phaser.Scene {
           // No Tauri bridge (plain browser / test harness): an empty
           // dashboard is the real, stable answer in this environment.
           this.setActivity(createEmptyActivity());
-          gotData = true;
           renderApplied = true;
         } else {
           let nextActivity: CopilotActivity | null = null;
@@ -1143,13 +1142,15 @@ export class MissionControlScene extends Phaser.Scene {
           }
           if (nextActivity) {
             this.setActivity(nextActivity);
-            gotData = true;
             renderApplied = true;
           } else if (!this.initialActivityLoaded) {
-            // Cold start: the very first scan failed. Render the empty
-            // shell once so the app chrome is visible, but leave
-            // initialActivityLoaded false so the retry ramp keeps trying
-            // instead of presenting this as a confirmed "no sessions".
+            // Cold start: the very first scan failed and there is no
+            // last-good to fall back on. Render the empty shell and lift
+            // the splash so the app is usable, then keep retrying. The
+            // retry ramp / poll are gated on activity.sessions (see
+            // create()), NOT on initialActivityLoaded, so releasing the
+            // splash here does not stop recovery — a later successful scan
+            // replaces the empty shell with real data.
             this.setActivity(createEmptyActivity());
             renderApplied = true;
           }
@@ -1161,7 +1162,7 @@ export class MissionControlScene extends Phaser.Scene {
         this.selectedSession = this.pickSelectedSession();
         this.resetReplayForSelectedSession();
         const appended = this.ingestActivityEvents(this.selectedSessionReplayEvents());
-        if (gotData) this.initialActivityLoaded = true;
+        this.initialActivityLoaded = true;
         this.requestRender(force && this.bootstrapCompleted && appended > 0 ? 'live' : 'normal');
       }
     } finally {
