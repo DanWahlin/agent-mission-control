@@ -1,11 +1,20 @@
 # Changelog
 
 All notable changes to Agent Mission Control.
+## [0.2.13] - 2026-06-25
+
+### 💼 Other
+
+- Keep idle sessions selectable in the dashboard session dropdown
 ## [0.2.12] - 2026-06-25
 
 ### 🐛 Bug Fixes
 
 - Fix loading splash never lifting on persistent cold-start scan failure
+
+### ⚙️ CI/CD & Build
+
+- Release v0.2.12
 ## [0.2.11] - 2026-06-25
 
 ### 🐛 Bug Fixes
