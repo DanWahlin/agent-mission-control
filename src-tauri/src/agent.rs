@@ -1423,8 +1423,37 @@ fn activity_refresh_lock() -> &'static Mutex<()> {
 
 fn scan_agent_activity(include_history: bool) -> AgentActivity {
     let providers = default_providers();
-    let scans: Vec<ProviderScan> = providers.iter().map(|p| p.scan(include_history)).collect();
+    let scans: Vec<ProviderScan> = providers
+        .iter()
+        .map(|p| scan_provider_guarded(p.as_ref(), include_history))
+        .collect();
     merge_scans(scans, include_history)
+}
+
+/// Run one provider's `scan()` but convert any panic into an
+/// `unavailable` scan plus an alert instead of unwinding.
+///
+/// A panic here would otherwise propagate out of the `spawn_blocking`
+/// task behind the `get_agent_activity` Tauri command, surface as a
+/// `JoinError`, and reject the IPC call. The renderer treats a rejected
+/// call as "no data" and blanks the entire dashboard, so a single
+/// malformed or mid-write session must never be allowed to take the
+/// whole UI down. We degrade to an empty scan for this cycle and let the
+/// next poll / watcher tick recover once the transient condition clears.
+fn scan_provider_guarded(provider: &dyn AgentProvider, include_history: bool) -> ProviderScan {
+    let id = provider.id();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider.scan(include_history)))
+    {
+        Ok(scan) => scan,
+        Err(_) => {
+            log::error!("Provider '{id}' scan panicked; degrading to an unavailable scan for this cycle");
+            let mut scan = ProviderScan::unavailable(id);
+            scan.alerts.push(format!(
+                "The {id} activity scan hit an unexpected error and was skipped this cycle. It will retry automatically."
+            ));
+            scan
+        }
+    }
 }
 
 fn without_history(mut activity: AgentActivity) -> AgentActivity {

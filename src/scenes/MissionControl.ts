@@ -1111,27 +1111,59 @@ export class MissionControlScene extends Phaser.Scene {
     this.loading = true;
     try {
       const fixture = this.resolveFixture(false);
+      // `gotData` = we obtained a real activity (fixture or a resolved
+      // invoke) and should mark the initial load complete.
+      // `renderApplied` = we called setActivity this cycle and therefore
+      // need to run the downstream selection/render pass.
+      let gotData = false;
+      let renderApplied = false;
       if (fixture.source !== 'browser-empty') {
         this.setActivity(fixture);
+        gotData = true;
+        renderApplied = true;
       } else {
         const ti = (window as any).__TAURI_INTERNALS__;
-        if (ti?.invoke) {
+        if (!ti?.invoke) {
+          // No Tauri bridge (plain browser / test harness): an empty
+          // dashboard is the real, stable answer in this environment.
+          this.setActivity(createEmptyActivity());
+          gotData = true;
+          renderApplied = true;
+        } else {
+          let nextActivity: CopilotActivity | null = null;
           try {
             const command = includeHistory ? 'get_agent_activity_with_history' : 'get_agent_activity';
-            this.setActivity(await ti.invoke(command) as CopilotActivity);
+            nextActivity = await ti.invoke(command) as CopilotActivity;
           } catch {
-            this.setActivity(createEmptyActivity());
+            // A single rejected invoke (bridge race, panic in the scan,
+            // mid-write session) must NEVER wipe a populated dashboard.
+            // Keep the last-good activity and let the startup retry ramp /
+            // 10s poll recover. See the retry wiring in create().
+            nextActivity = null;
           }
-        } else {
-          this.setActivity(createEmptyActivity());
+          if (nextActivity) {
+            this.setActivity(nextActivity);
+            gotData = true;
+            renderApplied = true;
+          } else if (!this.initialActivityLoaded) {
+            // Cold start: the very first scan failed. Render the empty
+            // shell once so the app chrome is visible, but leave
+            // initialActivityLoaded false so the retry ramp keeps trying
+            // instead of presenting this as a confirmed "no sessions".
+            this.setActivity(createEmptyActivity());
+            renderApplied = true;
+          }
+          // else: we already had real data — keep it untouched.
         }
       }
       this.lastRefresh = performance.now();
-      this.selectedSession = this.pickSelectedSession();
-      this.resetReplayForSelectedSession();
-      const appended = this.ingestActivityEvents(this.selectedSessionReplayEvents());
-      this.initialActivityLoaded = true;
-      this.requestRender(force && this.bootstrapCompleted && appended > 0 ? 'live' : 'normal');
+      if (renderApplied) {
+        this.selectedSession = this.pickSelectedSession();
+        this.resetReplayForSelectedSession();
+        const appended = this.ingestActivityEvents(this.selectedSessionReplayEvents());
+        if (gotData) this.initialActivityLoaded = true;
+        this.requestRender(force && this.bootstrapCompleted && appended > 0 ? 'live' : 'normal');
+      }
     } finally {
       this.loading = false;
       if (includeHistory) {
