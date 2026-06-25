@@ -77,9 +77,15 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
   const compact = layout.compact;
   const realSessionOptions = sessionOptions.filter(({ session }) => !session.is_all_sessions);
   const activeOptions = realSessionOptions.filter(({ session }) => session.is_active);
-  const menuOptions = input.selectedSession?.is_all_sessions === true
-    ? sessionOptions.filter(({ session }) => session.is_all_sessions || session.is_active)
-    : sessionOptions;
+  // Always include every session in the dropdown — even when the
+  // aggregate "All Active Sessions" is selected — so idle/previous
+  // sessions stay selectable. Filtering them out here made them
+  // unreachable from the dashboard (you can't select what isn't
+  // listed). Idle sessions are grouped under an "Idle" heading (see
+  // buildSessionMenuOptions) so active sessions remain at the top.
+  // Browsing the full archive still lives in the History route; this
+  // dropdown is bounded by the live session payload.
+  const menuOptions = sessionOptions;
   const pickerOptions = sessionOptions.slice(0, 5);
   if (!pickerOptions.some(({ index }) => index === selectedSessionIndex)) {
     const selectedOption = sessionOptions.find(({ index }) => index === selectedSessionIndex);
@@ -181,7 +187,7 @@ export function buildDashboardView(input: DashboardViewInput): DashboardViewBuil
         header: activeOptions.length > 0 ? `Running sessions (${activeOptions.length})` : 'Recent sessions (none active)',
         rows: sessionPickerRows,
         idleCount: Math.max(0, sessionOptions.length - pickerOptions.length),
-        options: menuOptions.map(({ session, index }) => sessionOptionRow(session, index)),
+        options: buildSessionMenuOptions(menuOptions),
         selected: selectedSessionView,
       },
       feed: {
@@ -220,6 +226,22 @@ function sessionPickerRow(
     w: layout.panelW - 36,
     h: 26,
   };
+}
+
+function buildSessionMenuOptions(
+  menuOptions: Array<{ session: CopilotSessionSummary; index: number }>,
+) {
+  const rows: Array<Record<string, unknown>> = [];
+  let idleHeadingAdded = false;
+  for (const { session, index } of menuOptions) {
+    const isAggregate = session.id === ALL_SESSIONS_ID || session.is_all_sessions === true;
+    if (!isAggregate && !session.is_active && !idleHeadingAdded) {
+      rows.push({ kind: 'heading', label: 'Idle' });
+      idleHeadingAdded = true;
+    }
+    rows.push(sessionOptionRow(session, index));
+  }
+  return rows;
 }
 
 function sessionOptionRow(session: CopilotSessionSummary, index: number) {

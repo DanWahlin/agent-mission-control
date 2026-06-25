@@ -1692,6 +1692,30 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(idleOption.locator('.cmc-session-status-label')).toHaveText('idle');
   });
 
+  test('idle sessions remain selectable under an Idle heading when All Active Sessions is selected', async ({ page }) => {
+    // Select the aggregate "All Active Sessions" — the dashboard default in
+    // the real app. This previously hid idle/previous sessions from the
+    // dropdown, making them unreachable from the dashboard (you cannot
+    // select what is not listed).
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
+    await page.locator('#dom-session [data-session-id="__all_sessions__"]').click();
+    await expect.poll(async () => (await getMissionState(page))!.selectedSessionId).toBe('__all_sessions__');
+
+    // Reopen the picker: the idle session is still listed, under an "Idle"
+    // heading, and can be selected.
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
+    const menu = page.locator('#dom-session .cmc-session-menu');
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('.cmc-session-group-heading')).toHaveText('Idle');
+
+    const idleOption = page.locator('#dom-session .cmc-session-option').filter({ hasText: 'Research UI' });
+    await expect(idleOption).toHaveCount(1);
+    await expect(idleOption.locator('.cmc-session-status-label')).toHaveText('idle');
+
+    await idleOption.click();
+    await expect.poll(async () => (await getMissionState(page))!.selectedSessionId).toBe('gamma890');
+  });
+
   test('session dropdown stays open when live activity refreshes', async ({ page }) => {
     await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
     await expect(page.locator('#dom-session .cmc-session-picker')).toHaveClass(/open/);
@@ -2395,7 +2419,12 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
     await expect(page.locator('#dom-session .cmc-session-menu')).toContainText('Build Mission Control');
     await expect(page.locator('#dom-session .cmc-session-menu')).toContainText('Review Tests');
-    await expect(page.locator('#dom-session .cmc-session-menu')).not.toContainText('Research UI');
+    // Idle/previous sessions stay listed (and selectable) in the dropdown
+    // even when the aggregate is selected, grouped under an "Idle" heading.
+    // The aggregate's map/feed still aggregate only ACTIVE sessions — see
+    // the feed assertions below — so this is purely a picker affordance.
+    await expect(page.locator('#dom-session .cmc-session-menu')).toContainText('Research UI');
+    await expect(page.locator('#dom-session .cmc-session-menu .cmc-session-group-heading')).toHaveText('Idle');
     await page.keyboard.press('Escape');
     await expect(page.locator('#dom-quarter .cmc-quarter-actions')).toHaveCount(1);
     await expect(page.locator('#dom-quarter [data-cmc-action="quarter-details"]')).toBeVisible();

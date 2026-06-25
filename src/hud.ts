@@ -2476,7 +2476,8 @@
       return;
     }
     var selectedId = selected && selected.id;
-    var selectedOption = options.find(function (opt) { return opt.id === selectedId; }) || options[0];
+    var selectedOption = options.find(function (opt) { return opt && opt.kind !== 'heading' && opt.id === selectedId; })
+      || options.find(function (opt) { return opt && opt.kind !== 'heading'; });
     var picker = '<div class="cmc-label" style="margin-bottom:8px">' + escapeHtml(view.sessions.header || '') + '</div>'
       + '<div class="cmc-session-picker">'
       + '<button class="cmc-session-trigger" type="button" data-cmc-action="session-menu" aria-haspopup="listbox" aria-expanded="false">'
@@ -2485,6 +2486,9 @@
       + '</button>'
       + '<div class="cmc-session-menu" role="listbox" aria-label="Select Copilot session">'
       + options.map(function (opt) {
+        if (opt && opt.kind === 'heading') {
+          return '<div class="cmc-session-group-heading" role="presentation">' + escapeHtml(opt.label || '') + '</div>';
+        }
         return '<button class="cmc-session-option ' + (opt.id === selectedId ? 'selected' : '') + '" type="button" role="option" aria-selected="' + (opt.id === selectedId ? 'true' : 'false') + '" data-session-id="' + escapeHtml(opt.id) + '">'
           + renderSessionOption(opt)
           + '</button>';

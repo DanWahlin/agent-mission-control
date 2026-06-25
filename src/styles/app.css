@@ -1067,6 +1067,15 @@ body.theme-light .cmc-feed-row {
   box-shadow: 0 16px 32px rgba(0, 0, 0, 0.36);
 }
 .cmc-session-picker.open .cmc-session-menu { display: grid; gap: 4px; }
+.cmc-session-group-heading {
+  padding: 7px 10px 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7a99;
+  pointer-events: none;
+}
 .cmc-session-option {
   display: block;
   padding: 9px 10px;
@@ -1145,6 +1154,7 @@ body.theme-light .cmc-session-status-label {
 }
 body.theme-light .cmc-session-option-sub,
 body.theme-light .cmc-session-caret { color: #52627a; }
+body.theme-light .cmc-session-group-heading { color: #64748b; }
 .cmc-session-summary {
   display: grid;
   gap: 8px;
