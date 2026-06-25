@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to Agent Mission Control.
+## [0.2.11] - 2026-06-25
+
+### 🐛 Bug Fixes
+
+- Fix dashboard blanking on transient activity-scan failures
+## [0.2.10] - 2026-06-23
+
+### ⚙️ CI/CD & Build
+
+- Release v0.2.10
 ## [0.2.9] - 2026-06-22
 
 ### 📚 Documentation
