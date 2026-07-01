@@ -30,6 +30,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 github-copilot-sdk = { version = "0.1", default-features = false }
 async-trait = "0.1.89"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.7"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSResponder"] }

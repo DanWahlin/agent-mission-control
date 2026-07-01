@@ -73,6 +73,24 @@ fn set_dock_icon() {
     });
 }
 
+/// On Linux the system tray is backed by libayatana-appindicator3 (or the older
+/// libappindicator3), loaded dynamically at runtime. When neither is installed
+/// (e.g. WSL2 or a headless box) `tray-icon` *panics* while building the tray
+/// instead of returning an error — which a `Result` match can't catch. Probe
+/// the library up front so we can skip the tray entirely when it's missing and
+/// still let the app window launch.
+#[cfg(target_os = "linux")]
+fn linux_tray_supported() -> bool {
+    // Mirror libappindicator-sys's primary lookups. We probe only the versioned
+    // ".so.1" names it tries first: a hit guarantees the real load will succeed
+    // (no false positive that could let the panic through), while a miss just
+    // degrades gracefully to "no tray".
+    unsafe {
+        libloading::Library::new("libayatana-appindicator3.so.1").is_ok()
+            || libloading::Library::new("libappindicator3.so.1").is_ok()
+    }
+}
+
 // ── Tauri commands ────────────────────────────────────────────────────
 
 /// Return the app version baked in at compile time.
@@ -571,27 +589,51 @@ pub fn run() {
                 .items(&[&toggle_item, &quit_item])
                 .build()?;
 
-            let _tray = TrayIconBuilder::with_id("main")
-                .tooltip("Agent Mission Control")
-                .title("")
-                .icon(tauri::image::Image::from_bytes(TRAY_ICON_BYTES)?)
-                .menu(&menu)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "toggle" => toggle_window(app),
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        toggle_window(tray.app_handle());
+            // The tray icon is best-effort. On Linux it depends on a system
+            // library that may be absent (WSL2, headless), in which case
+            // building the tray *panics* — so we pre-flight the library and
+            // skip the tray entirely when it's unsupported. On every platform a
+            // build error is also logged and swallowed so the window still
+            // launches.
+            #[cfg(target_os = "linux")]
+            let tray_supported = linux_tray_supported();
+            #[cfg(not(target_os = "linux"))]
+            let tray_supported = true;
+
+            if tray_supported {
+                match TrayIconBuilder::with_id("main")
+                    .tooltip("Agent Mission Control")
+                    .title("")
+                    .icon(tauri::image::Image::from_bytes(TRAY_ICON_BYTES)?)
+                    .menu(&menu)
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "toggle" => toggle_window(app),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            toggle_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)
+                {
+                    Ok(_tray) => {}
+                    Err(e) => {
+                        eprintln!("System tray unavailable, continuing without it: {e}");
                     }
-                })
-                .build(app)?;
+                }
+            } else {
+                eprintln!(
+                    "System tray library (libayatana-appindicator3) not found; \
+                     continuing without a tray icon."
+                );
+            }
 
             Ok(())
         })

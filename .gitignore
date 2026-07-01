@@ -44,3 +44,6 @@ playwright-report/
 
 # Visual snapshot harness (scripts/snap-layouts.ts)
 .snapshots/
+
+# Local config for scripts/test-linux-remote.sh (SSH host/dir overrides)
+scripts/.linux-test.env

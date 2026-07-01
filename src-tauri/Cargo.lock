@@ -637,6 +637,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "github-copilot-sdk",
+ "libloading",
  "log",
  "notify",
  "objc2",

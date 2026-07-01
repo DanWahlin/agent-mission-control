@@ -68,7 +68,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: copilot-mission-control-${{ matrix.platform }}
+          name: agent-mission-control-${{ matrix.platform }}
           path: |
             src-tauri/target/**/release/bundle/**/*.dmg
             src-tauri/target/**/release/bundle/**/*.exe
@@ -217,11 +217,15 @@ jobs:
 
             > Download the `.AppImage`, `.deb`, or `.rpm` file from the **Assets** list below.
             >
-            > **Note:** For the AppImage, make it executable first:
+            > **Recommended:** The `.AppImage` needs no `sudo` — just make it executable and run it:
             > ```
-            > chmod +x Copilot.Mission.Control_*.AppImage
-            > ./Copilot.Mission.Control_*.AppImage
+            > chmod +x Agent.Mission.Control_*.AppImage
+            > ./Agent.Mission.Control_*.AppImage
             > ```
+            >
+            > The `.deb`/`.rpm` packages require root to install (e.g. `sudo dpkg -i Agent.Mission.Control_*.deb`).
+            >
+            > **Tray icon:** If you want the system tray menu, install `libayatana-appindicator3-1` (Debian/Ubuntu) or `libappindicator-gtk3` (Fedora/RHEL). It's optional — the app launches fine without it (e.g. on WSL2, which has no tray).
 
             ---
             *A live mission-control dashboard for your GitHub Copilot CLI sessions — built with Tauri + Phaser + TypeScript.*
