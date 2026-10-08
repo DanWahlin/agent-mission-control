@@ -1,6 +1,40 @@
 # Changelog
 
 All notable changes to Agent Mission Control.
+## [0.3.0] - 2026-10-08
+
+### 🚀 Features & Improvements
+
+- Fix live activity metrics, update dependencies, and add app automation skill
+- Add Rust fmt, Clippy, and tests to CI
+
+### 🐛 Bug Fixes
+
+- Perf: patch dashboard panels in place and pause scans while hidden
+- Fix: update Selected Session panel when only the branch changes
+
+### 🔧 Refactoring
+
+- Review cleanup: share analytics-session detection and signal helpers
+
+### 🎨 Styling
+
+- Cut idle CPU and memory: render on demand, lazy theme atlas, fewer file reads
+
+### 📦 Updates
+
+- Upgrade GitHub Actions to Node 24
+- Make live scans incremental so the dashboard updates in real time
+
+### 💼 Other
+
+- Send one live pulse per tool or hook start
+- Faster first scan, ordered live feed, and a Sector pulses setting
+## [0.2.16] - 2026-08-11
+
+### ⚙️ CI/CD & Build
+
+- Release v0.2.16
 ## [0.2.15] - 2026-07-01
 
 ### 🐛 Bug Fixes
