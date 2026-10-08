@@ -1398,24 +1398,38 @@ pub(crate) fn is_mission_control_analytics_session(events_path: &Path) -> bool {
     let Ok(file) = fs::File::open(events_path) else {
         return false;
     };
+    let mut reader = BufReader::new(file.take(ANALYTICS_MARKER_SCAN_BYTES));
+    let mut line = String::new();
+    let mut read_total = 0u64;
     let mut decided = false;
     let mut marked = false;
-    for line in BufReader::new(file.take(ANALYTICS_MARKER_SCAN_BYTES))
-        .lines()
-        .map_while(Result::ok)
-    {
+    loop {
+        line.clear();
+        let Ok(read) = reader.read_line(&mut line) else {
+            break;
+        };
+        if read == 0 {
+            break;
+        }
+        read_total += read as u64;
         if line_marks_mission_control_analytics_session(&line) {
             marked = true;
             decided = true;
             break;
         }
-        if line.contains("\"system.message\"") {
+        // The system prompt always comes before the first turn, so the
+        // answer is known at the first system message or turn.
+        if line.contains("\"system.message\"")
+            || line.contains("\"user.message\"")
+            || line.contains("\"assistant.turn_start\"")
+        {
             decided = true;
             break;
         }
     }
-    // Remember only a decided answer, so a new session whose first
-    // system.message has not been written yet is checked again.
+    decided |= read_total >= ANALYTICS_MARKER_SCAN_BYTES;
+    // Remember only a decided answer, so a new session whose header is
+    // still being written is checked again.
     if decided {
         if let Ok(mut map) = cache.lock() {
             if map.len() >= MAX_COPILOT_SESSION_SCAN_CACHE_ENTRIES * 4 {
@@ -1876,13 +1890,16 @@ fn read_new_signal_entries(
     state: &mut SessionSignalFileState,
     keep_from_ms: u64,
 ) {
-    let Ok(mut file) = fs::File::open(path) else {
-        return;
-    };
-    let Ok(metadata) = file.metadata() else {
+    let Ok(metadata) = fs::metadata(path) else {
         return;
     };
     let len = metadata.len();
+    if len == state.offset && len > 0 {
+        return;
+    }
+    let Ok(mut file) = fs::File::open(path) else {
+        return;
+    };
     if len < state.offset {
         // The file was replaced or truncated; read it again.
         state.offset = 0;
@@ -2768,12 +2785,16 @@ fn scan_copilot_from_discovery(
         .collect::<Vec<(PathBuf, SystemTime)>>();
 
     session_dirs.sort_by_key(|entry| std::cmp::Reverse(entry.1));
-    session_dirs.retain(|(session_path, _)| {
-        let events_path = first_existing_child(session_path, &schema.session.events_files);
-        !is_mission_control_analytics_session(&events_path)
-    });
-    // Cap per-provider scan effort but leave visible session truncation to the merger.
-    session_dirs.truncate(MAX_SCANNED_SESSIONS);
+    // Cap per-provider scan effort but leave visible session truncation to
+    // the merger. The filter is lazy, so it stops after the cap.
+    let session_dirs = session_dirs
+        .into_iter()
+        .filter(|(session_path, _)| {
+            let events_path = first_existing_child(session_path, &schema.session.events_files);
+            !is_mission_control_analytics_session(&events_path)
+        })
+        .take(MAX_SCANNED_SESSIONS)
+        .collect::<Vec<_>>();
     scan.scanned_sessions = session_dirs.len();
 
     // Load once per scan; reused for every tool execution event below.

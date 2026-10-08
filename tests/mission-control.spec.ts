@@ -1516,6 +1516,8 @@ test.describe('Agent Mission Control — Dashboard', () => {
       window.__cmcOnAgentActivityChanged?.();
     });
     await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    // The push refresh runs on a timer, so wait for the rebuilt events.
+    await expect.poll(async () => (await getMissionState(page))!.eventLogTools).toContain('rg');
 
     const result = await page.evaluate(() => {
       const scene = (window as any).__phaserGame.scene.getScene('mission-control') as any;
@@ -1870,6 +1872,8 @@ test.describe('Agent Mission Control — Dashboard', () => {
 
     await page.evaluate(() => (window as any).__cmcSelectSession('gamma890'));
     await expect.poll(async () => (await getMissionState(page))!.selectedSessionId).toBe('gamma890');
+    // The push refresh runs on a timer, so wait for the rebuilt events.
+    await expect.poll(async () => (await getMissionState(page))!.eventLogTools).toContain('rg');
 
     const state = await getMissionState(page);
     // The activity log now carries the retained tool calls as pulse-able
@@ -2204,6 +2208,35 @@ test.describe('Agent Mission Control — Dashboard', () => {
       return scene.eventPulses.filter((pulse: any) => pulse.source === 'live' && pulse.quarterKey === 'terminal').length;
     });
     expect(terminalPulses).toBe(1);
+  });
+
+  test('push refresh is not starved by pulses that stay in flight', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await expect.poll(async () => page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      return scene.eventPulses.length;
+    }), { timeout: 1500 }).toBeGreaterThan(0);
+    // Keep motion active for the rest of the test.
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      for (const pulse of scene.eventPulses) pulse.duration = 60_000;
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'beta4567', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'starved_probe', category: 'library', success: true },
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await expect.poll(async () => (await getMissionState(page))!.eventLogTools, { timeout: 2500 }).toContain('starved_probe');
   });
 
   test('late older events keep feed order and send no live pulse', async ({ page }) => {

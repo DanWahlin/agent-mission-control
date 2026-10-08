@@ -555,6 +555,8 @@ test.describe('Agent Mission Control app shell', () => {
     await expect(page.locator('#app-theme-select')).toHaveValue('space');
     await expect(page.locator('#app-theme-select option:checked')).toHaveText('Space');
     await expect.poll(() => page.evaluate(() => localStorage.getItem('cmc_app_theme'))).toBe('space');
+    // The inactive theme atlas loads only on the first switch.
+    expect(await page.evaluate(() => (window as any).__phaserGame.textures.exists('medieval'))).toBe(false);
     await page.locator('#app-theme-select').selectOption('medieval');
     await expect.poll(() => page.evaluate(() => localStorage.getItem('cmc_app_theme'))).toBe('medieval');
     await expect.poll(() => page.evaluate(() => {
@@ -647,6 +649,7 @@ test.describe('Agent Mission Control loading splash', () => {
 
     await expect(page.locator('body')).toHaveClass(/dashboard-ready/);
     await expect(page.locator('body')).toHaveClass(/dashboard-splash-hidden/);
+    await expect(page.locator('#dashboard-loading')).toHaveCount(0);
   });
 
   test('keeps the splash visible after the dashboard is ready', async ({ page }) => {

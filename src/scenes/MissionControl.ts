@@ -104,12 +104,15 @@ declare global {
 }
 
 const SPACE_ATLAS_KEY = 'mc';
-const SPACE_ATLAS_ROOT = 'assets/space';
 const MEDIEVAL_ATLAS_KEY = 'medieval';
-const MEDIEVAL_ATLAS_ROOT = 'assets/medieval';
 
 type ThemeMode = 'dark' | 'light';
 type AppTheme = 'space' | 'medieval';
+
+const THEME_ATLASES: Record<AppTheme, { key: string; image: string; data: string }> = {
+  space: { key: SPACE_ATLAS_KEY, image: 'assets/space/atlas.png', data: 'assets/space/atlas.json' },
+  medieval: { key: MEDIEVAL_ATLAS_KEY, image: 'assets/medieval/spritesheet.png', data: 'assets/medieval/spritesheet.json' },
+};
 type SectorTextureMap = Record<'edits' | 'library' | 'terminal' | 'signal' | 'hooks' | 'delegates' | 'skills' | 'court' | 'mcp', string>;
 
 interface MissionTheme {
@@ -311,6 +314,12 @@ const MAX_LIVE_PULSES_PER_REFRESH = 60;
 /// example, history of a session that just became active) go to the feed
 /// but get no pulse.
 const LIVE_PULSE_MAX_AGE_MS = 2 * 60 * 1000;
+/// After a visual change, keep drawing frames this long so the change and
+/// any follow-up updates reach the screen.
+const VISUAL_SETTLE_MS = 500;
+/// While idle, draw this often as a safety net for changes that are not
+/// marked. The map has no ambient animation, so idle frames are identical.
+const IDLE_RENDER_INTERVAL_MS = 1000;
 
 /// Number of fading samples drawn behind the pulse head to form a
 /// glowing comet tail. Each sample is offset along the bezier path by
@@ -331,6 +340,10 @@ const ARRIVAL_MAX_RADIUS_PX = 44;
 const LIVE_DASHBOARD_PUBLISH_INTERVAL_MS = 250;
 const PUSH_REFRESH_MIN_INTERVAL_MS = 500;
 const ACTIVE_ANIMATION_REFRESH_DELAY_MS = 250;
+/// Longest a push refresh waits for pulses to land. With steady activity
+/// pulses are almost always in flight, so an uncapped wait starves updates.
+/// Refreshes during motion already defer the heavy map rebuild.
+const MAX_PUSH_REFRESH_DEFER_MS = 1000;
 const LIVE_RENDER_QUIET_MS = 1200;
 const PULSE_TEXTURE_KEY = 'cmc-pulse-quad';
 const PULSE_EDGE_TEXTURE_KEY = 'cmc-pulse-edge-quad';
@@ -363,6 +376,7 @@ export class MissionControlScene extends Phaser.Scene {
   private textObjects: any[] = [];
   private quarterCountTextObjects = new Map<string, any>();
   private appTheme: AppTheme = loadInitialAppTheme();
+  private requestedAppTheme: AppTheme = this.appTheme;
   /// Focus mode: when true, the Summary + Selected Session + Activity
   /// Feed side panels are skipped and computeLayout() collapses their
   /// widths to 0 so the mission ring (castle + quarters) expands to
@@ -408,6 +422,10 @@ export class MissionControlScene extends Phaser.Scene {
   private demoFlowTimer = 0;
   private demoFlowIndex = 0;
   private replayPaused = false;
+  private visualChangeUntil = 0;
+  private lastFrameRenderAt = 0;
+  private restoreLoopCallback: (() => void) | null = null;
+  private readonly markVisualChangeListener = () => this.markVisualChange();
   private replayCursor = 0;
   private replayPlayTimer = 0;
   private readonly replayPlaybackInterval = 700;
@@ -470,17 +488,35 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   preload() {
+    // Only the active theme's atlas is loaded; the other one loads on the
+    // first switch, so the unused sheet does not hold texture memory.
+    this.queueThemeAtlas(this.appTheme);
+  }
+
+  private queueThemeAtlas(theme: AppTheme) {
+    const atlas = THEME_ATLASES[theme];
     // Phaser auto-detects the JSONArray atlas format used by both theme sheets.
-    this.load.atlas(
-      SPACE_ATLAS_KEY,
-      `${SPACE_ATLAS_ROOT}/atlas.png`,
-      `${SPACE_ATLAS_ROOT}/atlas.json`,
-    );
-    this.load.atlas(
-      MEDIEVAL_ATLAS_KEY,
-      `${MEDIEVAL_ATLAS_ROOT}/spritesheet.png`,
-      `${MEDIEVAL_ATLAS_ROOT}/spritesheet.json`,
-    );
+    this.load.atlas(atlas.key, atlas.image, atlas.data);
+  }
+
+  private applyAppTheme(theme: AppTheme) {
+    this.requestedAppTheme = theme;
+    if (theme === this.appTheme) return;
+    const atlasKey = THEME_ATLASES[theme].key;
+    const apply = () => {
+      // Ignore a load that finishes after the user picked another theme.
+      if (!this.scene?.isActive?.() || this.requestedAppTheme !== theme) return;
+      this.textures.get(atlasKey).setFilter(Phaser.Textures.FilterMode.LINEAR);
+      this.appTheme = theme;
+      this.scheduleDeferredThemeRender('full');
+    };
+    if (this.textures.exists(atlasKey)) {
+      apply();
+      return;
+    }
+    this.queueThemeAtlas(theme);
+    this.load.once(Phaser.Loader.Events.COMPLETE, apply);
+    this.load.start();
   }
 
   create() {
@@ -491,16 +527,17 @@ export class MissionControlScene extends Phaser.Scene {
     // Re-paint the backdrop when Phaser resizes (driven by the
     // window `resize` listener in main.ts -> scale.resize(W, H)).
     this.scale.on('resize', () => {
+      this.markVisualChange();
       this.redrawBackdrop();
       this.scheduleResizeRender();
     });
     // Clean up scene-owned resources on shutdown so a future
     // reload/HMR doesn't leak handlers.
     this.events.once('shutdown', () => this.shutdown());
+    this.installRenderOnDemand();
 
     this.map = this.add.graphics().setDepth(1);
-    this.textures.get(SPACE_ATLAS_KEY)?.setFilter?.(Phaser.Textures.FilterMode.LINEAR);
-    this.textures.get(MEDIEVAL_ATLAS_KEY)?.setFilter?.(Phaser.Textures.FilterMode.LINEAR);
+    this.textures.get(THEME_ATLASES[this.appTheme].key).setFilter(Phaser.Textures.FilterMode.LINEAR);
     this.ensurePulseTextures();
     this.createPulseVisualPools();
     this.moatPulseRings = [
@@ -560,10 +597,7 @@ export class MissionControlScene extends Phaser.Scene {
     };
     window.__cmcSetAppTheme = (nextTheme: AppTheme) => {
       if (!this.scene?.isActive?.()) return;
-      const normalized = normalizeAppTheme(nextTheme);
-      if (normalized === this.appTheme) return;
-      this.appTheme = normalized;
-      this.scheduleDeferredThemeRender('full');
+      this.applyAppTheme(normalizeAppTheme(nextTheme));
     };
     // Focus-mode toggle. Hides side panels and re-lays-out the ring so
     // the castle + quarters expand to fill the canvas. Idempotent —
@@ -645,6 +679,7 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private refreshActivityViewState(recomputeLayout = false) {
+    this.markVisualChange();
     if (recomputeLayout || !this.layout) {
       this.layout = this.computeLayout();
     }
@@ -721,9 +756,10 @@ export class MissionControlScene extends Phaser.Scene {
     this.pendingPushRefresh = true;
     const elapsed = performance.now() - this.lastPushRefreshAt;
     const delay = Math.max(0, PUSH_REFRESH_MIN_INTERVAL_MS - elapsed);
+    const deferUntil = performance.now() + delay + MAX_PUSH_REFRESH_DEFER_MS;
     const run = () => {
       this.pushRefreshEvent = null;
-      if (this.loading || this.hasActiveMotion()) {
+      if (this.loading || (this.hasActiveMotion() && performance.now() < deferUntil)) {
         this.pushRefreshEvent = this.time.delayedCall(ACTIVE_ANIMATION_REFRESH_DELAY_MS, run);
         return;
       }
@@ -759,6 +795,8 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   shutdown() {
+    this.restoreLoopCallback?.();
+    this.restoreLoopCallback = null;
     if (this.pollEvent) {
       this.pollEvent.remove(false);
       this.pollEvent = undefined;
@@ -841,6 +879,7 @@ export class MissionControlScene extends Phaser.Scene {
   /// current viewport instead of leaving slivers when the user grows
   /// the window.
   private redrawBackdrop() {
+    this.markVisualChange();
     if (!this.backdrop) return;
     this.backdrop.clear();
     this.backdrop.fillStyle(theme.backdropFill, 1);
@@ -1211,7 +1250,48 @@ export class MissionControlScene extends Phaser.Scene {
     return createEmptyActivity();
   }
 
+  /// Phaser draws every frame by default, which keeps the GPU and WebKit
+  /// busy at 60 fps even when the map does not change. Idle frames run the
+  /// update step only (timers, input, and replay keep working) and skip the
+  /// draw.
+  private installRenderOnDemand() {
+    const game = this.game as any;
+    const loop = game?.loop;
+    if (!loop || typeof game.step !== 'function' || typeof game.headlessStep !== 'function') return;
+    const original = loop.callback;
+    const step = game.step.bind(game);
+    const headlessStep = game.headlessStep.bind(game);
+    loop.callback = (time: number, delta: number) => {
+      const now = performance.now();
+      if (this.needsRender(now)) {
+        this.lastFrameRenderAt = now;
+        step(time, delta);
+      } else {
+        headlessStep(time, delta);
+      }
+    };
+    const events = ['pointermove', 'pointerdown', 'wheel', 'keydown'];
+    for (const type of events) window.addEventListener(type, this.markVisualChangeListener, { passive: true });
+    this.markVisualChange();
+    this.restoreLoopCallback = () => {
+      loop.callback = original;
+      for (const type of events) window.removeEventListener(type, this.markVisualChangeListener);
+    };
+  }
+
+  private needsRender(now: number) {
+    if (this.hasActiveMotion()) return true;
+    if (!this.replayPaused && this.replayCursor < this.replayTimeline.length) return true;
+    if (now < this.visualChangeUntil) return true;
+    return now - this.lastFrameRenderAt >= IDLE_RENDER_INTERVAL_MS;
+  }
+
+  private markVisualChange() {
+    this.visualChangeUntil = Math.max(this.visualChangeUntil, performance.now() + VISUAL_SETTLE_MS);
+  }
+
   private renderActivity() {
+    this.markVisualChange();
     this.clearDynamicObjects();
     this.map.clear();
 
@@ -1225,6 +1305,7 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private renderMapOnly() {
+    this.markVisualChange();
     for (const text of this.textObjects) text.destroy();
     this.textObjects = [];
     this.map.clear();

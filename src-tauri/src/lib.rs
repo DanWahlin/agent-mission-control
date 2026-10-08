@@ -42,7 +42,7 @@ use analytics::{
 // On macOS the Dock icon must be applied programmatically in dev mode
 // because the bare binary has no Info.plist / CFBundleIconFile.
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray_icon.png");
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", debug_assertions))]
 const DOCK_ICON_BYTES: &[u8] = include_bytes!("../icons/dock_icon.png");
 const MIN_VISIBLE_WINDOW_WIDTH: i64 = 240;
 const MIN_VISIBLE_WINDOW_HEIGHT: i64 = 160;
@@ -51,7 +51,7 @@ static UPDATE_CHECK_DONE: AtomicBool = AtomicBool::new(false);
 /// macOS only: set the running app's Dock icon via NSApplication. Tauri
 /// dev runs the bare binary (no .app bundle), so macOS otherwise falls
 /// back to a generic rocket. Safe to call from the main thread.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", debug_assertions))]
 fn set_dock_icon() {
     use objc2::rc::autoreleasepool;
     use objc2::{AnyThread, MainThreadMarker};
@@ -381,7 +381,7 @@ pub fn run() {
         .setup(|app| {
             // macOS dev mode: bare binary has no .app bundle, so set the
             // Dock icon programmatically. No-op on other platforms.
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", debug_assertions))]
             set_dock_icon();
 
             // Start the multi-agent filesystem watcher. It runs for

@@ -1978,6 +1978,13 @@
     dashboardSplashTimer = 0;
     document.body.classList.add('dashboard-splash-hidden');
     if (domLoading) domLoading.setAttribute('aria-hidden', 'true');
+    // The splash never returns. Remove it after the fade so WebKit frees its
+    // full-window layer and decoded image.
+    window.setTimeout(function () {
+      if (domLoading) domLoading.remove();
+      domLoading = null;
+      domLoadingImage = null;
+    }, 250);
   }
 
   function scheduleDashboardSplashHide() {
