@@ -1894,8 +1894,8 @@ fn build_session_activity_signal_from_path(
             ..Default::default()
         };
     }
-    read_new_signal_entries(path, schema, state);
     let keep_from = generated_at_ms.saturating_sub(HOUR_MS * (HISTORY_HOUR_BUCKETS as u64 + 1));
+    read_new_signal_entries(path, schema, state, keep_from);
     state.entries.retain(|(event_ms, _)| *event_ms >= keep_from);
     activity_signal_from_entries(&state.entries, generated_at_ms)
 }
@@ -1904,15 +1904,28 @@ fn read_new_signal_entries(
     path: &Path,
     schema: &ProviderSchema,
     state: &mut SessionSignalFileState,
+    keep_from_ms: u64,
 ) {
     let Ok(mut file) = fs::File::open(path) else {
         return;
     };
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let Ok(metadata) = file.metadata() else {
+        return;
+    };
+    let len = metadata.len();
     if len < state.offset {
         // The file was replaced or truncated; read it again.
         state.offset = 0;
         state.entries.clear();
+    }
+    if state.offset == 0 {
+        // First read: skip events older than the signal window.
+        let modified_ms = metadata.modified().map(unix_ms).unwrap_or(u64::MAX);
+        state.offset = if modified_ms < keep_from_ms {
+            len
+        } else {
+            first_line_offset_at_or_after(&mut file, len, keep_from_ms, schema)
+        };
     }
     if len == state.offset || file.seek(SeekFrom::Start(state.offset)).is_err() {
         return;
@@ -1934,6 +1947,60 @@ fn read_new_signal_entries(
             state.entries.push(entry);
         }
     }
+}
+
+/// Binary search for the first line whose timestamp is at or after
+/// `cutoff_ms`. Events files are written in time order. Returns 0 for small
+/// files so they are read whole.
+fn first_line_offset_at_or_after(
+    file: &mut fs::File,
+    len: u64,
+    cutoff_ms: u64,
+    schema: &ProviderSchema,
+) -> u64 {
+    const LINEAR_READ_BYTES: u64 = 1024 * 1024;
+    let mut low = 0u64;
+    let mut high = len;
+    while high - low > LINEAR_READ_BYTES {
+        let mid = low + (high - low) / 2;
+        match first_timestamp_after(file, mid, high, schema) {
+            Some((line_start, event_ms)) if event_ms < cutoff_ms => low = line_start,
+            Some(_) => high = mid,
+            None => break,
+        }
+    }
+    low
+}
+
+/// Timestamp of the first complete line that starts after `position`
+/// (and before `limit`), with that line's start offset.
+fn first_timestamp_after(
+    file: &mut fs::File,
+    position: u64,
+    limit: u64,
+    schema: &ProviderSchema,
+) -> Option<(u64, u64)> {
+    file.seek(SeekFrom::Start(position)).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    let mut offset = position + reader.read_until(b'\n', &mut buffer).ok()? as u64;
+    while offset < limit {
+        buffer.clear();
+        let read = reader.read_until(b'\n', &mut buffer).ok()?;
+        if read == 0 {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&buffer);
+        if let Some(event_ms) = serde_json::from_str::<serde_json::Value>(&line)
+            .ok()
+            .and_then(|value| string_from_paths(&value, &schema.events.timestamp_paths))
+            .and_then(|timestamp| parse_iso_ms(&timestamp))
+        {
+            return Some((offset, event_ms));
+        }
+        offset += read as u64;
+    }
+    None
 }
 
 fn signal_entry_from_line(line: &str, schema: &ProviderSchema) -> Option<(u64, u8)> {
@@ -5982,6 +6049,52 @@ mod tests {
         assert_eq!(signal.launches_last_hour, 0);
         assert_eq!(signal.active_hours_24h, 0);
         assert_eq!(signal.busiest_hour_label_24h, "No activity");
+    }
+
+    #[test]
+    fn session_activity_signal_first_read_skips_events_before_window() {
+        use std::io::Write;
+
+        let schema = test_schema();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cmc_signal_seek_{}_{}.jsonl",
+            std::process::id(),
+            unix_ms(SystemTime::now())
+        ));
+        let line = |ts: &str, kind: &str| {
+            format!(r#"{{"type":"{kind}","timestamp":"{ts}","data":{{"toolName":"bash"}}}}"#)
+        };
+        let mut file = std::fs::File::create(&path).expect("create");
+        let mut old_bytes = 0u64;
+        for _ in 0..30_000 {
+            let old = line("2026-05-25T08:00:00.000Z", "tool.execution_start");
+            writeln!(file, "{}", old).expect("write old");
+            old_bytes += old.len() as u64 + 1;
+        }
+        for minute in 0..5 {
+            let ts = format!("2026-05-28T12:0{minute}:00.000Z");
+            writeln!(file, "{}", line(&ts, "tool.execution_start")).expect("write recent");
+        }
+        drop(file);
+        assert!(old_bytes > 2 * 1024 * 1024);
+
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:34:00Z").expect("valid fixture time");
+        let keep_from = generated_at_ms - HOUR_MS * (HISTORY_HOUR_BUCKETS as u64 + 1);
+        let mut handle = std::fs::File::open(&path).expect("open");
+        let len = handle.metadata().expect("metadata").len();
+        let offset = first_line_offset_at_or_after(&mut handle, len, keep_from, &schema);
+        assert!(
+            offset > 0 && offset <= old_bytes,
+            "offset {offset} of {old_bytes}"
+        );
+
+        let signal = build_session_activity_signal_from_path(&path, &schema, generated_at_ms);
+        assert_eq!(signal.launches_last_hour, 5);
+        assert_eq!(signal.hourly_24h.last().expect("current").launch_count, 5);
+        assert_eq!(signal.active_hours_24h, 1);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -164,6 +164,14 @@
             <option value="medieval">Medieval Kingdom</option>
           </select>
         </label>
+        <label class="settings-field" for="pulse-mode-select">
+          <span class="settings-label">Sector pulses</span>
+          <select id="pulse-mode-select" class="settings-select" aria-describedby="pulse-mode-description">
+            <option value="every">Every event</option>
+            <option value="grouped">Grouped</option>
+          </select>
+          <span id="pulse-mode-description" class="settings-description">Every event sends one pulse per tool call. Grouped sends at most one pulse to each sector per update.</span>
+        </label>
         <div class="settings-field">
           <span class="settings-label">Session counters</span>
           <p class="settings-description">Reset visible activity counters without deleting Copilot session files.</p>

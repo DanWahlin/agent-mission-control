@@ -123,7 +123,7 @@ Heading `Mission Analytics Chat`.
 
 | Dialog | Open from | Close |
 |---|---|---|
-| Settings | `Open settings` | `Close settings`, `Done`, Escape. Has `App theme` (Space, Medieval Kingdom) and `Reset visible activity counters`. |
+| Settings | `Open settings` | `Close settings`, `Done`, Escape. Has `App theme` (Space, Medieval Kingdom), `Sector pulses` (Every event, Grouped), and `Reset visible activity counters`. |
 | Attention Center | Attention entry on Home (only when there are problems) | `Close Attention Center`, Escape. |
 | Possible Copilot schema drift | Automatic, when the scan sees unknown event types | `Report schema drift`, `Dismiss`, `Close schema drift dialog`. |
 | Welcome to Mission Analytics Chat | First visit to Analytics Chat, or the `?` button | `I understand`, Escape. |
@@ -151,4 +151,4 @@ Heading `Mission Analytics Chat`.
 | `~/.copilot/session-state/<id>/events.jsonl` | Copilot CLI events (read only) |
 | `~/Library/Application Support/com.danwahlin.copilotmissioncontrol/.window-state.json` | Window position (window-state plugin) |
 | `~/Library/Application Support/com.danwahlin.copilotmissioncontrol/analytics/analytics.sqlite3` | Analytics database. Open it read-only with `sqlite3 "file:<path>?immutable=1"` while the app runs. |
-| `localStorage` keys `cmc_*` | Theme, app theme, panels, History tab, chat notice, mission preferences |
+| `localStorage` keys `cmc_*` | Theme, app theme, sector pulse mode, panels, History tab, chat notice, mission preferences |

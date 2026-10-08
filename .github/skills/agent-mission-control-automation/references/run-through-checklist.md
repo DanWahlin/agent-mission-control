@@ -56,6 +56,7 @@ change the related code.
 | 25 | Theme toggle | Dark and light both render. Choice survives restart. | Covered |
 | 26 | App theme | Space and Medieval Kingdom sprites load. | Covered |
 | 27 | Reset counters | Counters go to zero. Copilot files do not change. | Covered |
+| 28 | Sector pulses | `Every event` sends one pulse per tool start (two sessions running `bash` give two Commands pulses). `Grouped` sends one per sector per update. | Covered + Live |
 
 ## Database checks
 

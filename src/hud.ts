@@ -81,6 +81,7 @@
   var settingsClose = $('settings-close');
   var settingsDone = $('settings-done');
   var appThemeSelect = $('app-theme-select');
+  var pulseModeSelect = $('pulse-mode-select');
   var settingsReturnFocus = null;
   var APP_THEME_KEY = STORAGE_KEYS.appTheme;
   var DEFAULT_APP_THEME = 'space';
@@ -103,10 +104,15 @@
     }
   }
 
+  function normalizePulseMode(value) {
+    return value === 'grouped' ? 'grouped' : 'every';
+  }
+
   function openSettings(returnFocus) {
     if (!settingsOverlay) return;
     settingsReturnFocus = returnFocus || document.activeElement;
     applyAppTheme(safeGet(APP_THEME_KEY));
+    if (pulseModeSelect) pulseModeSelect.value = normalizePulseMode(safeGet(STORAGE_KEYS.pulseMode));
     settingsOverlay.classList.add('visible');
     settingsOverlay.setAttribute('aria-hidden', 'false');
     var focusTarget = appThemeSelect || settingsDialog;
@@ -127,6 +133,12 @@
   if (settingsClose) settingsClose.addEventListener('click', closeSettings);
   if (settingsDone) settingsDone.addEventListener('click', closeSettings);
   if (appThemeSelect) appThemeSelect.addEventListener('change', function () { applyAppTheme(appThemeSelect.value); });
+  if (pulseModeSelect) {
+    pulseModeSelect.value = normalizePulseMode(safeGet(STORAGE_KEYS.pulseMode));
+    pulseModeSelect.addEventListener('change', function () {
+      safeSet(STORAGE_KEYS.pulseMode, normalizePulseMode(pulseModeSelect.value));
+    });
+  }
   var appThemeAttempts = 0;
   var appThemePoll = setInterval(function () {
     appThemeAttempts++;

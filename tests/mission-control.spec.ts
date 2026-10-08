@@ -2177,6 +2177,77 @@ test.describe('Agent Mission Control — Dashboard', () => {
     }), { timeout: 1500 }).toEqual({ terminal: 2, edits: 1 });
   });
 
+  test('Grouped sector pulses send one pulse per sector per update', async ({ page }) => {
+    await page.locator('#settings-btn').click();
+    await expect(page.locator('#pulse-mode-select')).toHaveValue('every');
+    await page.locator('#pulse-mode-select').selectOption('grouped');
+    await page.locator('#settings-done').click();
+    expect(await page.evaluate(() => window.localStorage.getItem('cmc_pulse_mode'))).toBe('grouped');
+
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      scene.eventPulses = [];
+      const fixture = (window as any).__missionControlFixture;
+      const now = new Date().toISOString();
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: now, kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
+        { session_id: 'beta4567', timestamp: now, kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await page.waitForTimeout(400);
+    const terminalPulses = await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      return scene.eventPulses.filter((pulse: any) => pulse.source === 'live' && pulse.quarterKey === 'terminal').length;
+    });
+    expect(terminalPulses).toBe(1);
+  });
+
+  test('late older events keep feed order and send no live pulse', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    const livePulses = () => page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      return scene.eventPulses.filter((pulse: any) => pulse.source === 'live').map((pulse: any) => pulse.quarterKey);
+    });
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      scene.eventPulses = [];
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await expect.poll(livePulses, { timeout: 1500 }).toEqual(['terminal']);
+    await expect(page.locator('#dom-feed .cmc-feed-row').first()).toContainText('bash');
+
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      scene.eventPulses = [];
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        ...fixture.recent_events,
+        { session_id: 'beta4567', timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(), kind: 'tool.execution_start', tool: 'apply_patch', category: 'edits', success: true },
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await page.waitForTimeout(600);
+    expect(await livePulses()).toEqual([]);
+    const order = await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      const times = scene.eventLog.map((event: any) => Date.parse(event.timestamp));
+      return times.every((time: number, index: number) => index === 0 || time >= times[index - 1]);
+    });
+    expect(order).toBe(true);
+    await expect(page.locator('#dom-feed .cmc-feed-row').first()).toContainText('bash');
+    await expect(page.locator('#dom-feed .cmc-feed-row').first()).not.toContainText('apply_patch');
+  });
+
   test('hook events route to the Hooks sector flow', async ({ page }) => {
     await page.waitForTimeout(800);
     const queued = await page.evaluate(() => {

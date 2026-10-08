@@ -71,6 +71,7 @@ declare global {
     keys: {
       theme: string;
       appTheme: string;
+      pulseMode: string;
       panelsHidden: string;
       missionPrefs: string;
     };
@@ -158,6 +159,15 @@ function loadInitialThemeMode(): ThemeMode {
 
 function normalizeAppTheme(value: string | null | undefined): AppTheme {
   return value === 'medieval' ? 'medieval' : 'space';
+}
+
+function loadPulseMode(): 'every' | 'grouped' {
+  try {
+    const appSettings = settings();
+    return appSettings?.get(appSettings.keys.pulseMode) === 'grouped' ? 'grouped' : 'every';
+  } catch {
+    return 'every';
+  }
 }
 
 function loadInitialAppTheme(): AppTheme {
@@ -297,6 +307,10 @@ const MAX_PULSE_TRAIN_MS = 2000;
 /// Upper bound on pulses for one refresh (for example, after the app was
 /// asleep). The newest events are kept.
 const MAX_LIVE_PULSES_PER_REFRESH = 60;
+/// Events this much older than the newest event when they first arrive (for
+/// example, history of a session that just became active) go to the feed
+/// but get no pulse.
+const LIVE_PULSE_MAX_AGE_MS = 2 * 60 * 1000;
 
 /// Number of fading samples drawn behind the pulse head to form a
 /// glowing comet tail. Each sample is offset along the bezier path by
@@ -1813,14 +1827,20 @@ export class MissionControlScene extends Phaser.Scene {
 
     if (replayResult.wasAtLive && !this.replayPaused && this.bootstrapCompleted) {
       if (this.quarters.length > 0) {
-        // One pulse per tool or hook start, in the order the events
-        // happened, so concurrent sessions each show their own flow.
+        // "Every event" (default) sends one pulse per tool or hook start in
+        // event order; "Grouped" sends the newest start per sector.
+        // The log is in time order, so its last event is the newest seen.
+        const newestMs = Date.parse(this.eventLog[this.eventLog.length - 1]?.timestamp ?? '') || 0;
+        const oldestLiveMs = newestMs - LIVE_PULSE_MAX_AGE_MS;
         const starts = activityResult.appended
           .filter(event => (event.kind === 'tool.execution_start' || event.kind === 'hook.start') && quarterKeyForEvent(event))
-          .sort((a, b) => (Date.parse(a.timestamp) || 0) - (Date.parse(b.timestamp) || 0))
-          .slice(-MAX_LIVE_PULSES_PER_REFRESH);
-        const stagger = Math.min(PULSE_STAGGER_MS, MAX_PULSE_TRAIN_MS / Math.max(1, starts.length));
-        starts.forEach((event, i) => {
+          .filter(event => (Date.parse(event.timestamp) || 0) >= oldestLiveMs)
+          .sort((a, b) => (Date.parse(a.timestamp) || 0) - (Date.parse(b.timestamp) || 0));
+        const pulses = loadPulseMode() === 'grouped'
+          ? Array.from(new Map(starts.map(event => [quarterKeyForEvent(event), event])).values())
+          : starts.slice(-MAX_LIVE_PULSES_PER_REFRESH);
+        const stagger = Math.min(PULSE_STAGGER_MS, MAX_PULSE_TRAIN_MS / Math.max(1, pulses.length));
+        pulses.forEach((event, i) => {
           this.queueEventPulse(event, 'live', i * stagger);
         });
       }

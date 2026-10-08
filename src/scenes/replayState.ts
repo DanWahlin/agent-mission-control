@@ -67,7 +67,11 @@ export function ingestReplayEvents(input: ReplayIngestInput): ReplayIngestResult
       const key = replayEventKey(event);
       if (input.seenEventKeys.has(key)) continue;
       input.seenEventKeys.add(key);
-      input.eventLog.push(event);
+      // Keep the log in time order: a later refresh can bring older events
+      // (for example, from a session that just became active).
+      const index = timeOrderedInsertIndex(input.eventLog, event);
+      input.eventLog.splice(index, 0, event);
+      if (index < cursor) cursor += 1;
       appended.push(event);
     }
   }
@@ -84,6 +88,20 @@ export function ingestReplayEvents(input: ReplayIngestInput): ReplayIngestResult
   }
 
   return { appended, cursor, wasAtLive };
+}
+
+function timeOrderedInsertIndex(eventLog: CopilotEventSummary[], event: CopilotEventSummary): number {
+  const eventMs = Date.parse(event.timestamp);
+  if (!Number.isFinite(eventMs)) return eventLog.length;
+  let low = 0;
+  let high = eventLog.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    const midMs = Date.parse(eventLog[mid].timestamp);
+    if (Number.isFinite(midMs) && midMs > eventMs) high = mid;
+    else low = mid + 1;
+  }
+  return low;
 }
 
 export function advanceReplayCursor(input: ReplayAdvanceInput): ReplayAdvanceResult {
