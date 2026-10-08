@@ -1719,15 +1719,22 @@ test.describe('Agent Mission Control — Dashboard', () => {
   });
 
   test('selected session panel does not scroll sideways for a long branch name', async ({ page }) => {
+    await selectSession(page, 'alpha123');
+    // Change the branch after the panel renders. The new event sends the
+    // refresh through the live (fingerprint-gated) dashboard path.
     await page.evaluate(() => {
       const fixture = (window as any).__missionControlFixture;
       const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
       alpha.branch = 'danwahlin-app-functional-audit-and-cleanup-with-a-very-long-branch-name';
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'branch_probe', category: 'library', success: true },
+        ...fixture.recent_events,
+      ];
       (window as any).__cmcOnAgentActivityChanged?.();
     });
-    await page.evaluate(() => (window as any).__cmcSelectSession('alpha123'));
 
-    await expect(page.locator('#dom-session .cmc-session-subtitle')).toContainText('very-long-branch-name');
+    // The live path must update the panel at once, not after the pulses land.
+    await expect(page.locator('#dom-session .cmc-session-subtitle')).toContainText('very-long-branch-name', { timeout: 2_000 });
     const overflow = await page.locator('#dom-session .cmc-panel-body').evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(overflow).toBeLessThanOrEqual(0);
   });
