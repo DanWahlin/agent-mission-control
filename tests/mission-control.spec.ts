@@ -2142,6 +2142,41 @@ test.describe('Agent Mission Control — Dashboard', () => {
     expect(mid!.activeEventPulseCount).toBeGreaterThan(0);
   });
 
+  test('live refresh sends one pulse per tool start across sessions', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      scene.eventPulses = [];
+      const fixture = (window as any).__missionControlFixture;
+      const now = Date.now();
+      const start = (session_id: string, offsetMs: number, tool: string, category: string) => ({
+        session_id,
+        timestamp: new Date(now + offsetMs).toISOString(),
+        kind: 'tool.execution_start',
+        tool,
+        category,
+        success: true,
+      });
+      fixture.recent_events = [
+        start('alpha123', 0, 'bash', 'terminal'),
+        start('beta4567', 0, 'bash', 'terminal'),
+        start('beta4567', 10, 'apply_patch', 'edits'),
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+
+    await expect.poll(async () => page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      const live = scene.eventPulses.filter((pulse: any) => pulse.source === 'live');
+      return {
+        terminal: live.filter((pulse: any) => pulse.quarterKey === 'terminal').length,
+        edits: live.filter((pulse: any) => pulse.quarterKey === 'edits').length,
+      };
+    }), { timeout: 1500 }).toEqual({ terminal: 2, edits: 1 });
+  });
+
   test('hook events route to the Hooks sector flow', async ({ page }) => {
     await page.waitForTimeout(800);
     const queued = await page.evaluate(() => {

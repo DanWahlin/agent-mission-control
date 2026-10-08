@@ -291,6 +291,12 @@ const QUARTER_HOVER_RADIUS_MIN_PX = 48;
 /// Keeps a burst of N events from looking like a single blob — each one
 /// gets `i * PULSE_STAGGER_MS` delay so the eye can track the train.
 const PULSE_STAGGER_MS = 120;
+/// A large burst shrinks the stagger so its train still ends within this
+/// time, before the next refresh adds more pulses.
+const MAX_PULSE_TRAIN_MS = 2000;
+/// Upper bound on pulses for one refresh (for example, after the app was
+/// asleep). The newest events are kept.
+const MAX_LIVE_PULSES_PER_REFRESH = 60;
 
 /// Number of fading samples drawn behind the pulse head to form a
 /// glowing comet tail. Each sample is offset along the bezier path by
@@ -1807,15 +1813,15 @@ export class MissionControlScene extends Phaser.Scene {
 
     if (replayResult.wasAtLive && !this.replayPaused && this.bootstrapCompleted) {
       if (this.quarters.length > 0) {
-        const latestPulseByQuarter = new Map<MissionCategory, CopilotEventSummary>();
-        for (const event of activityResult.appended) {
-          if (event.kind !== 'tool.execution_start' && event.kind !== 'hook.start') continue;
-          const quarterKey = quarterKeyForEvent(event);
-          if (!quarterKey) continue;
-          latestPulseByQuarter.set(quarterKey, event);
-        }
-        Array.from(latestPulseByQuarter.values()).forEach((event, i) => {
-          this.queueEventPulse(event, 'live', i * PULSE_STAGGER_MS);
+        // One pulse per tool or hook start, in the order the events
+        // happened, so concurrent sessions each show their own flow.
+        const starts = activityResult.appended
+          .filter(event => (event.kind === 'tool.execution_start' || event.kind === 'hook.start') && quarterKeyForEvent(event))
+          .sort((a, b) => (Date.parse(a.timestamp) || 0) - (Date.parse(b.timestamp) || 0))
+          .slice(-MAX_LIVE_PULSES_PER_REFRESH);
+        const stagger = Math.min(PULSE_STAGGER_MS, MAX_PULSE_TRAIN_MS / Math.max(1, starts.length));
+        starts.forEach((event, i) => {
+          this.queueEventPulse(event, 'live', i * stagger);
         });
       }
     }
