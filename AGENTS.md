@@ -35,7 +35,7 @@ tests/                   — Playwright (Chromium, headless)
   helpers.ts                 — waitForGame() + getMissionStatus()
 .github/workflows/
   build.yml              — Build & Release on v* tags
-  ci.yml                 — type-check + build + Playwright on PRs
+  ci.yml                 — type-check, build, Playwright, MCP tests, and Rust fmt/Clippy/tests on PRs
   deploy-pages.yml       — docs/ → GitHub Pages on push to main
 ```
 
