@@ -50,8 +50,8 @@ There is **one** Phaser scene, `MissionControlScene`, in `src/scenes/MissionCont
 
 | Change Made | Files to Update |
 |-------------|-----------------|
-| **Scene behavior changed** | Update `tests/mission-control.spec.ts`; run all 27 tests |
-| **Top bar HTML/CSS changed** | Update `tests/app.spec.ts` selectors if id/class names change |
+| **Scene behavior changed** | Update `tests/mission-control.spec.ts`; run the full Playwright suite (`npm test`) |
+| **Top bar HTML/CSS changed** | Update `tests/app.spec.ts` selectors if id/class names change; update `.github/skills/agent-mission-control-automation/references/app-map.md` if accessibility names change |
 | **Rust command added/removed** | Update `src-tauri/capabilities/main.json` permissions; `cargo check`; verify renderer invocation site |
 | **AgentProvider added** | Add to `default_providers()`; verify allowlist in `scan()`; watcher attaches automatically |
 | **Window config changed** | Update `src-tauri/tauri.conf.json`; verify on macOS + Windows; window-state plugin restores last session |

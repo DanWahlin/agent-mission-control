@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn version_sort_prefers_newer_semver() {
-        let mut paths = vec![
+        let mut paths = [
             PathBuf::from("/nvm/v9.0.0"),
             PathBuf::from("/nvm/v22.1.0"),
             PathBuf::from("/nvm/v20.12.2"),

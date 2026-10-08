@@ -852,6 +852,11 @@ fn fetch_schema_url(url: &str) -> Result<String, String> {
     if !url.starts_with("https://") {
         return Err(format!("refusing non-HTTPS schema URL '{}'", url));
     }
+    // reqwest uses rustls without a bundled provider; share the ring
+    // provider that tauri-plugin-updater also installs.
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(SCHEMA_FETCH_TIMEOUT_SECS))
         .user_agent(format!(
@@ -925,10 +930,14 @@ fn validate_schema_checksum(raw: &str, expected: &str) -> Result<(), String> {
 }
 
 fn sha256_hex(raw: &str) -> String {
-    let digest = Sha256::digest(raw.as_bytes());
+    hex_digest(&Sha256::digest(raw.as_bytes()))
+}
+
+fn hex_digest(digest: &[u8]) -> String {
+    use std::fmt::Write;
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
-        hex.push_str(&format!("{:02x}", byte));
+        let _ = write!(hex, "{:02x}", byte);
     }
     hex
 }
@@ -1444,11 +1453,14 @@ fn scan_agent_activity(include_history: bool) -> AgentActivity {
 /// next poll / watcher tick recover once the transient condition clears.
 fn scan_provider_guarded(provider: &dyn AgentProvider, include_history: bool) -> ProviderScan {
     let id = provider.id();
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider.scan(include_history)))
-    {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        provider.scan(include_history)
+    })) {
         Ok(scan) => scan,
         Err(_) => {
-            log::error!("Provider '{id}' scan panicked; degrading to an unavailable scan for this cycle");
+            log::error!(
+                "Provider '{id}' scan panicked; degrading to an unavailable scan for this cycle"
+            );
             let mut scan = ProviderScan::unavailable(id);
             scan.alerts.push(format!(
                 "The {id} activity scan hit an unexpected error and was skipped this cycle. It will retry automatically."
@@ -1648,8 +1660,7 @@ fn merge_scans(scans: Vec<ProviderScan>, include_history: bool) -> AgentActivity
     activity.tools = survivors;
 
     all_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    activity.activity_signal =
-        build_activity_signal(&all_events, &all_sessions, activity.generated_at_ms);
+    activity.activity_signal = build_activity_signal(&mut all_sessions, activity.generated_at_ms);
     if include_history {
         activity.history = build_history_summary(
             &all_sessions,
@@ -1689,144 +1700,114 @@ fn merge_scans(scans: Vec<ProviderScan>, include_history: bool) -> AgentActivity
 }
 
 fn build_activity_signal(
-    events: &[AgentEventSummary],
-    sessions: &[AgentSessionSummary],
+    sessions: &mut [AgentSessionSummary],
     generated_at_ms: u64,
 ) -> AgentActivitySignal {
-    let mut signal_events = events.to_vec();
-    append_recent_tool_call_launch_events(&mut signal_events, sessions);
-    signal_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    let mut buckets = empty_activity_signal_buckets(generated_at_ms);
+    let mut activity_last_5m = 0usize;
+    let mut activity_last_hour = 0usize;
+    for session in sessions.iter_mut() {
+        let last_activity_ms = parse_iso_ms(&session.last_event_timestamp)
+            .or_else(|| parse_iso_ms(&session.updated_at));
+        session.activity_signal =
+            refresh_activity_signal(&session.activity_signal, last_activity_ms, generated_at_ms);
+        let signal = &session.activity_signal;
+        activity_last_5m += signal.launches_last_5m;
+        activity_last_hour += signal.launches_last_hour;
+        for (total, bucket) in buckets.iter_mut().zip(&signal.hourly_24h) {
+            total.event_count += bucket.event_count;
+            total.launch_count += bucket.launch_count;
+            total.turn_count += bucket.turn_count;
+            total.failure_count += bucket.failure_count;
+            total.active_sessions += bucket.active_sessions;
+        }
+    }
+    finalize_activity_signal(
+        buckets,
+        generated_at_ms,
+        activity_last_5m,
+        activity_last_hour,
+    )
+}
 
-    let mut hourly = build_activity_signal_buckets(&signal_events, generated_at_ms);
-    let peak_hour_event_count_24h = hourly
+/// Moves a session signal onto the hourly grid for `generated_at_ms`.
+/// Cached session scans keep the signal from their last file read, so the
+/// rolling windows are cleared when the session has no newer activity.
+fn refresh_activity_signal(
+    signal: &AgentActivitySignal,
+    last_activity_ms: Option<u64>,
+    generated_at_ms: u64,
+) -> AgentActivitySignal {
+    let mut buckets = empty_activity_signal_buckets(generated_at_ms);
+    let source = signal
+        .hourly_24h
+        .iter()
+        .map(|bucket| (bucket.start.as_str(), bucket))
+        .collect::<HashMap<_, _>>();
+    for bucket in &mut buckets {
+        if let Some(previous) = source.get(bucket.start.as_str()) {
+            bucket.event_count = previous.event_count;
+            bucket.launch_count = previous.launch_count;
+            bucket.turn_count = previous.turn_count;
+            bucket.failure_count = previous.failure_count;
+            bucket.active_sessions = previous.active_sessions;
+        }
+    }
+    let within = |window_ms: u64| {
+        last_activity_ms.is_some_and(|ms| ms >= generated_at_ms.saturating_sub(window_ms))
+    };
+    let last_5m = if within(5 * 60 * 1000) {
+        signal.launches_last_5m
+    } else {
+        0
+    };
+    let last_hour = if within(HOUR_MS) {
+        signal.launches_last_hour
+    } else {
+        0
+    };
+    finalize_activity_signal(buckets, generated_at_ms, last_5m, last_hour)
+}
+
+/// Activity items are tool starts plus assistant turn starts.
+fn finalize_activity_signal(
+    mut buckets: Vec<AgentActivitySignalBucket>,
+    generated_at_ms: u64,
+    activity_last_5m: usize,
+    activity_last_hour: usize,
+) -> AgentActivitySignal {
+    let peak_activity = buckets
         .iter()
         .map(|bucket| bucket.event_count)
         .max()
         .unwrap_or(0);
-    let peak_velocity_per_hour = hourly
-        .iter()
-        .map(|bucket| bucket.launch_count)
-        .max()
-        .unwrap_or(0);
-    let active_hours_24h = hourly
-        .iter()
-        .filter(|bucket| bucket.launch_count > 0)
-        .count();
-    for bucket in &mut hourly {
-        bucket.intensity = activity_signal_intensity(bucket.launch_count, peak_velocity_per_hour);
+    for bucket in &mut buckets {
+        bucket.intensity = activity_signal_intensity(bucket.event_count, peak_activity);
     }
-
-    let busiest_hour_label_24h = hourly
+    let busiest_hour_label_24h = buckets
         .iter()
         .max_by(|a, b| {
-            a.launch_count
-                .cmp(&b.launch_count)
+            a.event_count
+                .cmp(&b.event_count)
                 .then_with(|| a.start.cmp(&b.start))
         })
-        .filter(|bucket| bucket.launch_count > 0)
+        .filter(|bucket| bucket.event_count > 0)
         .map(|bucket| bucket.label.clone())
         .unwrap_or_else(|| "No activity".to_string());
-
-    let five_min_start = generated_at_ms.saturating_sub(5 * 60 * 1000);
-    let hour_start = generated_at_ms.saturating_sub(HOUR_MS);
-    let launches_last_5m = count_launches_since(&signal_events, five_min_start, generated_at_ms);
-    let launches_last_hour = count_launches_since(&signal_events, hour_start, generated_at_ms);
-
     AgentActivitySignal {
         generated_at_ms,
-        launches_last_5m,
-        launches_last_hour,
-        velocity_per_hour: launches_last_hour as f64,
-        peak_velocity_per_hour,
-        peak_hour_event_count_24h,
+        launches_last_5m: activity_last_5m,
+        launches_last_hour: activity_last_hour,
+        velocity_per_hour: activity_last_hour as f64,
+        peak_velocity_per_hour: peak_activity,
+        peak_hour_event_count_24h: peak_activity,
         busiest_hour_label_24h,
-        active_hours_24h,
-        hourly_24h: hourly,
+        active_hours_24h: buckets
+            .iter()
+            .filter(|bucket| bucket.event_count > 0)
+            .count(),
+        hourly_24h: buckets,
     }
-}
-
-fn append_recent_tool_call_launch_events(
-    signal_events: &mut Vec<AgentEventSummary>,
-    sessions: &[AgentSessionSummary],
-) {
-    let mut seen = signal_events
-        .iter()
-        .map(activity_signal_event_key)
-        .collect::<HashSet<_>>();
-
-    for session in sessions {
-        for call in &session.recent_tool_calls {
-            if call.timestamp.is_empty() {
-                continue;
-            }
-            let event = AgentEventSummary {
-                provider: session.provider.clone(),
-                session_id: session.id.chars().take(8).collect(),
-                timestamp: call.timestamp.clone(),
-                kind: if call.category == "hooks" {
-                    "hook.start".to_string()
-                } else {
-                    "tool.execution_start".to_string()
-                },
-                tool: call.tool.clone(),
-                category: call.category.clone(),
-                success: true,
-                input_tokens: None,
-                output_tokens: None,
-            };
-            let key = activity_signal_event_key(&event);
-            if seen.insert(key) {
-                signal_events.push(event);
-            }
-        }
-    }
-}
-
-fn activity_signal_event_key(event: &AgentEventSummary) -> String {
-    format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-        event.session_id, event.timestamp, event.kind, event.tool
-    )
-}
-
-fn build_activity_signal_buckets(
-    events: &[AgentEventSummary],
-    generated_at_ms: u64,
-) -> Vec<AgentActivitySignalBucket> {
-    let history_buckets =
-        build_history_buckets(events, generated_at_ms, HOUR_MS, HISTORY_HOUR_BUCKETS);
-    let mut buckets: Vec<AgentActivitySignalBucket> = history_buckets
-        .into_iter()
-        .map(|bucket| AgentActivitySignalBucket {
-            start: bucket.start,
-            label: bucket.label,
-            event_count: bucket.event_count,
-            failure_count: bucket.failure_count,
-            active_sessions: bucket.active_sessions,
-            ..Default::default()
-        })
-        .collect();
-    let index_by_start = buckets
-        .iter()
-        .enumerate()
-        .map(|(index, bucket)| (bucket.start.clone(), index))
-        .collect::<HashMap<_, _>>();
-
-    for event in events {
-        if !is_launch_signal(event) {
-            continue;
-        }
-        let Some(event_ms) = parse_iso_ms(&event.timestamp) else {
-            continue;
-        };
-        let bucket_start = (event_ms / HOUR_MS) * HOUR_MS;
-        let start = format_bucket_start(bucket_start, HOUR_MS);
-        if let Some(index) = index_by_start.get(&start) {
-            buckets[*index].launch_count += 1;
-        }
-    }
-
-    buckets
 }
 
 fn activity_signal_intensity(event_count: usize, peak: usize) -> f64 {
@@ -1834,15 +1815,6 @@ fn activity_signal_intensity(event_count: usize, peak: usize) -> f64 {
         return 0.0;
     }
     (event_count as f64 / peak as f64).clamp(0.0, 1.0)
-}
-
-fn count_launches_since(events: &[AgentEventSummary], start_ms: u64, end_ms: u64) -> usize {
-    events
-        .iter()
-        .filter(|event| is_launch_signal(event))
-        .filter_map(|event| parse_iso_ms(&event.timestamp))
-        .filter(|timestamp| *timestamp >= start_ms && *timestamp <= end_ms)
-        .count()
 }
 
 fn is_launch_signal(event: &AgentEventSummary) -> bool {
@@ -1930,38 +1902,12 @@ fn build_session_activity_signal_from_path(
         }
     }
 
-    let peak_activity = buckets
-        .iter()
-        .map(|bucket| bucket.event_count)
-        .max()
-        .unwrap_or(0);
-    for bucket in &mut buckets {
-        bucket.intensity = activity_signal_intensity(bucket.event_count, peak_activity);
-    }
-
-    AgentActivitySignal {
+    finalize_activity_signal(
+        buckets,
         generated_at_ms,
-        launches_last_5m: activity_last_5m,
-        launches_last_hour: activity_last_hour,
-        velocity_per_hour: activity_last_hour as f64,
-        peak_velocity_per_hour: peak_activity,
-        peak_hour_event_count_24h: peak_activity,
-        busiest_hour_label_24h: buckets
-            .iter()
-            .max_by(|a, b| {
-                a.event_count
-                    .cmp(&b.event_count)
-                    .then_with(|| a.start.cmp(&b.start))
-            })
-            .filter(|bucket| bucket.event_count > 0)
-            .map(|bucket| bucket.label.clone())
-            .unwrap_or_else(|| "No activity".to_string()),
-        active_hours_24h: buckets
-            .iter()
-            .filter(|bucket| bucket.event_count > 0)
-            .count(),
-        hourly_24h: buckets,
-    }
+        activity_last_5m,
+        activity_last_hour,
+    )
 }
 
 fn empty_activity_signal_buckets(generated_at_ms: u64) -> Vec<AgentActivitySignalBucket> {
@@ -2685,7 +2631,7 @@ fn scan_copilot_from_discovery(
         .into_values()
         .collect::<Vec<(PathBuf, SystemTime)>>();
 
-    session_dirs.sort_by(|a, b| b.1.cmp(&a.1));
+    session_dirs.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     session_dirs.retain(|(session_path, _)| {
         let events_path = first_existing_child(session_path, &schema.session.events_files);
         !is_mission_control_analytics_session(&events_path)
@@ -2767,18 +2713,20 @@ fn scan_copilot_from_discovery(
                 session_recent_events = cached.recent_events;
                 cached.schema_stats
             } else {
-                let stats = summarize_events_with_mode(
-                    provider,
+                let stats = summarize_events(
+                    EventScanContext {
+                        provider,
+                        mcp_allowlist: &mcp_allowlist,
+                        configured_hook_types: &configured_hook_types,
+                        schema: &schema,
+                        token_prefix_cache_context: &token_prefix_cache_context,
+                        include_full_history: include_history,
+                    },
                     &events_path,
                     &session_id,
                     &mut summary,
                     &mut session_tool_counts,
                     &mut session_recent_events,
-                    &mcp_allowlist,
-                    &configured_hook_types,
-                    &schema,
-                    &token_prefix_cache_context,
-                    include_history,
                 );
                 summary.activity_signal = build_session_activity_signal_from_path(
                     &events_path,
@@ -2797,18 +2745,20 @@ fn scan_copilot_from_discovery(
                 stats
             }
         } else {
-            let stats = summarize_events_with_mode(
-                provider,
+            let stats = summarize_events(
+                EventScanContext {
+                    provider,
+                    mcp_allowlist: &mcp_allowlist,
+                    configured_hook_types: &configured_hook_types,
+                    schema: &schema,
+                    token_prefix_cache_context: &token_prefix_cache_context,
+                    include_full_history: include_history,
+                },
                 &events_path,
                 &session_id,
                 &mut summary,
                 &mut session_tool_counts,
                 &mut session_recent_events,
-                &mcp_allowlist,
-                &configured_hook_types,
-                &schema,
-                &token_prefix_cache_context,
-                include_history,
             );
             summary.activity_signal = build_session_activity_signal_from_path(
                 &events_path,
@@ -2941,7 +2891,7 @@ fn copilot_session_cache_context(
         hasher.update([0]);
     }
 
-    format!("{:x}", hasher.finalize())
+    hex_digest(&hasher.finalize())
 }
 
 fn copilot_token_prefix_cache_context(schema: &ProviderSchema) -> String {
@@ -2979,7 +2929,7 @@ fn copilot_token_prefix_cache_context(schema: &ProviderSchema) -> String {
         hasher.update(path.as_bytes());
         hasher.update([0]);
     }
-    format!("{:x}", hasher.finalize())
+    hex_digest(&hasher.finalize())
 }
 
 fn copilot_session_cache_key(
@@ -3555,47 +3505,33 @@ fn ensure_turn<'a>(
     turn
 }
 
-#[cfg(test)]
-fn summarize_events(
+/// Read-only settings for one event-file scan.
+#[derive(Clone, Copy)]
+struct EventScanContext<'a> {
     provider: &'static str,
+    mcp_allowlist: &'a HashSet<String>,
+    configured_hook_types: &'a HashSet<String>,
+    schema: &'a ProviderSchema,
+    token_prefix_cache_context: &'a str,
+    include_full_history: bool,
+}
+
+fn summarize_events(
+    context: EventScanContext<'_>,
     path: &Path,
     session_id: &str,
     summary: &mut AgentSessionSummary,
     tool_counts: &mut BTreeMap<(String, String), usize>,
     recent_events: &mut Vec<AgentEventSummary>,
-    mcp_allowlist: &HashSet<String>,
-    configured_hook_types: &HashSet<String>,
-    schema: &ProviderSchema,
-    token_prefix_cache_context: &str,
 ) -> SessionSchemaStats {
-    summarize_events_with_mode(
+    let EventScanContext {
         provider,
-        path,
-        session_id,
-        summary,
-        tool_counts,
-        recent_events,
         mcp_allowlist,
         configured_hook_types,
         schema,
         token_prefix_cache_context,
-        false,
-    )
-}
-
-fn summarize_events_with_mode(
-    provider: &'static str,
-    path: &Path,
-    session_id: &str,
-    summary: &mut AgentSessionSummary,
-    tool_counts: &mut BTreeMap<(String, String), usize>,
-    recent_events: &mut Vec<AgentEventSummary>,
-    mcp_allowlist: &HashSet<String>,
-    configured_hook_types: &HashSet<String>,
-    schema: &ProviderSchema,
-    token_prefix_cache_context: &str,
-    include_full_history: bool,
-) -> SessionSchemaStats {
+        include_full_history,
+    } = context;
     let mut schema_stats = SessionSchemaStats::default();
     let Ok(mut file) = fs::File::open(path) else {
         return schema_stats;
@@ -4539,10 +4475,7 @@ fn fold_skipped_token_events_from_path(
 
 fn file_head_signature(file: &mut fs::File) -> Vec<u8> {
     let mut signature = vec![0; TOKEN_PREFIX_HEAD_SIGNATURE_BYTES];
-    let read_len = match file.read(&mut signature) {
-        Ok(len) => len,
-        Err(_) => 0,
-    };
+    let read_len = file.read(&mut signature).unwrap_or_default();
     signature.truncate(read_len);
     signature
 }
@@ -4594,7 +4527,7 @@ fn fold_skipped_token_events<R: BufRead>(
         {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
         let event_type =
@@ -4677,9 +4610,9 @@ fn parse_iso_ms(s: &str) -> Option<u64> {
     // Hinnant algorithm; avoids pulling in a date crate just for this.
     let y = if month <= 2 { year - 1 } else { year };
     let era = (if y >= 0 { y } else { y - 399 }) / 400;
-    let yoe = (y - era * 400) as i64;
-    let m = month as i64;
-    let d = day as i64;
+    let yoe = y - era * 400;
+    let m = month;
+    let d = day;
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146097 + doe - 719468;
@@ -5516,16 +5449,19 @@ mod tests {
         let mut tool_counts = BTreeMap::new();
         let mut recent_events = Vec::new();
         let stats = summarize_events(
-            "copilot",
+            EventScanContext {
+                provider: "copilot",
+                mcp_allowlist: &HashSet::new(),
+                configured_hook_types: &HashSet::new(),
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "hook-session-123456789",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &HashSet::new(),
-            &HashSet::new(),
-            &schema,
-            "test",
         );
         let rendered = serde_json::to_string(&summary).expect("serialize summary");
 
@@ -5573,16 +5509,19 @@ mod tests {
         let mut recent_events = Vec::new();
         let configured_hook_types = HashSet::from(["posttooluse".to_string()]);
         let stats = summarize_events(
-            "copilot",
+            EventScanContext {
+                provider: "copilot",
+                mcp_allowlist: &HashSet::new(),
+                configured_hook_types: &configured_hook_types,
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "hook-session-123456789",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &HashSet::new(),
-            &configured_hook_types,
-            &schema,
-            "test",
         );
         let rendered = serde_json::to_string(&summary).expect("serialize summary");
 
@@ -5716,16 +5655,19 @@ mod tests {
         let mut recent_events = Vec::new();
         let configured_hook_types = HashSet::from(["posttooluse".to_string()]);
         summarize_events(
-            "copilot",
+            EventScanContext {
+                provider: "copilot",
+                mcp_allowlist: &HashSet::new(),
+                configured_hook_types: &configured_hook_types,
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "hook-session-123456789",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &HashSet::new(),
-            &configured_hook_types,
-            &schema,
-            "test",
         );
 
         let tool = summary
@@ -5824,187 +5766,123 @@ mod tests {
         assert_eq!(history.recent_failures[1].tool, "bash");
     }
 
-    #[test]
-    fn activity_signal_counts_launch_windows() {
-        let generated_at_ms = parse_iso_ms("2026-05-28T12:00:00Z").expect("valid fixture time");
-        let events = vec![
-            history_event(
-                "alpha123",
-                "2026-05-28T11:56:00Z",
-                "tool.execution_start",
-                "task",
-                "delegates",
-                true,
-            ),
-            history_event(
-                "alpha123",
-                "2026-05-28T11:30:00Z",
-                "tool.execution_start",
-                "task",
-                "delegates",
-                true,
-            ),
-            history_event(
-                "alpha123",
-                "2026-05-28T11:57:00Z",
-                "tool.execution_complete",
-                "bash",
-                "terminal",
-                true,
-            ),
-            history_event(
-                "beta4567",
-                "2026-05-28T10:59:00Z",
-                "tool.execution_start",
-                "rg",
-                "library",
-                true,
-            ),
-        ];
-
-        let signal = build_activity_signal(&events, &[], generated_at_ms);
-
-        assert_eq!(signal.launches_last_5m, 1);
-        assert_eq!(signal.launches_last_hour, 2);
-        assert_eq!(signal.velocity_per_hour, 2.0);
-        assert_eq!(signal.peak_velocity_per_hour, 2);
+    fn signal_session(
+        id: &str,
+        last_event: &str,
+        generated_at_ms: u64,
+        hours: &[(&str, usize, usize, usize)],
+        last_5m: usize,
+        last_hour: usize,
+    ) -> AgentSessionSummary {
+        let mut buckets = empty_activity_signal_buckets(generated_at_ms);
+        for (start, tools, turns, failures) in hours {
+            let bucket = buckets
+                .iter_mut()
+                .find(|bucket| bucket.start == *start)
+                .expect("bucket in window");
+            bucket.event_count = tools + turns;
+            bucket.launch_count = *tools;
+            bucket.turn_count = *turns;
+            bucket.failure_count = *failures;
+            bucket.active_sessions = 1;
+        }
+        let mut session = history_session(id);
+        session.last_event_timestamp = last_event.to_string();
+        session.activity_signal =
+            finalize_activity_signal(buckets, generated_at_ms, last_5m, last_hour);
+        session
     }
 
     #[test]
-    fn activity_signal_builds_24h_intensity() {
+    fn activity_signal_sums_session_signals() {
         let generated_at_ms = parse_iso_ms("2026-05-28T12:34:00Z").expect("valid fixture time");
-        let events = vec![
-            history_event(
+        let mut sessions = vec![
+            signal_session(
                 "alpha123",
-                "2026-05-28T10:05:00Z",
-                "tool.execution_start",
-                "task",
-                "delegates",
-                true,
+                "2026-05-28T12:33:00Z",
+                generated_at_ms,
+                &[
+                    ("2026-05-28T10:00:00Z", 1, 0, 0),
+                    ("2026-05-28T12:00:00Z", 3, 2, 1),
+                ],
+                4,
+                5,
             ),
-            history_event(
-                "alpha123",
-                "2026-05-28T11:05:00Z",
-                "tool.execution_start",
-                "task",
-                "delegates",
-                true,
-            ),
-            history_event(
+            signal_session(
                 "beta4567",
-                "2026-05-28T11:15:00Z",
-                "tool.execution_start",
-                "task",
-                "delegates",
-                true,
-            ),
-            history_event(
-                "beta4567",
-                "2026-05-28T11:25:00Z",
-                "tool.execution_complete",
-                "bash",
-                "alert",
-                false,
+                "2026-05-28T12:20:00Z",
+                generated_at_ms,
+                &[("2026-05-28T12:00:00Z", 2, 1, 0)],
+                0,
+                3,
             ),
         ];
 
-        let signal = build_activity_signal(&events, &[], generated_at_ms);
+        let signal = build_activity_signal(&mut sessions, generated_at_ms);
+        let current = signal.hourly_24h.last().expect("current hour");
         let ten_hour = signal
             .hourly_24h
             .iter()
             .find(|bucket| bucket.start == "2026-05-28T10:00:00Z")
             .expect("10am bucket");
-        let eleven_hour = signal
-            .hourly_24h
-            .iter()
-            .find(|bucket| bucket.start == "2026-05-28T11:00:00Z")
-            .expect("11am bucket");
 
         assert_eq!(signal.hourly_24h.len(), HISTORY_HOUR_BUCKETS);
-        assert_eq!(signal.peak_hour_event_count_24h, 3);
-        assert_eq!(signal.peak_velocity_per_hour, 2);
+        assert_eq!(signal.launches_last_5m, 4);
+        assert_eq!(signal.launches_last_hour, 8);
+        assert_eq!(signal.velocity_per_hour, 8.0);
+        assert_eq!(current.event_count, 8);
+        assert_eq!(current.launch_count, 5);
+        assert_eq!(current.turn_count, 3);
+        assert_eq!(current.failure_count, 1);
+        assert_eq!(current.active_sessions, 2);
+        assert_eq!(current.intensity, 1.0);
+        assert_eq!(ten_hour.intensity, 0.125);
+        assert_eq!(signal.peak_velocity_per_hour, 8);
         assert_eq!(signal.active_hours_24h, 2);
-        assert_eq!(signal.busiest_hour_label_24h, "11:00Z");
-        assert_eq!(ten_hour.event_count, 1);
-        assert_eq!(ten_hour.launch_count, 1);
-        assert_eq!(ten_hour.intensity, 0.5);
-        assert_eq!(eleven_hour.event_count, 3);
-        assert_eq!(eleven_hour.launch_count, 2);
-        assert_eq!(eleven_hour.failure_count, 1);
-        assert_eq!(eleven_hour.active_sessions, 2);
-        assert_eq!(eleven_hour.intensity, 1.0);
+        assert_eq!(signal.busiest_hour_label_24h, "12:00Z");
     }
 
     #[test]
-    fn activity_signal_ignores_non_launch_events_for_velocity() {
-        let generated_at_ms = parse_iso_ms("2026-05-28T12:00:00Z").expect("valid fixture time");
-        let events = vec![
-            history_event(
-                "alpha123",
-                "2026-05-28T11:55:00Z",
-                "assistant.turn_start",
-                "thinking",
-                "thinking",
-                true,
-            ),
-            history_event(
-                "alpha123",
-                "2026-05-28T11:56:00Z",
-                "tool.execution_complete",
-                "bash",
-                "alert",
-                false,
-            ),
-            history_event(
-                "alpha123",
-                "2026-05-28T11:57:00Z",
-                "assistant.message",
-                "",
-                "complete",
-                true,
-            ),
-        ];
-
-        let signal = build_activity_signal(&events, &[], generated_at_ms);
-        let previous_hour = signal
-            .hourly_24h
-            .iter()
-            .find(|bucket| bucket.start == "2026-05-28T11:00:00Z")
-            .expect("previous hour bucket");
-
-        assert_eq!(signal.launches_last_5m, 0);
-        assert_eq!(signal.launches_last_hour, 0);
-        assert_eq!(signal.velocity_per_hour, 0.0);
-        assert_eq!(previous_hour.event_count, 3);
-        assert_eq!(previous_hour.launch_count, 0);
-        assert_eq!(previous_hour.failure_count, 1);
-    }
-
-    #[test]
-    fn activity_signal_handles_unparseable_timestamps() {
-        let generated_at_ms = parse_iso_ms("2026-05-28T12:00:00Z").expect("valid fixture time");
-        let events = vec![history_event(
+    fn activity_signal_refreshes_cached_session_windows() {
+        let scanned_at_ms = parse_iso_ms("2026-05-28T11:50:00Z").expect("valid fixture time");
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:40:00Z").expect("valid fixture time");
+        let mut sessions = vec![signal_session(
             "alpha123",
-            "not-a-date",
-            "tool.execution_start",
-            "bash",
-            "terminal",
-            true,
+            "2026-05-28T11:48:00Z",
+            scanned_at_ms,
+            &[("2026-05-28T11:00:00Z", 2, 1, 0)],
+            3,
+            3,
         )];
 
-        let signal = build_activity_signal(&events, &[], generated_at_ms);
+        let signal = build_activity_signal(&mut sessions, generated_at_ms);
+        let session_signal = &sessions[0].activity_signal;
+
+        assert_eq!(signal.launches_last_5m, 0);
+        assert_eq!(signal.launches_last_hour, 3);
+        assert_eq!(session_signal.generated_at_ms, generated_at_ms);
+        assert_eq!(session_signal.launches_last_5m, 0);
+        assert_eq!(
+            session_signal.hourly_24h[HISTORY_HOUR_BUCKETS - 2].start,
+            "2026-05-28T11:00:00Z"
+        );
+        assert_eq!(
+            session_signal.hourly_24h[HISTORY_HOUR_BUCKETS - 2].event_count,
+            3
+        );
+    }
+
+    #[test]
+    fn activity_signal_is_empty_without_sessions() {
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:00:00Z").expect("valid fixture time");
+
+        let signal = build_activity_signal(&mut [], generated_at_ms);
 
         assert_eq!(signal.hourly_24h.len(), HISTORY_HOUR_BUCKETS);
         assert_eq!(signal.launches_last_5m, 0);
         assert_eq!(signal.launches_last_hour, 0);
-        assert_eq!(signal.peak_hour_event_count_24h, 0);
-        assert_eq!(signal.peak_velocity_per_hour, 0);
         assert_eq!(signal.active_hours_24h, 0);
         assert_eq!(signal.busiest_hour_label_24h, "No activity");
-        assert!(signal
-            .hourly_24h
-            .iter()
-            .all(|bucket| bucket.intensity == 0.0));
     }
 
     #[test]
@@ -6624,16 +6502,19 @@ mod tests {
         let allowlist = HashSet::new();
         let schema = test_schema();
         summarize_events(
-            "test",
+            EventScanContext {
+                provider: "test",
+                mcp_allowlist: &allowlist,
+                configured_hook_types: &HashSet::new(),
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "test-session",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &allowlist,
-            &HashSet::new(),
-            &schema,
-            "test",
         );
 
         assert_eq!(summary.recent_tool_calls.len(), 2);
@@ -6732,16 +6613,19 @@ mod tests {
         let mut tool_counts = BTreeMap::new();
         let mut recent_events = Vec::new();
         summarize_events(
-            "test",
+            EventScanContext {
+                provider: "test",
+                mcp_allowlist: &HashSet::new(),
+                configured_hook_types: &HashSet::new(),
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "test-session",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &HashSet::new(),
-            &HashSet::new(),
-            &schema,
-            "test",
         );
 
         let raw = raw_tool_call_details_from_events_path(
@@ -6825,16 +6709,19 @@ mod tests {
         let allowlist = HashSet::new();
         let schema = test_schema();
         summarize_events(
-            "test",
+            EventScanContext {
+                provider: "test",
+                mcp_allowlist: &allowlist,
+                configured_hook_types: &HashSet::new(),
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "test-session",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &allowlist,
-            &HashSet::new(),
-            &schema,
-            "test",
         );
 
         assert_eq!(summary.recent_turns.len(), 1);
@@ -6881,16 +6768,19 @@ mod tests {
         let allowlist = HashSet::new();
         let schema = test_schema();
         summarize_events(
-            "test",
+            EventScanContext {
+                provider: "test",
+                mcp_allowlist: &allowlist,
+                configured_hook_types: &HashSet::new(),
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "test-session",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &allowlist,
-            &HashSet::new(),
-            &schema,
-            "test",
         );
 
         // Fresh + cache_write = 100_000 + 10_000_000 = 10_100_000.
@@ -6932,16 +6822,19 @@ mod tests {
         let allowlist = HashSet::new();
         let schema = test_schema();
         summarize_events(
-            "test",
+            EventScanContext {
+                provider: "test",
+                mcp_allowlist: &allowlist,
+                configured_hook_types: &HashSet::new(),
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "test-session",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &allowlist,
-            &HashSet::new(),
-            &schema,
-            "test",
         );
 
         assert_eq!(summary.input_tokens, 1_442_027);
@@ -6994,16 +6887,19 @@ mod tests {
         let allowlist = HashSet::new();
         let schema = test_schema();
         summarize_events(
-            "test",
+            EventScanContext {
+                provider: "test",
+                mcp_allowlist: &allowlist,
+                configured_hook_types: &HashSet::new(),
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "test-session",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &allowlist,
-            &HashSet::new(),
-            &schema,
-            "test",
         );
 
         assert_eq!(summary.last_event_kind, "tool.execution_start");
@@ -7198,16 +7094,19 @@ mod tests {
         let allowlist = HashSet::new();
         let schema = test_schema();
         summarize_events(
-            "test",
+            EventScanContext {
+                provider: "test",
+                mcp_allowlist: &allowlist,
+                configured_hook_types: &HashSet::new(),
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "test-session",
             &mut summary,
             &mut tool_counts,
             &mut recent_events,
-            &allowlist,
-            &HashSet::new(),
-            &schema,
-            "test",
         );
 
         assert_eq!(
@@ -7254,33 +7153,38 @@ mod tests {
         let mut tail_tool_counts = BTreeMap::new();
         let mut tail_events = Vec::new();
         summarize_events(
-            "test",
+            EventScanContext {
+                provider: "test",
+                mcp_allowlist: &allowlist,
+                configured_hook_types: &configured_hook_types,
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: false,
+            },
             &path,
             "test-session",
             &mut tail_summary,
             &mut tail_tool_counts,
             &mut tail_events,
-            &allowlist,
-            &configured_hook_types,
-            &schema,
-            "test",
         );
 
         let mut history_summary = AgentSessionSummary::default();
         let mut history_tool_counts = BTreeMap::new();
         let mut history_events = Vec::new();
-        summarize_events_with_mode(
-            "test",
+        summarize_events(
+            EventScanContext {
+                provider: "test",
+                mcp_allowlist: &allowlist,
+                configured_hook_types: &configured_hook_types,
+                schema: &schema,
+                token_prefix_cache_context: "test",
+                include_full_history: true,
+            },
             &path,
             "test-session",
             &mut history_summary,
             &mut history_tool_counts,
             &mut history_events,
-            &allowlist,
-            &configured_hook_types,
-            &schema,
-            "test",
-            true,
         );
 
         assert_eq!(tail_summary.event_count, 1);

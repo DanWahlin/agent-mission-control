@@ -5,20 +5,6 @@
 (function () {
   'use strict';
 
-  interface CmcSettingsApi {
-    keys: typeof keys;
-    get: (key: string) => string | null;
-    set: (key: string, value: unknown) => void;
-    getBool: (key: string) => boolean;
-    setBool: (key: string, value: boolean) => void;
-    getJson: <T>(key: string, fallback: T) => T;
-    setJson: (key: string, value: unknown) => void;
-  }
-
-  interface Window {
-    __cmcSettings?: CmcSettingsApi;
-  }
-
   var keys = Object.freeze({
     theme: 'cmc_theme',
     appTheme: 'cmc_app_theme',

@@ -319,11 +319,12 @@ test.describe('Agent Mission Control app shell', () => {
     const historyLayout = await page.evaluate(() => {
       const screen = document.querySelector('#history-screen') as HTMLElement;
       const shell = document.querySelector('.history-shell') as HTMLElement;
-      const screenRect = screen.getBoundingClientRect();
       const screenStyle = getComputedStyle(screen);
       return {
-        availableWidth: screenRect.width - parseFloat(screenStyle.paddingLeft) - parseFloat(screenStyle.paddingRight),
+        // clientWidth excludes the vertical scroll bar.
+        availableWidth: screen.clientWidth - parseFloat(screenStyle.paddingLeft) - parseFloat(screenStyle.paddingRight),
         shellWidth: shell.getBoundingClientRect().width,
+        horizontalOverflow: screen.scrollWidth - screen.clientWidth,
       };
     });
 
@@ -334,17 +335,16 @@ test.describe('Agent Mission Control app shell', () => {
     const chatLayout = await page.evaluate(() => {
       const screen = document.querySelector('#analytics-chat-screen') as HTMLElement;
       const shell = document.querySelector('.analytics-chat-shell') as HTMLElement;
-      const screenRect = screen.getBoundingClientRect();
       const screenStyle = getComputedStyle(screen);
       return {
-        availableWidth: screenRect.width - parseFloat(screenStyle.paddingLeft) - parseFloat(screenStyle.paddingRight),
+        availableWidth: screen.clientWidth - parseFloat(screenStyle.paddingLeft) - parseFloat(screenStyle.paddingRight),
         shellWidth: shell.getBoundingClientRect().width,
       };
     });
 
     expect(historyLayout.shellWidth).toBeCloseTo(historyLayout.availableWidth, 0);
+    expect(historyLayout.horizontalOverflow).toBeLessThanOrEqual(0);
     expect(chatLayout.shellWidth).toBeCloseTo(chatLayout.availableWidth, 0);
-    expect(chatLayout.shellWidth).toBeCloseTo(historyLayout.shellWidth, 0);
   });
 
   test('screen routes use subtle enter animations with reduced-motion support', async ({ page }) => {

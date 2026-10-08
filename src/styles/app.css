@@ -1157,6 +1157,7 @@ body.theme-light .cmc-session-caret { color: #52627a; }
 body.theme-light .cmc-session-group-heading { color: #64748b; }
 .cmc-session-summary {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 10px 12px;
   margin: 8px 0;
@@ -1177,10 +1178,11 @@ body.theme-light .cmc-session-summary {
 }
 .cmc-session-heading {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
 }
+.cmc-session-heading > div { min-width: 0; }
 .cmc-session-title {
   min-width: 0;
   overflow: hidden;

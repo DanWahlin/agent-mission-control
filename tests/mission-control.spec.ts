@@ -217,9 +217,12 @@ const MISSION_FIXTURE = {
 
 const LONG_TOOL_NAME = 'bash-command-with-a-very-long-safe-label-for-turn-story-truncation';
 
+// Mirrors hud.ts lastSelectableDayForMonth(): the current month selects today,
+// and a past month selects its last day.
 function expectedJuneSelectedDay() {
-  const day = Math.min(new Date().getDate(), 30);
-  return `2026-06-${String(day).padStart(2, '0')}`;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return today.slice(0, 7) <= '2026-06' ? today : '2026-06-30';
 }
 
 async function installFixture(page: Page, fixture = MISSION_FIXTURE) {
@@ -1657,6 +1660,76 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(tempo.locator('.cmc-tempo-heat-cell')).toHaveCount(24);
   });
 
+  test('dashboard Activity Rate keeps the full backend signal after an old counter reset', async ({ page }) => {
+    await page.evaluate(() => {
+      const now = Date.now();
+      const hourMs = 60 * 60 * 1000;
+      const currentHour = Math.floor(now / hourMs) * hourMs;
+      const hourly = Array.from({ length: 24 }, (_, index) => {
+        const start = currentHour - (23 - index) * hourMs;
+        const isCurrent = index === 23;
+        return {
+          start: new Date(start).toISOString().replace('.000Z', 'Z'),
+          label: `${String(new Date(start).getUTCHours()).padStart(2, '0')}:00Z`,
+          event_count: isCurrent ? 9 : 0,
+          launch_count: isCurrent ? 6 : 0,
+          turn_count: isCurrent ? 3 : 0,
+          failure_count: 0,
+          active_sessions: isCurrent ? 1 : 0,
+          intensity: isCurrent ? 1 : 0,
+        };
+      });
+      window.localStorage.setItem('cmc_prefs', JSON.stringify({
+        activityResetAtMs: now - 3 * 24 * hourMs,
+        lastSelectedSessionId: 'alpha123',
+      }));
+      const fixture = (window as any).__missionControlFixture;
+      const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
+      alpha.recent_tool_calls = [];
+      alpha.recent_turns = [];
+      alpha.activity_signal = {
+        generated_at_ms: now,
+        launches_last_5m: 3,
+        launches_last_hour: 9,
+        velocity_per_hour: 9,
+        peak_velocity_per_hour: 9,
+        peak_hour_event_count_24h: 9,
+        busiest_hour_label_24h: hourly[23].label,
+        active_hours_24h: 1,
+        hourly_24h: hourly,
+      };
+      (window as any).__missionControlFixture = fixture;
+      window.sessionStorage.setItem('cmc_test_fixture', JSON.stringify(fixture));
+    });
+    await page.addInitScript(() => {
+      const saved = window.sessionStorage.getItem('cmc_test_fixture');
+      if (saved) (window as any).__missionControlFixture = JSON.parse(saved);
+    });
+    await page.reload();
+    await waitForGame(page);
+    await page.evaluate(() => (window as any).__cmcSelectSession('alpha123'));
+
+    const tempo = page.locator('#dom-session .cmc-ops-tempo');
+    await expect(tempo).toContainText('9 activities/hr');
+    await expect(tempo).toContainText('3 activities');
+    await tempo.locator('.cmc-tempo-heat-cell').last().hover();
+    await expect(tempo.locator('.cmc-tempo-readout')).toContainText('6 tool calls, 3 turns');
+  });
+
+  test('selected session panel does not scroll sideways for a long branch name', async ({ page }) => {
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
+      alpha.branch = 'danwahlin-app-functional-audit-and-cleanup-with-a-very-long-branch-name';
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await page.evaluate(() => (window as any).__cmcSelectSession('alpha123'));
+
+    await expect(page.locator('#dom-session .cmc-session-subtitle')).toContainText('very-long-branch-name');
+    const overflow = await page.locator('#dom-session .cmc-panel-body').evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+
   test('Recent Activity Feed fills remaining vertical space and scrolls overflow', async ({ page }) => {
     await selectSession(page, 'alpha123');
     await page.evaluate(() => {
@@ -1767,8 +1840,13 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(idleOption).toHaveCount(1);
     await expect(idleOption.locator('.cmc-session-status-label')).toHaveText('idle');
 
-    await idleOption.click();
+    // Options are plain buttons so accessibility tools can press them.
+    const idleButton = page.getByRole('group', { name: 'Select Copilot session' }).getByRole('button', { name: /Research UI/ });
+    await expect(idleButton).toHaveCount(1);
+    await idleButton.click();
     await expect.poll(async () => (await getMissionState(page))!.selectedSessionId).toBe('gamma890');
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
+    await expect(idleOption).toHaveAttribute('aria-current', 'true');
   });
 
   test('idle session replay reconstructs pulse-able tool events from recent_tool_calls when raw events have aged out', async ({ page }) => {
@@ -1961,6 +2039,26 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await waitForGame(page);
 
     await expect(page.locator('#dom-session .cmc-session-meta')).toContainText('Tokens in/out: pending / 4,200');
+  });
+
+  test('active session shows pending tokens before Copilot CLI reports usage', async ({ page }) => {
+    const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
+    const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
+    alpha.is_active = true;
+    alpha.turn_count = 3;
+    alpha.input_tokens = 0;
+    alpha.output_tokens = 0;
+    alpha.token_checkpoints = [];
+    fixture.sessions = [alpha];
+
+    await installFixture(page, fixture);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    const meta = page.locator('#dom-session .cmc-session-meta');
+    await expect(meta).toContainText('Tokens in/out: pending');
+    await expect(meta).not.toContainText('0 / 0');
+    await expect(page.locator('#dom-session .cmc-token-pending')).toHaveAttribute('title', /when a session shuts down/i);
   });
 
   test('History selected session shows pending input tokens until usage summary is emitted', async ({ page }) => {

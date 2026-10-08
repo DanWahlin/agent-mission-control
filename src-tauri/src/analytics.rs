@@ -384,20 +384,6 @@ pub fn analytics_status(app: &AppHandle) -> Result<AnalyticsStatus, String> {
     status_from_db(app, &conn)
 }
 
-pub fn run_analytics_ingestion_once(app: &AppHandle) -> Result<AnalyticsStatus, String> {
-    if !begin_ingestion() {
-        let mut conn = open_connection(app)?;
-        ensure_schema(app, &mut conn)?;
-        return status_from_db(app, &conn);
-    }
-    let result = run_analytics_ingestion(app);
-    finish_ingestion(app);
-    result?;
-    let mut conn = open_connection(app)?;
-    ensure_schema(app, &mut conn)?;
-    status_from_db(app, &conn)
-}
-
 pub fn start_background_ingestion(app: AppHandle) {
     if !begin_ingestion() {
         return;
@@ -444,14 +430,6 @@ pub fn engineering_digest(
     engineering_digest_from_db(&conn, request)
 }
 
-pub fn analytics_recommendation_facts(
-    app: &AppHandle,
-    request: AnalyticsRangeRequest,
-) -> Result<Vec<AnalyticsRecommendation>, String> {
-    let summary = analytics_usage_summary(app, request)?;
-    Ok(summary.recommendations)
-}
-
 pub async fn analytics_chat(
     app: &AppHandle,
     request: AnalyticsChatRequest,
@@ -475,8 +453,17 @@ pub async fn analytics_chat(
         None
     };
 
-    let dynamic_answer =
-        synthesize_chat_answer_with_copilot(app, &prompt, &summary, definition_gap_prompt).await;
+    let mcp_context = mcp_report
+        .as_ref()
+        .map(|report| mcp_usage_context(summary.range_days, report));
+    let dynamic_answer = synthesize_chat_answer_with_copilot(
+        app,
+        &prompt,
+        &summary,
+        definition_gap_prompt,
+        mcp_context.as_deref(),
+    )
+    .await;
     match dynamic_answer {
         Ok(answer) => {
             response.answer = answer.answer;
@@ -666,11 +653,17 @@ fn mcp_usage_report(conn: &Connection, range_days: u32) -> Result<McpUsageReport
         );
     }
 
-    for usage in mcp_tool_usage(conn, &since_day, &tool_to_server)? {
+    let tool_usage = mcp_tool_usage(conn, &since_day, &tool_to_server)?;
+    let observed_tools = tool_usage
+        .iter()
+        .map(|usage| usage.tool.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    for usage in tool_usage {
         let Some(server_name) = tool_to_server
             .get(&usage.tool.to_ascii_lowercase())
             .cloned()
             .or_else(|| infer_mcp_server_from_tool(&usage.tool, servers.keys(), &tool_to_server))
+            .or_else(|| infer_mcp_server_from_observed_tools(&usage.tool, &observed_tools))
         else {
             continue;
         };
@@ -732,11 +725,9 @@ fn mcp_usage_report(conn: &Connection, range_days: u32) -> Result<McpUsageReport
             usage.tools.len().to_string(),
             calls.to_string(),
             failures.to_string(),
-            if completed > 0 {
-                format!("{} ms", duration_ms / completed)
-            } else {
-                "n/a".to_string()
-            },
+            duration_ms
+                .checked_div(completed)
+                .map_or_else(|| "n/a".to_string(), |avg| format!("{} ms", avg)),
             top_mcp_tools(&usage.tools),
             if usage.configured { "1" } else { "0" }.to_string(),
         ]);
@@ -1006,6 +997,29 @@ fn mcp_server_is_enabled(value: &Value) -> bool {
     true
 }
 
+/// Copilot CLI names MCP tools `<server>-<tool>`, and server names can
+/// contain hyphens (`computer-use-click`). Use the longest hyphen-delimited
+/// prefix that another observed MCP tool shares, else the first segment.
+fn infer_mcp_server_from_observed_tools(tool: &str, observed_tools: &[String]) -> Option<String> {
+    let lower = tool.to_ascii_lowercase();
+    let prefixes = lower
+        .match_indices('-')
+        .map(|(index, _)| &lower[..index])
+        .filter(|prefix| !prefix.is_empty())
+        .collect::<Vec<_>>();
+    let shared = prefixes.iter().rev().find(|prefix| {
+        let with_separator = format!("{}-", prefix);
+        observed_tools
+            .iter()
+            .filter(|other| other.starts_with(&with_separator))
+            .count()
+            >= 2
+    });
+    shared
+        .or_else(|| prefixes.first())
+        .map(|prefix| safe_label(prefix, "mcp-server"))
+}
+
 fn infer_mcp_server_from_tool<'a, I>(
     tool: &str,
     configured_servers: I,
@@ -1059,6 +1073,38 @@ fn top_mcp_tools(tools: &BTreeMap<String, McpToolUsage>) -> String {
         .map(|tool| format!("{} ({})", tool.tool, tool.calls))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Allowlisted MCP usage facts for the SDK prompt, so the answer text agrees
+/// with the attached MCP Server Usage table.
+fn mcp_usage_context(range_days: u32, report: &McpUsageReport) -> String {
+    let servers = report
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == "mcp_server_usage")
+        .flat_map(|artifact| artifact.rows.iter())
+        .map(|row| {
+            let cell = |index: usize| row.get(index).cloned().unwrap_or_default();
+            serde_json::json!({
+                "server": cell(0),
+                "enabled": cell(1),
+                "used_tools": cell(3),
+                "calls": cell(4),
+                "failures": cell(5),
+                "avg_duration": cell(6),
+                "top_tools": cell(7),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "range_days": range_days,
+        "total_calls": report.total_calls,
+        "total_failures": report.total_failures,
+        "used_servers": report.used_servers,
+        "configured_servers": report.configured_servers,
+        "servers": servers,
+    })
+    .to_string()
 }
 
 fn mcp_usage_answer(range_days: u32, report: &McpUsageReport) -> String {
@@ -1976,16 +2022,7 @@ fn apply_local_event(
                     started_at_ms: event_ms,
                 },
             );
-            add_category_count(
-                &mut rollups.category,
-                provider,
-                &category,
-                day,
-                0,
-                1,
-                0,
-                false,
-            );
+            add_category_tool_call(&mut rollups.category, provider, &category, day);
             add_tool_started(&mut rollups.tools, provider, &tool, &category, day);
             (tool, category, true)
         }
@@ -2026,16 +2063,7 @@ fn apply_local_event(
             )
         }
         "hook.start" => {
-            add_category_count(
-                &mut rollups.category,
-                provider,
-                "hooks",
-                day,
-                0,
-                1,
-                0,
-                false,
-            );
+            add_category_tool_call(&mut rollups.category, provider, "hooks", day);
             (
                 string_at_path(value, "data.hookType").unwrap_or_else(|| "hook".to_string()),
                 "hooks".to_string(),
@@ -2052,29 +2080,11 @@ fn apply_local_event(
         }
         "skill.invoked" => {
             let skill = string_at_path(value, "data.name").unwrap_or_else(|| "skill".to_string());
-            add_category_count(
-                &mut rollups.category,
-                provider,
-                "skills",
-                day,
-                0,
-                1,
-                0,
-                false,
-            );
+            add_category_tool_call(&mut rollups.category, provider, "skills", day);
             (safe_label(&skill, "skill"), "skills".to_string(), true)
         }
         "subagent.started" | "subagent.completed" => {
-            add_category_count(
-                &mut rollups.category,
-                provider,
-                "delegates",
-                day,
-                0,
-                1,
-                0,
-                false,
-            );
+            add_category_tool_call(&mut rollups.category, provider, "delegates", day);
             ("subagent".to_string(), "delegates".to_string(), true)
         }
         "session.shutdown" => {
@@ -2210,9 +2220,7 @@ fn reconcile_local_session_model_tokens(
             &model_day,
             &session.session_hash,
             &model,
-            input,
-            output,
-            partial,
+            (input, output, partial),
         );
         let daily = rollups
             .daily
@@ -2265,9 +2273,7 @@ fn add_model_tokens(
     day: &str,
     session_hash: &str,
     model: &str,
-    input_tokens: u64,
-    output_tokens: u64,
-    partial: bool,
+    (input_tokens, output_tokens, partial): (u64, u64, bool),
 ) {
     let model = safe_label(model, "Unknown");
     if model == "Unknown" && input_tokens == 0 && output_tokens == 0 {
@@ -2283,27 +2289,37 @@ fn add_model_tokens(
     acc.token_data_partial |= partial;
 }
 
-fn add_category_count(
+fn add_category_tool_call(
     category_rollups: &mut BTreeMap<(String, String, String), CategoryAccumulator>,
     provider: &str,
     category: &str,
     day: &str,
-    turn_count: u64,
-    tool_count: u64,
-    failure_count: u64,
-    partial: bool,
 ) {
-    let acc = category_rollups
+    category_accumulator(category_rollups, provider, category, day).tool_call_count += 1;
+}
+
+fn add_category_failure(
+    category_rollups: &mut BTreeMap<(String, String, String), CategoryAccumulator>,
+    provider: &str,
+    category: &str,
+    day: &str,
+) {
+    category_accumulator(category_rollups, provider, category, day).failure_count += 1;
+}
+
+fn category_accumulator<'a>(
+    category_rollups: &'a mut BTreeMap<(String, String, String), CategoryAccumulator>,
+    provider: &str,
+    category: &str,
+    day: &str,
+) -> &'a mut CategoryAccumulator {
+    category_rollups
         .entry((
             provider.to_string(),
             safe_label(category, "activity"),
             day.to_string(),
         ))
-        .or_default();
-    acc.turn_count += turn_count;
-    acc.tool_call_count += tool_count;
-    acc.failure_count += failure_count;
-    acc.token_data_partial |= partial;
+        .or_default()
 }
 
 fn add_tool_started(
@@ -2364,16 +2380,7 @@ fn add_failure(
     {
         daily.failure_count += 1;
     }
-    add_category_count(
-        &mut rollups.category,
-        provider,
-        category,
-        day,
-        0,
-        0,
-        1,
-        false,
-    );
+    add_category_failure(&mut rollups.category, provider, category, day);
     let key = (
         provider.to_string(),
         safe_label(kind, "failure"),
@@ -2599,22 +2606,21 @@ fn ingest_session(
         .fold(0_u64, |sum, output| sum.saturating_add(*output));
     let residual_input = session.input_tokens;
     let residual_output = session.output_tokens.saturating_sub(observed_turn_output);
-    if !counted_turn_model || residual_input > 0 || residual_output > 0 {
-        if model_name != "Unknown"
+    if (!counted_turn_model || residual_input > 0 || residual_output > 0)
+        && (model_name != "Unknown"
             || session.turn_count > 0
             || session.output_tokens > 0
-            || session.input_tokens > 0
-        {
-            let model_key = (provider.clone(), model_name, day.clone());
-            let model_acc = model.entry(model_key).or_default();
-            model_acc.session_ids.insert(session_hash.clone());
-            if !counted_turn_model {
-                model_acc.turn_count += session.turn_count.max(1) as u64;
-            }
-            model_acc.input_tokens += residual_input;
-            model_acc.output_tokens += residual_output;
-            model_acc.token_data_partial |= !input_known;
+            || session.input_tokens > 0)
+    {
+        let model_key = (provider.clone(), model_name, day.clone());
+        let model_acc = model.entry(model_key).or_default();
+        model_acc.session_ids.insert(session_hash.clone());
+        if !counted_turn_model {
+            model_acc.turn_count += session.turn_count.max(1) as u64;
         }
+        model_acc.input_tokens += residual_input;
+        model_acc.output_tokens += residual_output;
+        model_acc.token_data_partial |= !input_known;
     }
 
     add_category_session_counts(category, &provider, &day, session, !input_known);
@@ -2693,11 +2699,10 @@ fn ingest_event(
         day.clone(),
     );
     let cat = category.entry(cat_key).or_default();
-    if event.kind.contains("turn") {
-        cat.turn_count += 1;
-    }
-    if event.kind.contains("tool.") {
-        cat.tool_call_count += 1;
+    match event.kind.as_str() {
+        "assistant.turn_start" => cat.turn_count += 1,
+        "tool.execution_start" => cat.tool_call_count += 1,
+        _ => {}
     }
     if !event.success {
         cat.failure_count += 1;
@@ -3278,14 +3283,7 @@ fn engineering_digest_day(
     });
     useful_sessions.truncate(6);
     let narrative = digest_narrative(selected_day, &totals, &repos, &models, &tools, &failures);
-    let exports = digest_exports(
-        selected_day,
-        &narrative,
-        &totals,
-        &repos,
-        &models,
-        &tools,
-    );
+    let exports = digest_exports(selected_day, &narrative, &totals, &repos, &models, &tools);
     Ok(EngineeringDigestDay {
         local_day: selected_day.to_string(),
         totals,
@@ -3350,11 +3348,11 @@ fn activity_rate_for_day(
             continue;
         };
         bucket.event_count += 1;
-        if kind.starts_with("tool.") || kind.starts_with("hook.") {
-            bucket.tool_call_count += 1;
-        }
-        if kind.contains("turn") {
-            bucket.turn_count += 1;
+        // Count only start events so totals match the daily rollups.
+        match kind.as_str() {
+            "tool.execution_start" => bucket.tool_call_count += 1,
+            "assistant.turn_start" => bucket.turn_count += 1,
+            _ => {}
         }
         if success == 0 {
             bucket.failure_count += 1;
@@ -3991,6 +3989,7 @@ async fn synthesize_chat_answer_with_copilot(
     prompt: &str,
     summary: &AnalyticsUsageSummary,
     definition_gap_prompt: bool,
+    mcp_context: Option<&str>,
 ) -> Result<SdkAnalyticsAnswer, String> {
     use github_copilot_sdk::types::{MessageOptions, SessionConfig, SystemMessageConfig};
     use github_copilot_sdk::Client;
@@ -4018,16 +4017,9 @@ async fn synthesize_chat_answer_with_copilot(
             marker = MISSION_CONTROL_ANALYTICS_MARKER,
         ));
     let mut config = SessionConfig::default()
-        .with_handler(Arc::new(AnalyticsSdkHandler {
-            app: app.clone(),
-            state: sdk_event_state.clone(),
-        }))
         .with_system_message(system_message)
         .with_excluded_tools(ANALYTICS_EXCLUDED_BUILT_IN_TOOLS.iter().copied())
         .with_enable_config_discovery(false)
-        .with_request_user_input(false)
-        .with_request_exit_plan_mode(false)
-        .with_request_elicitation(false)
         .with_mcp_servers(mcp_servers)
         .approve_permissions_if(is_mission_control_insights_permission);
     config.client_name = Some("copilot-mission-control-analytics".to_string());
@@ -4041,15 +4033,39 @@ async fn synthesize_chat_answer_with_copilot(
             return Err(err.to_string());
         }
     };
+    let mut events = session.subscribe();
+    let event_app = app.clone();
+    let event_state = sdk_event_state.clone();
+    // Ends when the session closes, after it reads the buffered events.
+    let event_task = tauri::async_runtime::spawn(async move {
+        while let Ok(event) = events.recv().await {
+            record_analytics_sdk_event(&event_app, &event_state, &event);
+        }
+    });
+    let mcp_usage_section = mcp_context
+        .map(|context| {
+            format!(
+                "Observed MCP usage JSON (authoritative for MCP server and call counts):\n{}\n\n",
+                context
+            )
+        })
+        .unwrap_or_default();
     let message = format!(
-        "{marker}\nUser question: {prompt}\n\nIndexed analytics JSON:\n{summary_json}\n\nMission Control Insights MCP tools are available in this session. Use them when the user asks about prompts, skills, agents, MCP servers, or improvements.\n\n{definition_focus}\n\nReturn strict JSON only: {{\"in_scope\": boolean, \"answer\": string, \"artifacts\": [string]}}. The answer string may contain lightweight Markdown for paragraphs and bullet lists.",
+        "{marker}\nUser question: {prompt}\n\nIndexed analytics JSON:\n{summary_json}\n\n{mcp_usage_section}Mission Control Insights MCP tools are available in this session. Use them when the user asks about prompts, skills, agents, MCP servers, or improvements.\n\n{definition_focus}\n\nReturn strict JSON only: {{\"in_scope\": boolean, \"answer\": string, \"artifacts\": [string]}}. The answer string may contain lightweight Markdown for paragraphs and bullet lists.",
         marker = MISSION_CONTROL_ANALYTICS_MARKER,
     );
     let result = session
         .send_and_wait(MessageOptions::new(message).with_wait_timeout(Duration::from_secs(75)))
         .await;
-    let _ = session.destroy().await;
+    let _ = session.disconnect().await;
+    drop(session);
     let _ = client.stop().await;
+    if tokio::time::timeout(Duration::from_secs(2), event_task)
+        .await
+        .is_err()
+    {
+        log::warn!("Analytics chat event subscription did not close after the session ended");
+    }
 
     let event = result.map_err(|err| err.to_string())?;
     let content = event
@@ -4306,7 +4322,7 @@ fn mission_control_insights_mcp_servers(
     project_root: Option<&Path>,
     tools: Vec<String>,
     executable_env: &ExecutableEnv,
-) -> HashMap<String, github_copilot_sdk::types::McpServerConfig> {
+) -> github_copilot_sdk::IndexMap<String, github_copilot_sdk::types::McpServerConfig> {
     use github_copilot_sdk::types::{McpServerConfig, McpStdioServerConfig};
 
     let mut env = HashMap::new();
@@ -4319,11 +4335,11 @@ fn mission_control_insights_mcp_servers(
             project_root.to_string_lossy().to_string(),
         );
     }
-    let mut servers = HashMap::new();
+    let mut servers = github_copilot_sdk::IndexMap::new();
     servers.insert(
         "mission-control-insights".to_string(),
         McpServerConfig::Stdio(McpStdioServerConfig {
-            tools,
+            tools: Some(tools),
             timeout: Some(20_000),
             command: executable_env
                 .node
@@ -4332,7 +4348,7 @@ fn mission_control_insights_mcp_servers(
                 .unwrap_or_else(|| "node".to_string()),
             args: vec![script_path.to_string_lossy().to_string()],
             env,
-            cwd: project_root.map(|path| path.to_string_lossy().to_string()),
+            working_directory: project_root.map(|path| path.to_string_lossy().to_string()),
         }),
     );
     servers
@@ -4405,36 +4421,25 @@ fn project_root_for_mcp() -> Option<PathBuf> {
     Some(cwd)
 }
 
-struct AnalyticsSdkHandler {
-    app: AppHandle,
-    state: Arc<Mutex<AnalyticsSdkEventState>>,
-}
-
-#[async_trait::async_trait]
-impl github_copilot_sdk::handler::SessionHandler for AnalyticsSdkHandler {
-    async fn on_session_event(
-        &self,
-        _session_id: github_copilot_sdk::types::SessionId,
-        event: github_copilot_sdk::types::SessionEvent,
-    ) {
-        if let Some(tool_name) = analytics_mcp_tool_name(&event) {
-            emit_analytics_chat_tool_started(&self.app, &tool_name);
-        }
-        if let Some(content) = sdk_assistant_message_content(&event) {
-            if let Ok(mut state) = self.state.lock() {
-                state.last_assistant_content = Some(content);
-            }
-        }
-        if let Some(delta) = sdk_assistant_delta_content(&event) {
-            if let Ok(mut state) = self.state.lock() {
-                state.streamed_content.push_str(&delta);
-            }
-        }
-        if let Some((kind, payload)) = sdk_definition_review_payload(&event) {
-            if let Ok(mut state) = self.state.lock() {
-                state.definition_reviews.insert(kind, payload);
-            }
-        }
+fn record_analytics_sdk_event(
+    app: &AppHandle,
+    state: &Mutex<AnalyticsSdkEventState>,
+    event: &github_copilot_sdk::types::SessionEvent,
+) {
+    if let Some(tool_name) = analytics_mcp_tool_name(event) {
+        emit_analytics_chat_tool_started(app, &tool_name);
+    }
+    let Ok(mut state) = state.lock() else {
+        return;
+    };
+    if let Some(content) = sdk_assistant_message_content(event) {
+        state.last_assistant_content = Some(content);
+    }
+    if let Some(delta) = sdk_assistant_delta_content(event) {
+        state.streamed_content.push_str(&delta);
+    }
+    if let Some((kind, payload)) = sdk_definition_review_payload(event) {
+        state.definition_reviews.insert(kind, payload);
     }
 }
 
@@ -4602,7 +4607,7 @@ fn emit_analytics_chat_tool_started(app: &AppHandle, tool_name: &str) {
     let Ok(tool_json) = serde_json::to_string(tool_name) else {
         return;
     };
-    let _ = win.eval(&format!(
+    let _ = win.eval(format!(
         "window.__cmcAnalyticsChatToolStarted && window.__cmcAnalyticsChatToolStarted({})",
         tool_json
     ));
@@ -5290,9 +5295,7 @@ fn static_definition_evaluation_for_item(item: &Value, kind: &str) -> Option<Sta
     let root = json_string(item, "root").unwrap_or_else(|| "unknown".to_string());
     let root_arg = (root != "unknown").then_some(root.as_str());
     let evaluation =
-        crate::skill_evaluator::evaluate_definition_static(kind, &definition_ref, root_arg)
-            .ok()?
-            .evaluation;
+        crate::skill_evaluator::evaluate_definition_static(kind, &definition_ref, root_arg).ok()?;
     let issues = if evaluation.top_actions.is_empty() {
         evaluation
             .dimensions
@@ -5603,7 +5606,7 @@ fn comparison_from_db(
         )
     })
     .collect::<Vec<_>>();
-    changes.sort_by(|a, b| b.delta.unsigned_abs().cmp(&a.delta.unsigned_abs()));
+    changes.sort_by_key(|change| std::cmp::Reverse(change.delta.unsigned_abs()));
     changes.truncate(6);
 
     Ok(AnalyticsComparison {
@@ -5717,7 +5720,7 @@ fn ranked_shift_items(
         })
         .filter(|item| item.current > 0 || item.previous > 0)
         .collect::<Vec<_>>();
-    items.sort_by(|a, b| b.delta.unsigned_abs().cmp(&a.delta.unsigned_abs()));
+    items.sort_by_key(|item| std::cmp::Reverse(item.delta.unsigned_abs()));
     items.truncate(limit);
     items
 }
@@ -6811,14 +6814,11 @@ mod tests {
         assert_eq!(model.output_tokens, 180);
 
         // The shutdown day must NOT carry a 0-turn token row for the model.
-        assert!(rollups
-            .model
-            .get(&(
-                "copilot".to_string(),
-                "gpt-5.5".to_string(),
-                shutdown_day.clone(),
-            ))
-            .is_none());
+        assert!(!rollups.model.contains_key(&(
+            "copilot".to_string(),
+            "gpt-5.5".to_string(),
+            shutdown_day.clone(),
+        )));
 
         // Daily token totals follow the model: activity day carries them,
         // shutdown day stays at zero tokens.
@@ -6847,6 +6847,72 @@ mod tests {
             classify_local_tool("skill", Some(&args)),
             ("coder".to_string(), "skills".to_string())
         );
+    }
+
+    #[test]
+    fn mcp_usage_context_lists_observed_servers() {
+        let report = McpUsageReport {
+            total_calls: 49,
+            total_failures: 5,
+            used_servers: 2,
+            artifacts: vec![AnalyticsArtifact {
+                kind: "mcp_server_usage".to_string(),
+                rows: vec![
+                    vec![
+                        "computer-use".to_string(),
+                        "on".to_string(),
+                        "0".to_string(),
+                        "4".to_string(),
+                        "48".to_string(),
+                        "4".to_string(),
+                        "1660 ms".to_string(),
+                        "computer-use-click (16)".to_string(),
+                        "0".to_string(),
+                    ],
+                    vec![
+                        "azure".to_string(),
+                        "on".to_string(),
+                        "0".to_string(),
+                        "1".to_string(),
+                        "1".to_string(),
+                        "1".to_string(),
+                    ],
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let context: Value = serde_json::from_str(&mcp_usage_context(7, &report)).expect("json");
+
+        assert_eq!(context["total_calls"], 49);
+        assert_eq!(context["servers"][0]["server"], "computer-use");
+        assert_eq!(context["servers"][0]["calls"], "48");
+        assert_eq!(context["servers"][1]["top_tools"], "");
+    }
+
+    #[test]
+    fn mcp_server_is_inferred_from_shared_tool_prefixes() {
+        let observed = [
+            "computer-use-click",
+            "computer-use-get_window_state",
+            "azmcp-pricing_get",
+            "azmcp-resourcehealth_availability-status_get",
+            "solo-run",
+        ]
+        .iter()
+        .map(|tool| tool.to_string())
+        .collect::<Vec<_>>();
+
+        let infer = |tool: &str| infer_mcp_server_from_observed_tools(tool, &observed);
+
+        assert_eq!(infer("computer-use-click").as_deref(), Some("computer-use"));
+        assert_eq!(
+            infer("azmcp-resourcehealth_availability-status_get").as_deref(),
+            Some("azmcp")
+        );
+        assert_eq!(infer("solo-run").as_deref(), Some("solo"));
+        assert_eq!(infer("plaintool"), None);
     }
 
     #[test]
@@ -6964,6 +7030,44 @@ mod tests {
         );
         assert!(days.iter().any(|day| day.local_day == "2026-05-31"));
         assert!(days.iter().any(|day| day.local_day == "2026-06-04"));
+    }
+
+    #[test]
+    fn activity_rate_for_day_counts_only_tool_and_turn_starts() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE recent_event_facts (
+                occurred_at_ms INTEGER NOT NULL,
+                session_id_hash TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                success INTEGER NOT NULL
+            );
+            "#,
+        )
+        .expect("schema");
+        let (start_ms, _, _) = local_day_bounds("2026-06-03");
+        for kind in [
+            "assistant.turn_start",
+            "tool.execution_start",
+            "tool.execution_complete",
+            "hook.start",
+            "hook.end",
+            "assistant.turn_end",
+        ] {
+            conn.execute(
+                "INSERT INTO recent_event_facts VALUES (?1, 'sessionhash1', ?2, 1)",
+                params![(start_ms + 60_000) as i64, kind],
+            )
+            .expect("event");
+        }
+
+        let buckets = activity_rate_for_day(&conn, "2026-06-03").expect("activity rate");
+        let first = &buckets[0];
+
+        assert_eq!(first.event_count, 6);
+        assert_eq!(first.tool_call_count, 1);
+        assert_eq!(first.turn_count, 1);
     }
 
     #[test]
@@ -7453,10 +7557,26 @@ mod tests {
         assert_eq!(config.command, "/tmp/bin/node");
         assert_eq!(config.args, vec!["/tmp/mission-control-insights.js"]);
         assert_eq!(config.env.get("PATH"), Some(&"/tmp/bin".to_string()));
-        assert!(config.tools.contains(&"list_prompt_samples".to_string()));
-        assert!(config.tools.contains(&"read_skill_definition".to_string()));
-        assert!(config.tools.contains(&"analyze_copilot_skills".to_string()));
-        assert!(config.tools.contains(&"analyze_copilot_agents".to_string()));
+        assert!(config
+            .tools
+            .as_ref()
+            .expect("tool allowlist")
+            .contains(&"list_prompt_samples".to_string()));
+        assert!(config
+            .tools
+            .as_ref()
+            .expect("tool allowlist")
+            .contains(&"read_skill_definition".to_string()));
+        assert!(config
+            .tools
+            .as_ref()
+            .expect("tool allowlist")
+            .contains(&"analyze_copilot_skills".to_string()));
+        assert!(config
+            .tools
+            .as_ref()
+            .expect("tool allowlist")
+            .contains(&"analyze_copilot_agents".to_string()));
         assert_eq!(
             config.env.get("CMC_PROJECT_ROOT"),
             Some(&"/tmp/project".to_string())

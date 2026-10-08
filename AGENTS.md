@@ -65,6 +65,14 @@ npx playwright test --headed                      # visible browser
 
 The Playwright `webServer` config serves `dist/` over `python3 -m http.server 4173`. The suite covers startup, dashboard panels, History, replay/scrubber, session selection, token display, Attention Center behavior, ops mode classification, and multi-viewport layout regressions.
 
+```bash
+npm run test:mcp                                  # Mission Control Insights MCP server
+cd src-tauri && cargo test                        # backend unit tests
+cd src-tauri && cargo clippy --all-targets        # keep at 0 warnings
+```
+
+For a functional run-through of the real desktop app with live Copilot CLI data (Tauri commands, watcher, analytics database, Copilot SDK), use the `agent-mission-control-automation` skill in `.github/skills/`. Its `launch-app.sh` script opens a debug `.app` build on the built-in laptop display, and `references/app-map.md` maps every control to its accessibility name.
+
 ## Key Patterns
 
 - **`MissionControlScene` extends `Phaser.Scene` directly.** There is no `BaseScene`. The scene paints its own full-window backdrop in `create()` (depth -100) and redraws it on `scale.resize`.

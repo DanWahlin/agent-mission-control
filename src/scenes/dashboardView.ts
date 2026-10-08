@@ -248,7 +248,6 @@ function sessionOptionRow(session: CopilotSessionSummary, index: number) {
   const isAllSessions = session.id === ALL_SESSIONS_ID || session.is_all_sessions === true;
   const shortId = isAllSessions ? '' : shortSessionId(session.id);
   const sessionName = cleanSessionLabel(session.session_name);
-  const title = cleanSessionLabel(session.title);
   const repository = cleanSessionLabel(session.repository);
   const branch = cleanSessionLabel(session.branch);
   return {

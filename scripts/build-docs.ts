@@ -5,18 +5,22 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const outDir = path.join(root, '.docs-dist');
-const localScript = path.join(root, 'docs', 'script.js');
+
+const typescriptPackage = require.resolve('typescript/package.json');
+const tscBin = path.join(path.dirname(typescriptPackage), require(typescriptPackage).bin.tsc);
 
 fs.rmSync(outDir, { recursive: true, force: true });
 execFileSync(process.execPath, [
-  require.resolve('typescript/bin/tsc'),
+  tscBin,
   path.join(root, 'docs', 'script.ts'),
   '--target',
   'ES2022',
   '--module',
-  'none',
-  '--outFile',
-  localScript,
+  'preserve',
+  '--rootDir',
+  path.join(root, 'docs'),
+  '--outDir',
+  path.join(root, 'docs'),
 ], {
   cwd: root,
   stdio: 'inherit',

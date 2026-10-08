@@ -1027,12 +1027,6 @@
     ].join('-');
   }
 
-  function localMonthLabel(month) {
-    var date = new Date(String(month || '').slice(0, 7) + '-01T12:00:00');
-    if (Number.isNaN(date.getTime())) date = new Date();
-    return date.toLocaleDateString([], { month: 'long', year: 'numeric' });
-  }
-
   function localDateLabel(day) {
     var date = new Date(String(day || '') + 'T12:00:00');
     if (Number.isNaN(date.getTime())) return String(day || 'selected day');
@@ -2069,18 +2063,14 @@
     return kind || 'activity';
   }
 
-  function compactNumberShort(value) {
-    var n = Number(value || 0);
-    if (n >= 1000000) return Math.round(n / 1000000) + 'm';
-    if (n >= 1000) return Math.round(n / 1000) + 'k';
-    return String(n);
-  }
-
   function exactNumber(value) {
     return Number(value || 0).toLocaleString();
   }
 
-  function tokenLabel(input, output, inputPending) {
+  function tokenLabel(input, output, inputPending, allPending) {
+    if (allPending) {
+      return '<span class="cmc-token-pending" title="Token totals are pending because Copilot CLI writes token usage when a session shuts down. Live turns do not report tokens yet.">pending</span>';
+    }
     var inTok = Number(input || 0);
     var outTok = Number(output || 0);
     var inputLabel = inputPending
@@ -2217,27 +2207,6 @@
     if (severity === 'review') return '#ffd54a';
     if (severity === 'watch') return '#61d6ff';
     return '#60ff9a';
-  }
-
-  function renderAttentionEntry(attention) {
-    var state = attention || { count: 0, summary: 'No action needed', highestSeverity: 'info' };
-    var count = Number(state.count || 0);
-    var severity = state.highestSeverity || (count > 0 ? 'watch' : 'info');
-    if (count <= 0) {
-      return '<div class="cmc-attention-entry quiet" role="status">'
-        + '<span class="cmc-attention-copy">'
-        + '<span class="cmc-attention-kicker">Attention</span>'
-        + '<span class="cmc-attention-summary">' + escapeHtml(state.summary || 'No action needed') + '</span>'
-        + '</span>'
-        + '</div>';
-    }
-    return '<button class="cmc-attention-entry ' + escapeHtml(severity) + '" type="button" data-cmc-action="attention-center" aria-haspopup="dialog">'
-      + '<span class="cmc-attention-copy">'
-      + '<span class="cmc-attention-kicker">Attention</span>'
-      + '<span class="cmc-attention-summary">' + escapeHtml(state.summary || 'No action needed') + '</span>'
-      + '</span>'
-      + '<span class="cmc-attention-count">' + escapeHtml(String(count)) + '</span>'
-      + '</button>';
   }
 
   function activitySignal(view) {
@@ -2480,16 +2449,16 @@
       || options.find(function (opt) { return opt && opt.kind !== 'heading'; });
     var picker = '<div class="cmc-label" style="margin-bottom:8px">' + escapeHtml(view.sessions.header || '') + '</div>'
       + '<div class="cmc-session-picker">'
-      + '<button class="cmc-session-trigger" type="button" data-cmc-action="session-menu" aria-haspopup="listbox" aria-expanded="false">'
+      + '<button class="cmc-session-trigger" type="button" data-cmc-action="session-menu" aria-controls="cmc-session-menu" aria-expanded="false">'
       + renderSessionOption(selectedOption)
       + '<span class="cmc-session-caret" aria-hidden="true">▾</span>'
       + '</button>'
-      + '<div class="cmc-session-menu" role="listbox" aria-label="Select Copilot session">'
+      + '<div id="cmc-session-menu" class="cmc-session-menu" role="group" aria-label="Select Copilot session">'
       + options.map(function (opt) {
         if (opt && opt.kind === 'heading') {
           return '<div class="cmc-session-group-heading" role="presentation">' + escapeHtml(opt.label || '') + '</div>';
         }
-        return '<button class="cmc-session-option ' + (opt.id === selectedId ? 'selected' : '') + '" type="button" role="option" aria-selected="' + (opt.id === selectedId ? 'true' : 'false') + '" data-session-id="' + escapeHtml(opt.id) + '">'
+        return '<button class="cmc-session-option ' + (opt.id === selectedId ? 'selected' : '') + '" type="button"' + (opt.id === selectedId ? ' aria-current="true"' : '') + ' data-session-id="' + escapeHtml(opt.id) + '">'
           + renderSessionOption(opt)
           + '</button>';
       }).join('')
@@ -2499,6 +2468,7 @@
       var inTok = selected.input_tokens || 0;
       var outTok = selected.output_tokens || 0;
       var inputPending = !!selected.input_tokens_pending || (!selected.replay_activity && inTok <= 0 && outTok > 0);
+      var tokensPending = !selected.replay_activity && inTok <= 0 && outTok <= 0 && !!selected.is_active && Number(selected.turn_count || 0) > 0;
       var tcalls = (selected.recent_tool_calls || []).length;
       var isAggregate = !!selected.is_all_sessions;
       var hasGitRoot = !!selected.git_root && !isAggregate;
@@ -2524,7 +2494,7 @@
         + '<span class="cmc-meta-label">Last: ' + escapeHtml(activity.last) + '</span>'
         + '<span class="cmc-meta-label">Tool: ' + escapeHtml(activity.tool) + '</span>'
         + '<span class="cmc-meta-label">Age: ' + escapeHtml(activity.age) + '</span>'
-        + '<span class="cmc-meta-label">Tokens in/out: ' + tokenLabel(inTok, outTok, inputPending) + '</span>'
+        + '<span class="cmc-meta-label">Tokens in/out: ' + tokenLabel(inTok, outTok, inputPending, tokensPending) + '</span>'
         + '<span class="cmc-meta-label cmc-model-meta"><span id="model-label">' + modelLabel + ':</span> <span id="model-chip" class="' + (model ? '' : 'empty') + '" title="Active ' + modelLabel.toLowerCase() + ' for the selected session">' + escapeHtml(model) + '</span></span>'
         + '</div>'
         + '</div>'
@@ -4516,18 +4486,5 @@
 
     setTimeout(function () { banner.classList.add('show'); }, 500);
     autoHideTimer = setTimeout(function () { banner.classList.remove('show'); }, 30000);
-  };
-
-  window.__cmcUpdateStatus = function (status) {
-    var banner = $('update-banner');
-    var linkEl = banner ? banner.querySelector('.update-link') : null;
-    var iconEl = banner ? banner.querySelector('.update-icon') : null;
-    if (status === 'downloading') {
-      if (linkEl) linkEl.textContent = 'Downloading…';
-      if (iconEl) iconEl.textContent = '📦';
-    } else if (status === 'restarting') {
-      if (linkEl) linkEl.textContent = 'Installing… Restarting';
-      if (iconEl) iconEl.textContent = '✨';
-    }
   };
 })();
