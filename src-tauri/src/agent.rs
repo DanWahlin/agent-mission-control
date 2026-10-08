@@ -508,6 +508,7 @@ static COPILOT_TOKEN_PREFIX_CACHE: OnceLock<
 const MAX_COPILOT_SESSION_SCAN_CACHE_ENTRIES: usize = 256;
 const MAX_COPILOT_TOKEN_PREFIX_CACHE_ENTRIES: usize = 256;
 const MAX_EVENT_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+const ANALYTICS_MARKER_SCAN_BYTES: u64 = 1024 * 1024;
 const MAX_RAW_DETAIL_SCAN_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_RAW_DETAIL_VALUE_BYTES: usize = 512 * 1024;
 const TOKEN_PREFIX_HEAD_SIGNATURE_BYTES: usize = 4096;
@@ -1379,15 +1380,50 @@ fn first_existing_child(parent: &Path, names: &[String]) -> PathBuf {
         .unwrap_or_else(|| parent.join(&names[0]))
 }
 
+/// The analytics chat marks its session in `session.start` and the first
+/// `system.message`, both at the top of the file. Read only that header and
+/// remember the answer: event files can be tens of MB and the scan runs on
+/// every refresh.
 fn is_mission_control_analytics_session(events_path: &Path) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(known) = cache
+        .lock()
+        .ok()
+        .and_then(|map| map.get(events_path).copied())
+    {
+        return known;
+    }
     let Ok(file) = fs::File::open(events_path) else {
         return false;
     };
-    let reader = BufReader::new(file);
-    reader
+    let mut decided = false;
+    let mut marked = false;
+    for line in BufReader::new(file.take(ANALYTICS_MARKER_SCAN_BYTES))
         .lines()
         .map_while(Result::ok)
-        .any(|line| line_marks_mission_control_analytics_session(&line))
+    {
+        if line_marks_mission_control_analytics_session(&line) {
+            marked = true;
+            decided = true;
+            break;
+        }
+        if line.contains("\"system.message\"") {
+            decided = true;
+            break;
+        }
+    }
+    // Remember only a decided answer, so a new session whose first
+    // system.message has not been written yet is checked again.
+    if decided {
+        if let Ok(mut map) = cache.lock() {
+            if map.len() >= MAX_COPILOT_SESSION_SCAN_CACHE_ENTRIES * 4 {
+                map.clear();
+            }
+            map.insert(events_path.to_path_buf(), marked);
+        }
+    }
+    marked
 }
 
 fn line_marks_mission_control_analytics_session(line: &str) -> bool {
@@ -1821,77 +1857,141 @@ fn is_launch_signal(event: &AgentEventSummary) -> bool {
     event.kind == "tool.execution_start" && event.category == "delegates"
 }
 
+const SIGNAL_TOOL_START: u8 = 1;
+const SIGNAL_TURN_START: u8 = 2;
+const SIGNAL_FAILURE: u8 = 4;
+
+/// Signal events already read from one append-only events file.
+#[derive(Default)]
+struct SessionSignalFileState {
+    schema_version: String,
+    offset: u64,
+    entries: Vec<(u64, u8)>,
+}
+
+fn session_signal_cache() -> &'static Mutex<HashMap<PathBuf, SessionSignalFileState>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, SessionSignalFileState>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Rolling 24h signal for one session. Events files only grow, so each call
+/// reads only the bytes added since the last call and keeps 25h of entries.
 fn build_session_activity_signal_from_path(
     path: &Path,
     schema: &ProviderSchema,
     generated_at_ms: u64,
 ) -> AgentActivitySignal {
+    let mut cache = session_signal_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !cache.contains_key(path) && cache.len() >= MAX_COPILOT_SESSION_SCAN_CACHE_ENTRIES {
+        cache.clear();
+    }
+    let state = cache.entry(path.to_path_buf()).or_default();
+    if state.schema_version != schema.schema_version {
+        *state = SessionSignalFileState {
+            schema_version: schema.schema_version.clone(),
+            ..Default::default()
+        };
+    }
+    read_new_signal_entries(path, schema, state);
+    let keep_from = generated_at_ms.saturating_sub(HOUR_MS * (HISTORY_HOUR_BUCKETS as u64 + 1));
+    state.entries.retain(|(event_ms, _)| *event_ms >= keep_from);
+    activity_signal_from_entries(&state.entries, generated_at_ms)
+}
+
+fn read_new_signal_entries(
+    path: &Path,
+    schema: &ProviderSchema,
+    state: &mut SessionSignalFileState,
+) {
+    let Ok(mut file) = fs::File::open(path) else {
+        return;
+    };
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    if len < state.offset {
+        // The file was replaced or truncated; read it again.
+        state.offset = 0;
+        state.entries.clear();
+    }
+    if len == state.offset || file.seek(SeekFrom::Start(state.offset)).is_err() {
+        return;
+    }
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        let Ok(read) = reader.read_until(b'\n', &mut buffer) else {
+            return;
+        };
+        // Stop before a partial last line; the next call reads it whole.
+        if read == 0 || buffer.last() != Some(&b'\n') {
+            return;
+        }
+        state.offset += read as u64;
+        let line = String::from_utf8_lossy(&buffer);
+        if let Some(entry) = signal_entry_from_line(&line, schema) {
+            state.entries.push(entry);
+        }
+    }
+}
+
+fn signal_entry_from_line(line: &str, schema: &ProviderSchema) -> Option<(u64, u8)> {
+    if !line.contains("tool.execution_")
+        && !line.contains("assistant.turn_start")
+        && !line.contains("hook.end")
+    {
+        return None;
+    }
+    let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    let event_type = string_from_paths(&value, &schema.events.event_type_paths).unwrap_or_default();
+    let timestamp = string_from_paths(&value, &schema.events.timestamp_paths).unwrap_or_default();
+    let event_ms = parse_iso_ms(&timestamp)?;
+    let flags = match event_type.as_str() {
+        event if event == schema.events.tool_start => SIGNAL_TOOL_START,
+        event if event == schema.events.assistant_turn_start => SIGNAL_TURN_START,
+        event if event == schema.events.tool_complete || event == schema.events.hook_complete => {
+            if bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true) {
+                return None;
+            }
+            SIGNAL_FAILURE
+        }
+        _ => return None,
+    };
+    Some((event_ms, flags))
+}
+
+fn activity_signal_from_entries(
+    entries: &[(u64, u8)],
+    generated_at_ms: u64,
+) -> AgentActivitySignal {
     let mut buckets = empty_activity_signal_buckets(generated_at_ms);
-    let index_by_start = buckets
-        .iter()
-        .enumerate()
-        .map(|(index, bucket)| (bucket.start.clone(), index))
-        .collect::<HashMap<_, _>>();
+    let first_bucket_start = buckets
+        .first()
+        .and_then(|bucket| parse_iso_ms(&bucket.start))
+        .unwrap_or(0);
     let five_min_start = generated_at_ms.saturating_sub(5 * 60 * 1000);
     let hour_start = generated_at_ms.saturating_sub(HOUR_MS);
     let mut activity_last_5m = 0usize;
     let mut activity_last_hour = 0usize;
-
-    let Ok(file) = fs::File::open(path) else {
-        return AgentActivitySignal {
-            generated_at_ms,
-            hourly_24h: buckets,
-            ..Default::default()
-        };
-    };
-    let reader = BufReader::new(file);
-    for line in reader.lines().map_while(Result::ok) {
-        if !line.contains("tool.execution_")
-            && !line.contains("assistant.turn_start")
-            && !line.contains("hook.end")
-        {
+    for &(event_ms, flags) in entries {
+        if event_ms < first_bucket_start {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+        let Some(bucket) = buckets.get_mut(((event_ms - first_bucket_start) / HOUR_MS) as usize)
+        else {
             continue;
         };
-        let event_type =
-            string_from_paths(&value, &schema.events.event_type_paths).unwrap_or_default();
-        let timestamp =
-            string_from_paths(&value, &schema.events.timestamp_paths).unwrap_or_default();
-        let Some(event_ms) = parse_iso_ms(&timestamp) else {
+        if flags & SIGNAL_FAILURE != 0 {
+            bucket.failure_count += 1;
             continue;
-        };
-        let bucket_start = (event_ms / HOUR_MS) * HOUR_MS;
-        let start = format_bucket_start(bucket_start, HOUR_MS);
-        let Some(index) = index_by_start.get(&start).copied() else {
-            continue;
-        };
-        let bucket = &mut buckets[index];
-        match event_type.as_str() {
-            event if event == schema.events.tool_start => {
-                bucket.event_count += 1;
-                bucket.launch_count += 1;
-            }
-            event if event == schema.events.assistant_turn_start => {
-                bucket.event_count += 1;
-                bucket.turn_count += 1;
-            }
-            event if event == schema.events.tool_complete => {
-                let success = bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
-                if !success {
-                    bucket.failure_count += 1;
-                }
-                continue;
-            }
-            event if event == schema.events.hook_complete => {
-                let success = bool_from_paths(&value, &schema.events.success_paths).unwrap_or(true);
-                if !success {
-                    bucket.failure_count += 1;
-                }
-                continue;
-            }
-            _ => continue,
+        }
+        bucket.event_count += 1;
+        if flags & SIGNAL_TOOL_START != 0 {
+            bucket.launch_count += 1;
+        }
+        if flags & SIGNAL_TURN_START != 0 {
+            bucket.turn_count += 1;
         }
         bucket.active_sessions = 1;
         if event_ms >= five_min_start && event_ms <= generated_at_ms {
@@ -1901,7 +2001,6 @@ fn build_session_activity_signal_from_path(
             activity_last_hour += 1;
         }
     }
-
     finalize_activity_signal(
         buckets,
         generated_at_ms,
@@ -5883,6 +5982,60 @@ mod tests {
         assert_eq!(signal.launches_last_hour, 0);
         assert_eq!(signal.active_hours_24h, 0);
         assert_eq!(signal.busiest_hour_label_24h, "No activity");
+    }
+
+    #[test]
+    fn session_activity_signal_reads_only_new_complete_lines() {
+        use std::io::Write;
+
+        let schema = test_schema();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cmc_incremental_signal_{}_{}.jsonl",
+            std::process::id(),
+            unix_ms(SystemTime::now())
+        ));
+        let tool = |ts: &str, id: &str| {
+            format!(
+                r#"{{"type":"tool.execution_start","timestamp":"{ts}","data":{{"toolName":"bash","toolCallId":"{id}"}}}}"#
+            )
+        };
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:34:00Z").expect("valid fixture time");
+        let mut file = std::fs::File::create(&path).expect("create");
+        writeln!(file, "{}", tool("2026-05-28T12:01:00.000Z", "a")).expect("write");
+        // Partial last line: not counted until it ends with a newline.
+        write!(file, "{}", tool("2026-05-28T12:02:00.000Z", "b")).expect("write");
+        file.flush().expect("flush");
+
+        let first = build_session_activity_signal_from_path(&path, &schema, generated_at_ms);
+        assert_eq!(first.launches_last_hour, 1);
+
+        writeln!(file).expect("finish partial line");
+        writeln!(
+            file,
+            r#"{{"type":"assistant.turn_start","timestamp":"2026-05-28T12:30:00.000Z","data":{{"turnId":"t"}}}}"#
+        )
+        .expect("write turn");
+        drop(file);
+
+        let second = build_session_activity_signal_from_path(&path, &schema, generated_at_ms);
+        let current = second.hourly_24h.last().expect("current hour");
+        assert_eq!(second.launches_last_hour, 3);
+        assert_eq!(second.launches_last_5m, 1);
+        assert_eq!(current.launch_count, 2);
+        assert_eq!(current.turn_count, 1);
+
+        // A replaced, shorter file is read again from the start.
+        std::fs::write(
+            &path,
+            format!("{}\n", tool("2026-05-28T11:50:00.000Z", "c")),
+        )
+        .expect("rewrite");
+        let third = build_session_activity_signal_from_path(&path, &schema, generated_at_ms);
+        assert_eq!(third.launches_last_hour, 1);
+        assert_eq!(third.hourly_24h.last().expect("current").event_count, 0);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
