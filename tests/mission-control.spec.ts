@@ -2210,6 +2210,46 @@ test.describe('Agent Mission Control — Dashboard', () => {
     expect(terminalPulses).toBe(1);
   });
 
+  test('live panel updates patch the DOM and keep keyboard focus', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').focus();
+    const metaBefore = await page.locator('#dom-session .cmc-session-meta').textContent();
+    await page.evaluate(() => {
+      (window as any).__cmcProbeTrigger = document.querySelector('#dom-session [data-cmc-action="session-menu"]');
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'beta4567', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'focus_probe', category: 'library', success: true },
+        ...fixture.recent_events,
+      ];
+      // Change session data too, so the Selected Session panel re-renders.
+      fixture.sessions.find((session: any) => session.id === 'beta4567').output_tokens += 1111;
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await expect(page.locator('#dom-feed .cmc-feed-row').first()).toContainText('focus_probe');
+    await expect(page.locator('#dom-session .cmc-session-meta')).not.toHaveText(metaBefore || '');
+    const kept = await page.evaluate(() => {
+      const trigger = (window as any).__cmcProbeTrigger;
+      return { sameNode: trigger.isConnected, focused: document.activeElement === trigger };
+    });
+    expect(kept).toEqual({ sameNode: true, focused: true });
+  });
+
+  test('becoming visible refreshes activity without a watcher push', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'visible_probe', category: 'library', success: true },
+        ...fixture.recent_events,
+      ];
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect.poll(async () => (await getMissionState(page))!.eventLogTools, { timeout: 2500 }).toContain('visible_probe');
+  });
+
   test('push refresh is not starved by pulses that stay in flight', async ({ page }) => {
     await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
     await page.waitForTimeout(800);

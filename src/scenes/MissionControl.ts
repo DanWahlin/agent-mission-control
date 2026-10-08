@@ -426,6 +426,13 @@ export class MissionControlScene extends Phaser.Scene {
   private lastFrameRenderAt = 0;
   private restoreLoopCallback: (() => void) | null = null;
   private readonly markVisualChangeListener = () => this.markVisualChange();
+  // The backend skips watcher scans while the window is hidden or
+  // minimized, so catch up as soon as the page is visible again.
+  private readonly visibilityListener = () => {
+    if (document.visibilityState !== 'visible' || !this.scene?.isActive?.()) return;
+    this.markVisualChange();
+    this.schedulePushRefresh();
+  };
   private replayCursor = 0;
   private replayPlayTimer = 0;
   private readonly replayPlaybackInterval = 700;
@@ -535,6 +542,7 @@ export class MissionControlScene extends Phaser.Scene {
     // reload/HMR doesn't leak handlers.
     this.events.once('shutdown', () => this.shutdown());
     this.installRenderOnDemand();
+    document.addEventListener('visibilitychange', this.visibilityListener);
 
     this.map = this.add.graphics().setDepth(1);
     this.textures.get(THEME_ATLASES[this.appTheme].key).setFilter(Phaser.Textures.FilterMode.LINEAR);
@@ -795,6 +803,7 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   shutdown() {
+    document.removeEventListener('visibilitychange', this.visibilityListener);
     this.restoreLoopCallback?.();
     this.restoreLoopCallback = null;
     if (this.pollEvent) {

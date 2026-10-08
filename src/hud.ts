@@ -2447,6 +2447,55 @@
     }
   }
 
+  // Live panels update several times per second. Patch only the nodes that
+  // changed instead of replacing innerHTML, so unchanged rows keep their DOM,
+  // focus, and hover state and WebKit does less style and layout work.
+  function patchHtml(container, html) {
+    var template = document.createElement('template');
+    template.innerHTML = html;
+    patchChildren(container, template.content);
+  }
+
+  function patchChildren(parent, source) {
+    var current = parent.firstChild;
+    var next = source.firstChild;
+    while (next) {
+      var following = next.nextSibling;
+      if (!current) {
+        parent.appendChild(next);
+      } else if (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName) {
+        var afterCurrent = current.nextSibling;
+        parent.replaceChild(next, current);
+        current = afterCurrent;
+      } else {
+        patchNode(current, next);
+        current = current.nextSibling;
+      }
+      next = following;
+    }
+    while (current) {
+      var stale = current;
+      current = current.nextSibling;
+      parent.removeChild(stale);
+    }
+  }
+
+  function patchNode(current, next) {
+    if (current.nodeType !== Node.ELEMENT_NODE) {
+      if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+      return;
+    }
+    for (var i = current.attributes.length - 1; i >= 0; i--) {
+      var name = current.attributes[i].name;
+      if (!next.hasAttribute(name)) current.removeAttribute(name);
+    }
+    for (var j = 0; j < next.attributes.length; j++) {
+      var attr = next.attributes[j];
+      if (current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+    }
+    patchChildren(current, next);
+  }
+
   function renderSession(view) {
     var body = panelBody(domSession);
     if (!body) return;
@@ -2460,7 +2509,7 @@
         }).join('')
       : '';
     if (!options.length) {
-      body.innerHTML = alertsHtml + renderOpsTempo(view) + '<div class="cmc-label">No running Copilot sessions found. Start Copilot CLI and this panel will show the active task.</div>';
+      patchHtml(body, alertsHtml + renderOpsTempo(view) + '<div class="cmc-label">No running Copilot sessions found. Start Copilot CLI and this panel will show the active task.</div>');
       return;
     }
     var selectedId = selected && selected.id;
@@ -2520,7 +2569,7 @@
         + renderOpsTempo(view)
         + actionsHtml;
     }
-    body.innerHTML = alertsHtml + picker + selectedHtml;
+    patchHtml(body, alertsHtml + picker + selectedHtml);
     if (selected) updateModelChipElement(selected.last_model || '', true);
     restoreSessionMenuIfNeeded(body, keepMenuOpen);
   }
@@ -2532,12 +2581,12 @@
     if (title) title.textContent = (view.feed && view.feed.title) || 'Activity Feed';
     if (!body) return;
     var rows = (view.feed && view.feed.rows) || [];
-    body.innerHTML = rows.length
+    patchHtml(body, rows.length
       ? '<div class="cmc-feed-list">' + rows.map(function (row) {
           var color = row.success ? (CATEGORY_COLORS[row.category] || '#9aa6c8') : CATEGORY_COLORS.alert;
           return '<div class="cmc-feed-row"><span class="cmc-dot" style="--dot:' + color + '"></span><span>' + escapeHtml(row.label) + '</span><span class="cmc-muted">' + escapeHtml(row.age) + '</span></div>';
         }).join('') + '</div>'
-      : '<div class="cmc-label">' + escapeHtml((view.feed && view.feed.empty) || '') + '</div>';
+      : '<div class="cmc-label">' + escapeHtml((view.feed && view.feed.empty) || '') + '</div>');
   }
 
   function recentFeedPanelHeight(view) {
@@ -2558,7 +2607,7 @@
     if (title) title.textContent = q ? q.title : 'Sector';
     if (!body) return;
     if (!q) {
-      body.innerHTML = '<div class="cmc-label">No sector activity yet.</div>';
+      patchHtml(body, '<div class="cmc-label">No sector activity yet.</div>');
       return;
     }
     domQuarter.style.setProperty('--quarter-color', q.color || CATEGORY_COLORS[q.category] || '#ffd54a');
@@ -2573,9 +2622,9 @@
       + ' data-sector-count="' + escapeHtml(count) + '"'
       + ' data-sector-color="' + escapeHtml(q.color || CATEGORY_COLORS[q.category] || '#ffd54a') + '">Details</button>'
       + '</div>';
-    body.innerHTML = '<div class="cmc-quarter-line">' + escapeHtml(q.countLine) + '</div>'
+    patchHtml(body, '<div class="cmc-quarter-line">' + escapeHtml(q.countLine) + '</div>'
       + '<div class="cmc-quarter-line">' + escapeHtml(q.line) + '</div>'
-      + actionsHtml;
+      + actionsHtml);
   }
 
   function renderQuarter(view) {

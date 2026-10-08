@@ -5119,9 +5119,16 @@ pub fn start_watcher(app: AppHandle) {
             let app_clone = app.clone();
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(300));
+                let win = app_clone.get_webview_window("main");
+                // A hidden or minimized window cannot show the result, so skip
+                // the scan; the renderer refreshes when it becomes visible.
+                if win.as_ref().is_some_and(|win| !window_is_showing(win)) {
+                    pending_clone.store(false, Ordering::SeqCst);
+                    return;
+                }
                 refresh_agent_activity_cache();
                 pending_clone.store(false, Ordering::SeqCst);
-                if let Some(win) = app_clone.get_webview_window("main") {
+                if let Some(win) = win {
                     let _ = win.eval(
                         "window.__cmcOnAgentActivityChanged && \
                          window.__cmcOnAgentActivityChanged()",
@@ -5130,6 +5137,10 @@ pub fn start_watcher(app: AppHandle) {
             });
         }
     });
+}
+
+fn window_is_showing(win: &tauri::WebviewWindow) -> bool {
+    win.is_visible().unwrap_or(true) && !win.is_minimized().unwrap_or(false)
 }
 
 /// Paths whose changes warrant a re-scan. The scan reads
