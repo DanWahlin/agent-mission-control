@@ -464,9 +464,8 @@ const MAX_SCANNED_SESSIONS: usize = 64;
 const MAX_TOOLS: usize = 10;
 const MAX_TOOLS_PER_CATEGORY: usize = 5;
 const ACTIVITY_CACHE_MAX_AGE_MS: u64 = 2_000;
-/// Recent global event feed cap (after merging across providers). Bumped
-/// from 18 → 80 so chatty bursts between scans don't drop events that
-/// the renderer's workMixHistory needs to accumulate per category.
+/// Recent global event feed cap (after merging across providers), large
+/// enough that chatty bursts between scans still reach the feed and pulses.
 const MAX_RECENT_EVENTS: usize = 80;
 const MAX_SESSION_TOKEN_CHECKPOINTS: usize = 120;
 const HISTORY_HOUR_BUCKETS: usize = 24;
@@ -495,7 +494,9 @@ const SUPPORTED_SCHEMA_MAJOR: &str = "1";
 const REMOTE_COPILOT_SCHEMA_INDEX_URL: &str =
     "https://danwahlin.github.io/agent-mission-control/provider-schemas/copilot/index.json";
 const SCHEMA_FETCH_TIMEOUT_SECS: u64 = 2;
-const MISSION_CONTROL_ANALYTICS_MARKER: &str = "COPILOT_MISSION_CONTROL_ANALYTICS_CHAT_IGNORE";
+pub(crate) const MISSION_CONTROL_ANALYTICS_MARKER: &str =
+    "COPILOT_MISSION_CONTROL_ANALYTICS_CHAT_IGNORE";
+pub(crate) const MISSION_CONTROL_ANALYTICS_CLIENT_NAME: &str = "copilot-mission-control-analytics";
 static COPILOT_SCHEMA: OnceLock<(ProviderSchema, Vec<String>)> = OnceLock::new();
 static ACTIVITY_CACHE: OnceLock<RwLock<AgentActivity>> = OnceLock::new();
 static ACTIVITY_REFRESH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1384,7 +1385,7 @@ fn first_existing_child(parent: &Path, names: &[String]) -> PathBuf {
 /// `system.message`, both at the top of the file. Read only that header and
 /// remember the answer: event files can be tens of MB and the scan runs on
 /// every refresh.
-fn is_mission_control_analytics_session(events_path: &Path) -> bool {
+pub(crate) fn is_mission_control_analytics_session(events_path: &Path) -> bool {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(known) = cache
@@ -1455,7 +1456,7 @@ fn line_marks_mission_control_analytics_session(line: &str) -> bool {
             .pointer("/data/clientName")
             .or_else(|| value.pointer("/data/client_name"))
             .and_then(|value| value.as_str())
-            .is_some_and(|client| client == "copilot-mission-control-analytics");
+            .is_some_and(|client| client == MISSION_CONTROL_ANALYTICS_CLIENT_NAME);
     }
     false
 }
@@ -1696,7 +1697,7 @@ fn merge_scans(scans: Vec<ProviderScan>, include_history: bool) -> AgentActivity
     activity.tools = survivors;
 
     all_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    activity.activity_signal = build_activity_signal(&mut all_sessions, activity.generated_at_ms);
+    activity.activity_signal = build_activity_signal(&all_sessions, activity.generated_at_ms);
     if include_history {
         activity.history = build_history_summary(
             &all_sessions,
@@ -1736,21 +1737,29 @@ fn merge_scans(scans: Vec<ProviderScan>, include_history: bool) -> AgentActivity
 }
 
 fn build_activity_signal(
-    sessions: &mut [AgentSessionSummary],
+    sessions: &[AgentSessionSummary],
     generated_at_ms: u64,
 ) -> AgentActivitySignal {
     let mut buckets = empty_activity_signal_buckets(generated_at_ms);
+    let index_by_start = buckets
+        .iter()
+        .enumerate()
+        .map(|(index, bucket)| (bucket.start.clone(), index))
+        .collect::<HashMap<_, _>>();
     let mut activity_last_5m = 0usize;
     let mut activity_last_hour = 0usize;
-    for session in sessions.iter_mut() {
-        let last_activity_ms = parse_iso_ms(&session.last_event_timestamp)
-            .or_else(|| parse_iso_ms(&session.updated_at));
-        session.activity_signal =
-            refresh_activity_signal(&session.activity_signal, last_activity_ms, generated_at_ms);
-        let signal = &session.activity_signal;
+    for signal in sessions.iter().map(|session| &session.activity_signal) {
         activity_last_5m += signal.launches_last_5m;
         activity_last_hour += signal.launches_last_hour;
-        for (total, bucket) in buckets.iter_mut().zip(&signal.hourly_24h) {
+        // Match by start time: a session scanned just before an hour
+        // boundary has a grid one hour earlier than this one.
+        for bucket in &signal.hourly_24h {
+            let Some(total) = index_by_start
+                .get(&bucket.start)
+                .and_then(|index| buckets.get_mut(*index))
+            else {
+                continue;
+            };
             total.event_count += bucket.event_count;
             total.launch_count += bucket.launch_count;
             total.turn_count += bucket.turn_count;
@@ -1764,45 +1773,6 @@ fn build_activity_signal(
         activity_last_5m,
         activity_last_hour,
     )
-}
-
-/// Moves a session signal onto the hourly grid for `generated_at_ms`.
-/// Cached session scans keep the signal from their last file read, so the
-/// rolling windows are cleared when the session has no newer activity.
-fn refresh_activity_signal(
-    signal: &AgentActivitySignal,
-    last_activity_ms: Option<u64>,
-    generated_at_ms: u64,
-) -> AgentActivitySignal {
-    let mut buckets = empty_activity_signal_buckets(generated_at_ms);
-    let source = signal
-        .hourly_24h
-        .iter()
-        .map(|bucket| (bucket.start.as_str(), bucket))
-        .collect::<HashMap<_, _>>();
-    for bucket in &mut buckets {
-        if let Some(previous) = source.get(bucket.start.as_str()) {
-            bucket.event_count = previous.event_count;
-            bucket.launch_count = previous.launch_count;
-            bucket.turn_count = previous.turn_count;
-            bucket.failure_count = previous.failure_count;
-            bucket.active_sessions = previous.active_sessions;
-        }
-    }
-    let within = |window_ms: u64| {
-        last_activity_ms.is_some_and(|ms| ms >= generated_at_ms.saturating_sub(window_ms))
-    };
-    let last_5m = if within(5 * 60 * 1000) {
-        signal.launches_last_5m
-    } else {
-        0
-    };
-    let last_hour = if within(HOUR_MS) {
-        signal.launches_last_hour
-    } else {
-        0
-    };
-    finalize_activity_signal(buckets, generated_at_ms, last_5m, last_hour)
 }
 
 /// Activity items are tool starts plus assistant turn starts.
@@ -2872,44 +2842,14 @@ fn scan_copilot_from_discovery(
 
         let mut session_tool_counts = BTreeMap::new();
         let mut session_recent_events = Vec::new();
-        let session_schema_stats = if let Some(key) = cache_key.as_ref() {
-            if let Some(cached) = cached_copilot_session_scan(key, &summary) {
-                summary = cached.summary;
-                session_tool_counts = cached.tool_counts;
-                session_recent_events = cached.recent_events;
-                cached.schema_stats
-            } else {
-                let stats = summarize_events(
-                    EventScanContext {
-                        provider,
-                        mcp_allowlist: &mcp_allowlist,
-                        configured_hook_types: &configured_hook_types,
-                        schema: &schema,
-                        token_prefix_cache_context: &token_prefix_cache_context,
-                        include_full_history: include_history,
-                    },
-                    &events_path,
-                    &session_id,
-                    &mut summary,
-                    &mut session_tool_counts,
-                    &mut session_recent_events,
-                );
-                summary.activity_signal = build_session_activity_signal_from_path(
-                    &events_path,
-                    &schema,
-                    unix_ms(SystemTime::now()),
-                );
-                store_copilot_session_scan(
-                    key.clone(),
-                    CachedCopilotSessionScan {
-                        summary: summary.clone(),
-                        tool_counts: session_tool_counts.clone(),
-                        recent_events: session_recent_events.clone(),
-                        schema_stats: stats.clone(),
-                    },
-                );
-                stats
-            }
+        let cached_scan = cache_key
+            .as_ref()
+            .and_then(|key| cached_copilot_session_scan(key, &summary));
+        let session_schema_stats = if let Some(cached) = cached_scan {
+            summary = cached.summary;
+            session_tool_counts = cached.tool_counts;
+            session_recent_events = cached.recent_events;
+            cached.schema_stats
         } else {
             let stats = summarize_events(
                 EventScanContext {
@@ -2926,13 +2866,23 @@ fn scan_copilot_from_discovery(
                 &mut session_tool_counts,
                 &mut session_recent_events,
             );
-            summary.activity_signal = build_session_activity_signal_from_path(
-                &events_path,
-                &schema,
-                unix_ms(SystemTime::now()),
-            );
+            if let Some(key) = cache_key {
+                store_copilot_session_scan(
+                    key,
+                    CachedCopilotSessionScan {
+                        summary: summary.clone(),
+                        tool_counts: session_tool_counts.clone(),
+                        recent_events: session_recent_events.clone(),
+                        schema_stats: stats.clone(),
+                    },
+                );
+            }
             stats
         };
+        // Recomputed on every scan so the rolling windows stay exact; the
+        // incremental reader does no file I/O when the file is unchanged.
+        summary.activity_signal =
+            build_session_activity_signal_from_path(&events_path, &schema, unix_ms(now));
         for ((name, category), count) in session_tool_counts {
             *scan.tool_counts.entry((name, category)).or_insert(0) += count;
         }
@@ -5962,7 +5912,7 @@ mod tests {
     #[test]
     fn activity_signal_sums_session_signals() {
         let generated_at_ms = parse_iso_ms("2026-05-28T12:34:00Z").expect("valid fixture time");
-        let mut sessions = vec![
+        let sessions = vec![
             signal_session(
                 "alpha123",
                 "2026-05-28T12:33:00Z",
@@ -5984,7 +5934,7 @@ mod tests {
             ),
         ];
 
-        let signal = build_activity_signal(&mut sessions, generated_at_ms);
+        let signal = build_activity_signal(&sessions, generated_at_ms);
         let current = signal.hourly_24h.last().expect("current hour");
         let ten_hour = signal
             .hourly_24h
@@ -6009,40 +5959,32 @@ mod tests {
     }
 
     #[test]
-    fn activity_signal_refreshes_cached_session_windows() {
-        let scanned_at_ms = parse_iso_ms("2026-05-28T11:50:00Z").expect("valid fixture time");
-        let generated_at_ms = parse_iso_ms("2026-05-28T12:40:00Z").expect("valid fixture time");
-        let mut sessions = vec![signal_session(
+    fn activity_signal_aligns_session_grids_by_hour() {
+        let scanned_at_ms = parse_iso_ms("2026-05-28T11:59:00Z").expect("valid fixture time");
+        let generated_at_ms = parse_iso_ms("2026-05-28T12:00:30Z").expect("valid fixture time");
+        let sessions = vec![signal_session(
             "alpha123",
-            "2026-05-28T11:48:00Z",
+            "2026-05-28T11:58:00Z",
             scanned_at_ms,
             &[("2026-05-28T11:00:00Z", 2, 1, 0)],
             3,
             3,
         )];
 
-        let signal = build_activity_signal(&mut sessions, generated_at_ms);
-        let session_signal = &sessions[0].activity_signal;
+        let signal = build_activity_signal(&sessions, generated_at_ms);
+        let eleven = &signal.hourly_24h[HISTORY_HOUR_BUCKETS - 2];
 
-        assert_eq!(signal.launches_last_5m, 0);
+        assert_eq!(eleven.start, "2026-05-28T11:00:00Z");
+        assert_eq!(eleven.event_count, 3);
+        assert_eq!(signal.hourly_24h.last().expect("current").event_count, 0);
         assert_eq!(signal.launches_last_hour, 3);
-        assert_eq!(session_signal.generated_at_ms, generated_at_ms);
-        assert_eq!(session_signal.launches_last_5m, 0);
-        assert_eq!(
-            session_signal.hourly_24h[HISTORY_HOUR_BUCKETS - 2].start,
-            "2026-05-28T11:00:00Z"
-        );
-        assert_eq!(
-            session_signal.hourly_24h[HISTORY_HOUR_BUCKETS - 2].event_count,
-            3
-        );
     }
 
     #[test]
     fn activity_signal_is_empty_without_sessions() {
         let generated_at_ms = parse_iso_ms("2026-05-28T12:00:00Z").expect("valid fixture time");
 
-        let signal = build_activity_signal(&mut [], generated_at_ms);
+        let signal = build_activity_signal(&[], generated_at_ms);
 
         assert_eq!(signal.hourly_24h.len(), HISTORY_HOUR_BUCKETS);
         assert_eq!(signal.launches_last_5m, 0);

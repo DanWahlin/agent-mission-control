@@ -23,8 +23,9 @@ use crate::definition_paths::resolve_definition_path;
 use crate::executable_env::{copilot_sdk_client_options, resolve_executable_env, ExecutableEnv};
 
 use crate::agent::{
-    collect_agent_activity_with_history, AgentActivity, AgentEventSummary, AgentSessionSummary,
-    SessionToolCall,
+    collect_agent_activity_with_history, is_mission_control_analytics_session, AgentActivity,
+    AgentEventSummary, AgentSessionSummary, SessionToolCall, MISSION_CONTROL_ANALYTICS_CLIENT_NAME,
+    MISSION_CONTROL_ANALYTICS_MARKER,
 };
 
 const ANALYTICS_DB_FILE: &str = "analytics.sqlite3";
@@ -41,7 +42,6 @@ const HOUR_MS: u64 = 60 * 60 * 1000;
 const SNAPSHOT_SOURCE_HASH: &str = "agent-activity-snapshot";
 const LOCAL_HISTORY_SOURCE_HASH: &str = "copilot-local-history";
 const LOCAL_HISTORY_PROVIDER: &str = "copilot";
-const MISSION_CONTROL_ANALYTICS_MARKER: &str = "COPILOT_MISSION_CONTROL_ANALYTICS_CHAT_IGNORE";
 const INSIGHTS_MCP_SERVER_SOURCE: &str = include_str!("../../mcp/mission-control-insights.ts");
 const ANALYTICS_EXCLUDED_BUILT_IN_TOOLS: &[&str] = &[
     "apply_patch",
@@ -1798,7 +1798,7 @@ fn parse_local_events_file(
     rollups: &mut LocalHistoryRollups,
     parse_errors: &mut u64,
 ) -> Result<(), String> {
-    if file_contains_mission_control_marker(path)? {
+    if is_mission_control_analytics_session(path) {
         return Ok(());
     }
     let file = File::open(path).map_err(|err| err.to_string())?;
@@ -1902,52 +1902,6 @@ fn parse_local_events_file(
         last_model: safe_label(&session.last_model, "Unknown"),
     });
     Ok(())
-}
-
-fn file_contains_mission_control_marker(path: &Path) -> Result<bool, String> {
-    let file = File::open(path).map_err(|err| err.to_string())?;
-    let reader = BufReader::new(file);
-    for line in reader.lines() {
-        let line = line.map_err(|err| err.to_string())?;
-        if line_marks_mission_control_analytics_session(&line) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn line_marks_mission_control_analytics_session(line: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return false;
-    };
-    let event_type = value
-        .get("type")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    if event_type == "system.message" {
-        // Anchor to the start of the system prompt. The analytics chat always
-        // prepends the marker as the first line of its system message, so a
-        // strict starts_with check avoids false positives when the marker merely
-        // appears elsewhere in the content (e.g. quoted in injected memories or
-        // custom instructions). The session.start clientName check below is the
-        // robust secondary signal.
-        return value
-            .pointer("/data/content")
-            .and_then(|value| value.as_str())
-            .is_some_and(|content| {
-                content
-                    .trim_start()
-                    .starts_with(MISSION_CONTROL_ANALYTICS_MARKER)
-            });
-    }
-    if event_type == "session.start" {
-        return value
-            .pointer("/data/clientName")
-            .or_else(|| value.pointer("/data/client_name"))
-            .and_then(|value| value.as_str())
-            .is_some_and(|client| client == "copilot-mission-control-analytics");
-    }
-    false
 }
 
 fn apply_local_event(
@@ -4022,7 +3976,7 @@ async fn synthesize_chat_answer_with_copilot(
         .with_enable_config_discovery(false)
         .with_mcp_servers(mcp_servers)
         .approve_permissions_if(is_mission_control_insights_permission);
-    config.client_name = Some("copilot-mission-control-analytics".to_string());
+    config.client_name = Some(MISSION_CONTROL_ANALYTICS_CLIENT_NAME.to_string());
     config.streaming = Some(false);
     config.hooks = Some(false);
 

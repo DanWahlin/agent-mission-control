@@ -1833,7 +1833,7 @@ export class MissionControlScene extends Phaser.Scene {
         const newestMs = Date.parse(this.eventLog[this.eventLog.length - 1]?.timestamp ?? '') || 0;
         const oldestLiveMs = newestMs - LIVE_PULSE_MAX_AGE_MS;
         const starts = activityResult.appended
-          .filter(event => (event.kind === 'tool.execution_start' || event.kind === 'hook.start') && quarterKeyForEvent(event))
+          .filter(isPulseStartEvent)
           .filter(event => (Date.parse(event.timestamp) || 0) >= oldestLiveMs)
           .sort((a, b) => (Date.parse(a.timestamp) || 0) - (Date.parse(b.timestamp) || 0));
         const pulses = loadPulseMode() === 'grouped'
@@ -1923,9 +1923,7 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private queueEventPulse(event: CopilotEventSummary, source: 'live' | 'replay' = 'live', delay = 0) {
-    // Only start events fly to a sector, so completion events still
-    // appear in the Activity Feed without a building animation.
-    if (event.kind !== 'tool.execution_start' && event.kind !== 'hook.start') return;
+    if (!isPulseStartEvent(event)) return;
     const quarterKey = quarterKeyForEvent(event);
     if (!quarterKey) return;
     const quarter = this.quarters.find(d => d.key === quarterKey);
@@ -2766,6 +2764,15 @@ function buildActivitySignalFromEvents(events: CopilotEventSummary[], generatedA
   buckets.forEach((bucket, index) => {
     bucket.active_sessions = sessionSets[index].size;
   });
+  return finalizeActivitySignal(buckets, generatedAtMs, activityLast5m, activityLastHour);
+}
+
+function finalizeActivitySignal(
+  buckets: CopilotActivitySignalBucket[],
+  generatedAtMs: number,
+  activityLast5m: number,
+  activityLastHour: number,
+): CopilotActivitySignal {
   const peak = Math.max(0, ...buckets.map(bucket => bucket.event_count));
   buckets.forEach(bucket => {
     bucket.intensity = peak > 0 ? bucket.event_count / peak : 0;
@@ -2793,31 +2800,22 @@ function signalAfterReset(
 ): CopilotActivitySignal {
   const hourMs = 60 * 60 * 1000;
   const generatedAtMs = backend.generated_at_ms;
+  const backendByStart = new Map(backend.hourly_24h.map(bucket => [bucket.start, bucket]));
   const fallbackByStart = new Map(fallback.hourly_24h.map(bucket => [bucket.start, bucket]));
   const buckets = createEmptySignalBuckets(generatedAtMs).map((empty) => {
     const startMs = Date.parse(empty.start);
     if (startMs + hourMs <= resetAtMs) return empty;
-    if (startMs < resetAtMs) return { ...(fallbackByStart.get(empty.start) ?? empty) };
-    return { ...(backend.hourly_24h.find(bucket => bucket.start === empty.start) ?? empty) };
-  });
-  const peak = Math.max(0, ...buckets.map(bucket => bucket.event_count));
-  buckets.forEach(bucket => {
-    bucket.intensity = peak > 0 ? bucket.event_count / peak : 0;
+    const source = startMs < resetAtMs ? fallbackByStart : backendByStart;
+    return { ...(source.get(empty.start) ?? empty) };
   });
   const windowValue = (windowMs: number, backendValue: number, fallbackValue: number) =>
     resetAtMs <= generatedAtMs - windowMs ? backendValue : fallbackValue;
-  const lastHour = windowValue(hourMs, backend.launches_last_hour, fallback.launches_last_hour);
-  return {
-    generated_at_ms: generatedAtMs,
-    launches_last_5m: windowValue(5 * 60 * 1000, backend.launches_last_5m, fallback.launches_last_5m),
-    launches_last_hour: lastHour,
-    velocity_per_hour: lastHour,
-    peak_velocity_per_hour: peak,
-    peak_hour_event_count_24h: peak,
-    busiest_hour_label_24h: busiestSignalBucketLabel(buckets),
-    active_hours_24h: buckets.filter(bucket => bucket.event_count > 0).length,
-    hourly_24h: buckets,
-  };
+  return finalizeActivitySignal(
+    buckets,
+    generatedAtMs,
+    windowValue(5 * 60 * 1000, backend.launches_last_5m, fallback.launches_last_5m),
+    windowValue(hourMs, backend.launches_last_hour, fallback.launches_last_hour),
+  );
 }
 
 function busiestSignalBucketLabel(buckets: CopilotActivitySignalBucket[]): string {
@@ -2842,6 +2840,12 @@ function toolCallSignalEvent(sessionId: string, call: SessionToolCall): CopilotE
     category: call.category,
     success: true,
   };
+}
+
+// Only tool and hook starts with a sector fly to the map; completion events
+// still appear in the Activity Feed without a building animation.
+function isPulseStartEvent(event: CopilotEventSummary): boolean {
+  return (event.kind === 'tool.execution_start' || event.kind === 'hook.start') && quarterKeyForEvent(event) !== null;
 }
 
 function turnSignalEvent(sessionId: string, turn: SessionTurnSummary): CopilotEventSummary {
