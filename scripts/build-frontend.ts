@@ -18,7 +18,10 @@ const copyFile = (source, targetDir) => {
 
 remove('dist');
 
-execFileSync(process.execPath, [require.resolve('typescript/bin/tsc'), '-p', 'tsconfig.renderer.json'], {
+const typescriptPackage = require.resolve('typescript/package.json');
+const tscBin = path.join(path.dirname(typescriptPackage), require(typescriptPackage).bin.tsc);
+
+execFileSync(process.execPath, [tscBin, '-p', 'tsconfig.renderer.json'], {
   cwd: root,
   stdio: 'inherit',
 });

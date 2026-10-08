@@ -8,6 +8,9 @@ on:
       - 'src-tauri/**'
       - 'tests/**'
       - 'assets/**'
+      - 'mcp/**'
+      - 'scripts/**'
+      - '.github/workflows/ci.yml'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.renderer.json'
@@ -45,6 +48,9 @@ jobs:
       - name: Run Playwright tests
         run: npx playwright test
 
+      - name: Run MCP server tests
+        run: npm run test:mcp
+
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v7
@@ -52,3 +58,51 @@ jobs:
           name: test-results
           path: test-results/
           retention-days: 7
+
+  rust:
+    # Same OS and system packages as the Linux release build, so the
+    # Linux-only tray code is compiled and checked too.
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Cache Cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # tauri::generate_context! needs the built frontend in dist/.
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build:frontend
+
+      - name: Check formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test

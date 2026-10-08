@@ -81,6 +81,7 @@
   var settingsClose = $('settings-close');
   var settingsDone = $('settings-done');
   var appThemeSelect = $('app-theme-select');
+  var pulseModeSelect = $('pulse-mode-select');
   var settingsReturnFocus = null;
   var APP_THEME_KEY = STORAGE_KEYS.appTheme;
   var DEFAULT_APP_THEME = 'space';
@@ -103,10 +104,15 @@
     }
   }
 
+  function normalizePulseMode(value) {
+    return value === 'grouped' ? 'grouped' : 'every';
+  }
+
   function openSettings(returnFocus) {
     if (!settingsOverlay) return;
     settingsReturnFocus = returnFocus || document.activeElement;
     applyAppTheme(safeGet(APP_THEME_KEY));
+    if (pulseModeSelect) pulseModeSelect.value = normalizePulseMode(safeGet(STORAGE_KEYS.pulseMode));
     settingsOverlay.classList.add('visible');
     settingsOverlay.setAttribute('aria-hidden', 'false');
     var focusTarget = appThemeSelect || settingsDialog;
@@ -127,6 +133,12 @@
   if (settingsClose) settingsClose.addEventListener('click', closeSettings);
   if (settingsDone) settingsDone.addEventListener('click', closeSettings);
   if (appThemeSelect) appThemeSelect.addEventListener('change', function () { applyAppTheme(appThemeSelect.value); });
+  if (pulseModeSelect) {
+    pulseModeSelect.value = normalizePulseMode(safeGet(STORAGE_KEYS.pulseMode));
+    pulseModeSelect.addEventListener('change', function () {
+      safeSet(STORAGE_KEYS.pulseMode, normalizePulseMode(pulseModeSelect.value));
+    });
+  }
   var appThemeAttempts = 0;
   var appThemePoll = setInterval(function () {
     appThemeAttempts++;
@@ -1025,12 +1037,6 @@
       String(d.getMonth() + 1).padStart(2, '0'),
       String(d.getDate()).padStart(2, '0'),
     ].join('-');
-  }
-
-  function localMonthLabel(month) {
-    var date = new Date(String(month || '').slice(0, 7) + '-01T12:00:00');
-    if (Number.isNaN(date.getTime())) date = new Date();
-    return date.toLocaleDateString([], { month: 'long', year: 'numeric' });
   }
 
   function localDateLabel(day) {
@@ -1972,6 +1978,13 @@
     dashboardSplashTimer = 0;
     document.body.classList.add('dashboard-splash-hidden');
     if (domLoading) domLoading.setAttribute('aria-hidden', 'true');
+    // The splash never returns. Remove it after the fade so WebKit frees its
+    // full-window layer and decoded image.
+    window.setTimeout(function () {
+      if (domLoading) domLoading.remove();
+      domLoading = null;
+      domLoadingImage = null;
+    }, 250);
   }
 
   function scheduleDashboardSplashHide() {
@@ -2069,18 +2082,14 @@
     return kind || 'activity';
   }
 
-  function compactNumberShort(value) {
-    var n = Number(value || 0);
-    if (n >= 1000000) return Math.round(n / 1000000) + 'm';
-    if (n >= 1000) return Math.round(n / 1000) + 'k';
-    return String(n);
-  }
-
   function exactNumber(value) {
     return Number(value || 0).toLocaleString();
   }
 
-  function tokenLabel(input, output, inputPending) {
+  function tokenLabel(input, output, inputPending, allPending) {
+    if (allPending) {
+      return '<span class="cmc-token-pending" title="Token totals are pending because Copilot CLI writes token usage when a session shuts down. Live turns do not report tokens yet.">pending</span>';
+    }
     var inTok = Number(input || 0);
     var outTok = Number(output || 0);
     var inputLabel = inputPending
@@ -2217,27 +2226,6 @@
     if (severity === 'review') return '#ffd54a';
     if (severity === 'watch') return '#61d6ff';
     return '#60ff9a';
-  }
-
-  function renderAttentionEntry(attention) {
-    var state = attention || { count: 0, summary: 'No action needed', highestSeverity: 'info' };
-    var count = Number(state.count || 0);
-    var severity = state.highestSeverity || (count > 0 ? 'watch' : 'info');
-    if (count <= 0) {
-      return '<div class="cmc-attention-entry quiet" role="status">'
-        + '<span class="cmc-attention-copy">'
-        + '<span class="cmc-attention-kicker">Attention</span>'
-        + '<span class="cmc-attention-summary">' + escapeHtml(state.summary || 'No action needed') + '</span>'
-        + '</span>'
-        + '</div>';
-    }
-    return '<button class="cmc-attention-entry ' + escapeHtml(severity) + '" type="button" data-cmc-action="attention-center" aria-haspopup="dialog">'
-      + '<span class="cmc-attention-copy">'
-      + '<span class="cmc-attention-kicker">Attention</span>'
-      + '<span class="cmc-attention-summary">' + escapeHtml(state.summary || 'No action needed') + '</span>'
-      + '</span>'
-      + '<span class="cmc-attention-count">' + escapeHtml(String(count)) + '</span>'
-      + '</button>';
   }
 
   function activitySignal(view) {
@@ -2459,6 +2447,55 @@
     }
   }
 
+  // Live panels update several times per second. Patch only the nodes that
+  // changed instead of replacing innerHTML, so unchanged rows keep their DOM,
+  // focus, and hover state and WebKit does less style and layout work.
+  function patchHtml(container, html) {
+    var template = document.createElement('template');
+    template.innerHTML = html;
+    patchChildren(container, template.content);
+  }
+
+  function patchChildren(parent, source) {
+    var current = parent.firstChild;
+    var next = source.firstChild;
+    while (next) {
+      var following = next.nextSibling;
+      if (!current) {
+        parent.appendChild(next);
+      } else if (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName) {
+        var afterCurrent = current.nextSibling;
+        parent.replaceChild(next, current);
+        current = afterCurrent;
+      } else {
+        patchNode(current, next);
+        current = current.nextSibling;
+      }
+      next = following;
+    }
+    while (current) {
+      var stale = current;
+      current = current.nextSibling;
+      parent.removeChild(stale);
+    }
+  }
+
+  function patchNode(current, next) {
+    if (current.nodeType !== Node.ELEMENT_NODE) {
+      if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+      return;
+    }
+    for (var i = current.attributes.length - 1; i >= 0; i--) {
+      var name = current.attributes[i].name;
+      if (!next.hasAttribute(name)) current.removeAttribute(name);
+    }
+    for (var j = 0; j < next.attributes.length; j++) {
+      var attr = next.attributes[j];
+      if (current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+    }
+    patchChildren(current, next);
+  }
+
   function renderSession(view) {
     var body = panelBody(domSession);
     if (!body) return;
@@ -2472,7 +2509,7 @@
         }).join('')
       : '';
     if (!options.length) {
-      body.innerHTML = alertsHtml + renderOpsTempo(view) + '<div class="cmc-label">No running Copilot sessions found. Start Copilot CLI and this panel will show the active task.</div>';
+      patchHtml(body, alertsHtml + renderOpsTempo(view) + '<div class="cmc-label">No running Copilot sessions found. Start Copilot CLI and this panel will show the active task.</div>');
       return;
     }
     var selectedId = selected && selected.id;
@@ -2480,16 +2517,16 @@
       || options.find(function (opt) { return opt && opt.kind !== 'heading'; });
     var picker = '<div class="cmc-label" style="margin-bottom:8px">' + escapeHtml(view.sessions.header || '') + '</div>'
       + '<div class="cmc-session-picker">'
-      + '<button class="cmc-session-trigger" type="button" data-cmc-action="session-menu" aria-haspopup="listbox" aria-expanded="false">'
+      + '<button class="cmc-session-trigger" type="button" data-cmc-action="session-menu" aria-controls="cmc-session-menu" aria-expanded="false">'
       + renderSessionOption(selectedOption)
       + '<span class="cmc-session-caret" aria-hidden="true">▾</span>'
       + '</button>'
-      + '<div class="cmc-session-menu" role="listbox" aria-label="Select Copilot session">'
+      + '<div id="cmc-session-menu" class="cmc-session-menu" role="group" aria-label="Select Copilot session">'
       + options.map(function (opt) {
         if (opt && opt.kind === 'heading') {
           return '<div class="cmc-session-group-heading" role="presentation">' + escapeHtml(opt.label || '') + '</div>';
         }
-        return '<button class="cmc-session-option ' + (opt.id === selectedId ? 'selected' : '') + '" type="button" role="option" aria-selected="' + (opt.id === selectedId ? 'true' : 'false') + '" data-session-id="' + escapeHtml(opt.id) + '">'
+        return '<button class="cmc-session-option ' + (opt.id === selectedId ? 'selected' : '') + '" type="button"' + (opt.id === selectedId ? ' aria-current="true"' : '') + ' data-session-id="' + escapeHtml(opt.id) + '">'
           + renderSessionOption(opt)
           + '</button>';
       }).join('')
@@ -2499,6 +2536,7 @@
       var inTok = selected.input_tokens || 0;
       var outTok = selected.output_tokens || 0;
       var inputPending = !!selected.input_tokens_pending || (!selected.replay_activity && inTok <= 0 && outTok > 0);
+      var tokensPending = !selected.replay_activity && inTok <= 0 && outTok <= 0 && !!selected.is_active && Number(selected.turn_count || 0) > 0;
       var tcalls = (selected.recent_tool_calls || []).length;
       var isAggregate = !!selected.is_all_sessions;
       var hasGitRoot = !!selected.git_root && !isAggregate;
@@ -2524,14 +2562,14 @@
         + '<span class="cmc-meta-label">Last: ' + escapeHtml(activity.last) + '</span>'
         + '<span class="cmc-meta-label">Tool: ' + escapeHtml(activity.tool) + '</span>'
         + '<span class="cmc-meta-label">Age: ' + escapeHtml(activity.age) + '</span>'
-        + '<span class="cmc-meta-label">Tokens in/out: ' + tokenLabel(inTok, outTok, inputPending) + '</span>'
+        + '<span class="cmc-meta-label">Tokens in/out: ' + tokenLabel(inTok, outTok, inputPending, tokensPending) + '</span>'
         + '<span class="cmc-meta-label cmc-model-meta"><span id="model-label">' + modelLabel + ':</span> <span id="model-chip" class="' + (model ? '' : 'empty') + '" title="Active ' + modelLabel.toLowerCase() + ' for the selected session">' + escapeHtml(model) + '</span></span>'
         + '</div>'
         + '</div>'
         + renderOpsTempo(view)
         + actionsHtml;
     }
-    body.innerHTML = alertsHtml + picker + selectedHtml;
+    patchHtml(body, alertsHtml + picker + selectedHtml);
     if (selected) updateModelChipElement(selected.last_model || '', true);
     restoreSessionMenuIfNeeded(body, keepMenuOpen);
   }
@@ -2543,12 +2581,12 @@
     if (title) title.textContent = (view.feed && view.feed.title) || 'Activity Feed';
     if (!body) return;
     var rows = (view.feed && view.feed.rows) || [];
-    body.innerHTML = rows.length
+    patchHtml(body, rows.length
       ? '<div class="cmc-feed-list">' + rows.map(function (row) {
           var color = row.success ? (CATEGORY_COLORS[row.category] || '#9aa6c8') : CATEGORY_COLORS.alert;
           return '<div class="cmc-feed-row"><span class="cmc-dot" style="--dot:' + color + '"></span><span>' + escapeHtml(row.label) + '</span><span class="cmc-muted">' + escapeHtml(row.age) + '</span></div>';
         }).join('') + '</div>'
-      : '<div class="cmc-label">' + escapeHtml((view.feed && view.feed.empty) || '') + '</div>';
+      : '<div class="cmc-label">' + escapeHtml((view.feed && view.feed.empty) || '') + '</div>');
   }
 
   function recentFeedPanelHeight(view) {
@@ -2569,7 +2607,7 @@
     if (title) title.textContent = q ? q.title : 'Sector';
     if (!body) return;
     if (!q) {
-      body.innerHTML = '<div class="cmc-label">No sector activity yet.</div>';
+      patchHtml(body, '<div class="cmc-label">No sector activity yet.</div>');
       return;
     }
     domQuarter.style.setProperty('--quarter-color', q.color || CATEGORY_COLORS[q.category] || '#ffd54a');
@@ -2584,9 +2622,9 @@
       + ' data-sector-count="' + escapeHtml(count) + '"'
       + ' data-sector-color="' + escapeHtml(q.color || CATEGORY_COLORS[q.category] || '#ffd54a') + '">Details</button>'
       + '</div>';
-    body.innerHTML = '<div class="cmc-quarter-line">' + escapeHtml(q.countLine) + '</div>'
+    patchHtml(body, '<div class="cmc-quarter-line">' + escapeHtml(q.countLine) + '</div>'
       + '<div class="cmc-quarter-line">' + escapeHtml(q.line) + '</div>'
-      + actionsHtml;
+      + actionsHtml);
   }
 
   function renderQuarter(view) {
@@ -2730,6 +2768,7 @@
           opt.title || '',
           opt.sessionName || '',
           opt.repository || '',
+          opt.branch || '',
           opt.shortId || '',
           opt.isActive ? '1' : '0',
           opt.statusLabel || '',
@@ -2739,6 +2778,7 @@
       selected.title || '',
       selected.session_name || '',
       selected.repository || '',
+      selected.branch || '',
       selected.git_root || '',
       selected.input_tokens || 0,
       selected.output_tokens || 0,
@@ -4516,18 +4556,5 @@
 
     setTimeout(function () { banner.classList.add('show'); }, 500);
     autoHideTimer = setTimeout(function () { banner.classList.remove('show'); }, 30000);
-  };
-
-  window.__cmcUpdateStatus = function (status) {
-    var banner = $('update-banner');
-    var linkEl = banner ? banner.querySelector('.update-link') : null;
-    var iconEl = banner ? banner.querySelector('.update-icon') : null;
-    if (status === 'downloading') {
-      if (linkEl) linkEl.textContent = 'Downloading…';
-      if (iconEl) iconEl.textContent = '📦';
-    } else if (status === 'restarting') {
-      if (linkEl) linkEl.textContent = 'Installing… Restarting';
-      if (iconEl) iconEl.textContent = '✨';
-    }
   };
 })();

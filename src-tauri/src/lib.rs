@@ -33,27 +33,25 @@ use agent::{
     collect_agent_activity, collect_agent_activity_with_history, AgentActivity, RawToolCallDetails,
 };
 use analytics::{
-    AnalyticsChatRequest, AnalyticsChatResponse, AnalyticsRangeRequest, AnalyticsRecommendation,
-    AnalyticsStatus, AnalyticsUsageSummary, EngineeringDigest, EngineeringDigestRequest,
+    AnalyticsChatRequest, AnalyticsChatResponse, AnalyticsRangeRequest, AnalyticsStatus,
+    AnalyticsUsageSummary, EngineeringDigest, EngineeringDigestRequest,
 };
-use skill_evaluator::SkillEvaluation;
 
 // Icons baked into the binary so they survive whether the binary is
 // launched bare (`tauri dev`) or wrapped in an .app bundle (`tauri build`).
 // On macOS the Dock icon must be applied programmatically in dev mode
 // because the bare binary has no Info.plist / CFBundleIconFile.
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray_icon.png");
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", debug_assertions))]
 const DOCK_ICON_BYTES: &[u8] = include_bytes!("../icons/dock_icon.png");
 const MIN_VISIBLE_WINDOW_WIDTH: i64 = 240;
 const MIN_VISIBLE_WINDOW_HEIGHT: i64 = 160;
 static UPDATE_CHECK_DONE: AtomicBool = AtomicBool::new(false);
-static UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// macOS only: set the running app's Dock icon via NSApplication. Tauri
 /// dev runs the bare binary (no .app bundle), so macOS otherwise falls
 /// back to a generic rocket. Safe to call from the main thread.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", debug_assertions))]
 fn set_dock_icon() {
     use objc2::rc::autoreleasepool;
     use objc2::{AnyThread, MainThreadMarker};
@@ -93,66 +91,6 @@ fn linux_tray_supported() -> bool {
 
 // ── Tauri commands ────────────────────────────────────────────────────
 
-/// Return the app version baked in at compile time.
-#[tauri::command]
-fn get_app_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
-}
-
-/// Download and install an available update, then restart the app.
-#[tauri::command]
-async fn install_update(app: AppHandle) -> Result<(), String> {
-    if UPDATE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
-        return Err("Update already in progress".to_string());
-    }
-
-    use tauri_plugin_updater::UpdaterExt;
-    let updater = app.updater_builder().build().map_err(|e| {
-        UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
-        e.to_string()
-    })?;
-
-    match updater.check().await {
-        Ok(Some(update)) => {
-            if let Some(win) = app.get_webview_window("main") {
-                let _ =
-                    win.eval("window.__cmcUpdateStatus && window.__cmcUpdateStatus('downloading')");
-            }
-            if let Err(e) = update.download_and_install(|_, _| {}, || {}).await {
-                UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
-                return Err(e.to_string());
-            }
-            if let Some(win) = app.get_webview_window("main") {
-                let _ =
-                    win.eval("window.__cmcUpdateStatus && window.__cmcUpdateStatus('restarting')");
-            }
-            app.restart();
-        }
-        Ok(None) => {
-            UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
-            Err("No update available".to_string())
-        }
-        Err(e) => {
-            UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
-            Err(format!("Update check failed: {}", e))
-        }
-    }
-}
-
-/// Quit the application.
-#[tauri::command]
-fn quit_app(app: AppHandle) {
-    app.exit(0);
-}
-
-/// Hide the main window (user can re-show from tray).
-#[tauri::command]
-fn hide_app(app: AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.hide();
-    }
-}
-
 /// Privacy-preserving summary of local agent CLI activity (currently
 /// the GitHub Copilot CLI provider). The Tauri bridge never carries
 /// prompt text, assistant text, tool arguments, file paths, or
@@ -191,13 +129,6 @@ async fn get_analytics_status(app: AppHandle) -> Result<AnalyticsStatus, String>
 }
 
 #[tauri::command]
-async fn run_analytics_ingestion_once(app: AppHandle) -> Result<AnalyticsStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || analytics::run_analytics_ingestion_once(&app))
-        .await
-        .map_err(|err| err.to_string())?
-}
-
-#[tauri::command]
 async fn get_analytics_usage_summary(
     app: AppHandle,
     request: AnalyticsRangeRequest,
@@ -215,18 +146,6 @@ async fn get_engineering_digest(
     tauri::async_runtime::spawn_blocking(move || analytics::engineering_digest(&app, request))
         .await
         .map_err(|err| err.to_string())?
-}
-
-#[tauri::command]
-async fn get_analytics_recommendation_facts(
-    app: AppHandle,
-    request: AnalyticsRangeRequest,
-) -> Result<Vec<AnalyticsRecommendation>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        analytics::analytics_recommendation_facts(&app, request)
-    })
-    .await
-    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -272,61 +191,6 @@ async fn open_copilot_definition(
 ) -> Result<(), String> {
     let path = analytics::resolve_copilot_definition_path(&kind, &definition, root.as_deref())?;
     open_in_editor(path.to_string_lossy().to_string(), scheme).await
-}
-
-#[tauri::command]
-async fn evaluate_skill_definition(
-    definition: String,
-    root: Option<String>,
-    mode: Option<String>,
-) -> Result<SkillEvaluation, String> {
-    evaluate_definition("skills", definition, root, mode).await
-}
-
-#[tauri::command]
-async fn evaluate_agent_definition(
-    definition: String,
-    root: Option<String>,
-    mode: Option<String>,
-) -> Result<SkillEvaluation, String> {
-    evaluate_definition("agents", definition, root, mode).await
-}
-
-async fn evaluate_definition(
-    kind: &'static str,
-    definition: String,
-    root: Option<String>,
-    mode: Option<String>,
-) -> Result<SkillEvaluation, String> {
-    let parsed_mode = skill_evaluator::EvaluationMode::parse(mode.as_deref())?;
-    let root_for_static = root.clone();
-    let static_result = tauri::async_runtime::spawn_blocking(move || {
-        if kind == "skills" {
-            skill_evaluator::evaluate_skill_definition_static(
-                &definition,
-                root_for_static.as_deref(),
-            )
-        } else {
-            skill_evaluator::evaluate_definition_static(
-                kind,
-                &definition,
-                root_for_static.as_deref(),
-            )
-        }
-    })
-    .await
-    .map_err(|err| err.to_string())??;
-
-    let mut evaluation = static_result.evaluation;
-    if parsed_mode == skill_evaluator::EvaluationMode::Judge {
-        let judge_result = if kind == "agents" {
-            skill_evaluator::judge_agent_with_copilot(&evaluation, &static_result.source).await
-        } else {
-            skill_evaluator::judge_skill_with_copilot(&evaluation, &static_result.source).await
-        };
-        skill_evaluator::merge_judge_result(&mut evaluation, judge_result);
-    }
-    Ok(evaluation)
 }
 
 /// Explicit local-only raw reveal for one inspector row. The normal
@@ -408,7 +272,7 @@ fn start_update_check(app: AppHandle) {
                         .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
                         .collect();
                     if let Some(win) = app.get_webview_window("main") {
-                        let _ = win.eval(&format!(
+                        let _ = win.eval(format!(
                             "window.__cmcUpdateAvailable && window.__cmcUpdateAvailable('{}')",
                             version
                         ));
@@ -483,41 +347,6 @@ fn toggle_window(app: &AppHandle) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn editor_scheme_allowlist_rejects_protocol_smuggling_characters() {
-        assert!(is_supported_editor_scheme("vscode"));
-        assert!(is_supported_editor_scheme("vscode-insiders"));
-        assert!(is_supported_editor_scheme("cursor+file"));
-        assert!(!is_supported_editor_scheme(""));
-        assert!(!is_supported_editor_scheme("javascript:alert"));
-        assert!(!is_supported_editor_scheme("vscode/file"));
-        assert!(!is_supported_editor_scheme("vscode?x=1"));
-    }
-
-    #[test]
-    fn external_url_allowlist_only_allows_known_project_urls() {
-        assert!(is_allowed_external_url(
-            "https://github.com/DanWahlin/agent-mission-control/releases/latest"
-        ));
-        assert!(is_allowed_external_url(
-            "https://github.com/DanWahlin/agent-mission-control/issues/new?title=Schema"
-        ));
-        assert!(!is_allowed_external_url(
-            "https://github.com/DanWahlin/agent-mission-control/issues"
-        ));
-        assert!(!is_allowed_external_url(
-            "https://github.com/Other/repo/issues/new?title=Schema"
-        ));
-        assert!(!is_allowed_external_url(
-            "http://github.com/DanWahlin/agent-mission-control/releases/latest"
-        ));
-    }
-}
-
 // ── App entry point ───────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -535,32 +364,24 @@ pub fn run() {
             show_window(app);
         }))
         .invoke_handler(tauri::generate_handler![
-            get_app_version,
-            quit_app,
-            hide_app,
             get_agent_activity,
             get_agent_activity_with_history,
             get_copilot_activity,
             get_analytics_status,
-            run_analytics_ingestion_once,
             get_analytics_usage_summary,
             get_engineering_digest,
-            get_analytics_recommendation_facts,
             ask_analytics_chat,
             set_mcp_server_enabled,
             read_copilot_definition,
             open_copilot_definition,
-            evaluate_skill_definition,
-            evaluate_agent_definition,
             get_raw_tool_call_details,
-            install_update,
             open_in_editor,
             open_external_url
         ])
         .setup(|app| {
             // macOS dev mode: bare binary has no .app bundle, so set the
             // Dock icon programmatically. No-op on other platforms.
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", debug_assertions))]
             set_dock_icon();
 
             // Start the multi-agent filesystem watcher. It runs for
@@ -654,4 +475,39 @@ pub fn run() {
             }
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_scheme_allowlist_rejects_protocol_smuggling_characters() {
+        assert!(is_supported_editor_scheme("vscode"));
+        assert!(is_supported_editor_scheme("vscode-insiders"));
+        assert!(is_supported_editor_scheme("cursor+file"));
+        assert!(!is_supported_editor_scheme(""));
+        assert!(!is_supported_editor_scheme("javascript:alert"));
+        assert!(!is_supported_editor_scheme("vscode/file"));
+        assert!(!is_supported_editor_scheme("vscode?x=1"));
+    }
+
+    #[test]
+    fn external_url_allowlist_only_allows_known_project_urls() {
+        assert!(is_allowed_external_url(
+            "https://github.com/DanWahlin/agent-mission-control/releases/latest"
+        ));
+        assert!(is_allowed_external_url(
+            "https://github.com/DanWahlin/agent-mission-control/issues/new?title=Schema"
+        ));
+        assert!(!is_allowed_external_url(
+            "https://github.com/DanWahlin/agent-mission-control/issues"
+        ));
+        assert!(!is_allowed_external_url(
+            "https://github.com/Other/repo/issues/new?title=Schema"
+        ));
+        assert!(!is_allowed_external_url(
+            "http://github.com/DanWahlin/agent-mission-control/releases/latest"
+        ));
+    }
 }

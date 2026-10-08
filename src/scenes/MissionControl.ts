@@ -71,6 +71,7 @@ declare global {
     keys: {
       theme: string;
       appTheme: string;
+      pulseMode: string;
       panelsHidden: string;
       missionPrefs: string;
     };
@@ -103,12 +104,15 @@ declare global {
 }
 
 const SPACE_ATLAS_KEY = 'mc';
-const SPACE_ATLAS_ROOT = 'assets/space';
 const MEDIEVAL_ATLAS_KEY = 'medieval';
-const MEDIEVAL_ATLAS_ROOT = 'assets/medieval';
 
 type ThemeMode = 'dark' | 'light';
 type AppTheme = 'space' | 'medieval';
+
+const THEME_ATLASES: Record<AppTheme, { key: string; image: string; data: string }> = {
+  space: { key: SPACE_ATLAS_KEY, image: 'assets/space/atlas.png', data: 'assets/space/atlas.json' },
+  medieval: { key: MEDIEVAL_ATLAS_KEY, image: 'assets/medieval/spritesheet.png', data: 'assets/medieval/spritesheet.json' },
+};
 type SectorTextureMap = Record<'edits' | 'library' | 'terminal' | 'signal' | 'hooks' | 'delegates' | 'skills' | 'court' | 'mcp', string>;
 
 interface MissionTheme {
@@ -158,6 +162,15 @@ function loadInitialThemeMode(): ThemeMode {
 
 function normalizeAppTheme(value: string | null | undefined): AppTheme {
   return value === 'medieval' ? 'medieval' : 'space';
+}
+
+function loadPulseMode(): 'every' | 'grouped' {
+  try {
+    const appSettings = settings();
+    return appSettings?.get(appSettings.keys.pulseMode) === 'grouped' ? 'grouped' : 'every';
+  } catch {
+    return 'every';
+  }
 }
 
 function loadInitialAppTheme(): AppTheme {
@@ -291,6 +304,22 @@ const QUARTER_HOVER_RADIUS_MIN_PX = 48;
 /// Keeps a burst of N events from looking like a single blob — each one
 /// gets `i * PULSE_STAGGER_MS` delay so the eye can track the train.
 const PULSE_STAGGER_MS = 120;
+/// A large burst shrinks the stagger so its train still ends within this
+/// time, before the next refresh adds more pulses.
+const MAX_PULSE_TRAIN_MS = 2000;
+/// Upper bound on pulses for one refresh (for example, after the app was
+/// asleep). The newest events are kept.
+const MAX_LIVE_PULSES_PER_REFRESH = 60;
+/// Events this much older than the newest event when they first arrive (for
+/// example, history of a session that just became active) go to the feed
+/// but get no pulse.
+const LIVE_PULSE_MAX_AGE_MS = 2 * 60 * 1000;
+/// After a visual change, keep drawing frames this long so the change and
+/// any follow-up updates reach the screen.
+const VISUAL_SETTLE_MS = 500;
+/// While idle, draw this often as a safety net for changes that are not
+/// marked. The map has no ambient animation, so idle frames are identical.
+const IDLE_RENDER_INTERVAL_MS = 1000;
 
 /// Number of fading samples drawn behind the pulse head to form a
 /// glowing comet tail. Each sample is offset along the bezier path by
@@ -311,6 +340,10 @@ const ARRIVAL_MAX_RADIUS_PX = 44;
 const LIVE_DASHBOARD_PUBLISH_INTERVAL_MS = 250;
 const PUSH_REFRESH_MIN_INTERVAL_MS = 500;
 const ACTIVE_ANIMATION_REFRESH_DELAY_MS = 250;
+/// Longest a push refresh waits for pulses to land. With steady activity
+/// pulses are almost always in flight, so an uncapped wait starves updates.
+/// Refreshes during motion already defer the heavy map rebuild.
+const MAX_PUSH_REFRESH_DEFER_MS = 1000;
 const LIVE_RENDER_QUIET_MS = 1200;
 const PULSE_TEXTURE_KEY = 'cmc-pulse-quad';
 const PULSE_EDGE_TEXTURE_KEY = 'cmc-pulse-edge-quad';
@@ -343,6 +376,7 @@ export class MissionControlScene extends Phaser.Scene {
   private textObjects: any[] = [];
   private quarterCountTextObjects = new Map<string, any>();
   private appTheme: AppTheme = loadInitialAppTheme();
+  private requestedAppTheme: AppTheme = this.appTheme;
   /// Focus mode: when true, the Summary + Selected Session + Activity
   /// Feed side panels are skipped and computeLayout() collapses their
   /// widths to 0 so the mission ring (castle + quarters) expands to
@@ -388,19 +422,21 @@ export class MissionControlScene extends Phaser.Scene {
   private demoFlowTimer = 0;
   private demoFlowIndex = 0;
   private replayPaused = false;
+  private visualChangeUntil = 0;
+  private lastFrameRenderAt = 0;
+  private restoreLoopCallback: (() => void) | null = null;
+  private readonly markVisualChangeListener = () => this.markVisualChange();
+  // The backend skips watcher scans while the window is hidden or
+  // minimized, so catch up as soon as the page is visible again.
+  private readonly visibilityListener = () => {
+    if (document.visibilityState !== 'visible' || !this.scene?.isActive?.()) return;
+    this.markVisualChange();
+    this.schedulePushRefresh();
+  };
   private replayCursor = 0;
   private replayPlayTimer = 0;
   private readonly replayPlaybackInterval = 700;
   private readonly replayMaxEvents = 600;
-  /// Sliding tool-call timestamps split by category for work-mix
-  /// sparklines AND the 24h quarter counts. Each entry stores the
-  /// event identity key alongside its perfTs so compute24hCategoryCounts
-  /// can dedupe live entries against the per-session snapshot —
-  /// otherwise live counts that overlap with the snapshot would either
-  /// double-count (additive merge) or be silently absorbed (max merge,
-  /// the previous bug where pulses fired but the count never moved).
-  /// Bucketed to the last 24h, trimmed during render.
-  private workMixHistory: Record<string, Array<{ key: string; perfTs: number }>> = {};
   /// Per-session timestamps when they entered needs-attention. Used to
   /// escalate visual + audio alerts at 15s and 30s.
   private attentionEntered: Map<string, number> = new Map();
@@ -459,17 +495,35 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   preload() {
+    // Only the active theme's atlas is loaded; the other one loads on the
+    // first switch, so the unused sheet does not hold texture memory.
+    this.queueThemeAtlas(this.appTheme);
+  }
+
+  private queueThemeAtlas(theme: AppTheme) {
+    const atlas = THEME_ATLASES[theme];
     // Phaser auto-detects the JSONArray atlas format used by both theme sheets.
-    this.load.atlas(
-      SPACE_ATLAS_KEY,
-      `${SPACE_ATLAS_ROOT}/atlas.png`,
-      `${SPACE_ATLAS_ROOT}/atlas.json`,
-    );
-    this.load.atlas(
-      MEDIEVAL_ATLAS_KEY,
-      `${MEDIEVAL_ATLAS_ROOT}/spritesheet.png`,
-      `${MEDIEVAL_ATLAS_ROOT}/spritesheet.json`,
-    );
+    this.load.atlas(atlas.key, atlas.image, atlas.data);
+  }
+
+  private applyAppTheme(theme: AppTheme) {
+    this.requestedAppTheme = theme;
+    if (theme === this.appTheme) return;
+    const atlasKey = THEME_ATLASES[theme].key;
+    const apply = () => {
+      // Ignore a load that finishes after the user picked another theme.
+      if (!this.scene?.isActive?.() || this.requestedAppTheme !== theme) return;
+      this.textures.get(atlasKey).setFilter(Phaser.Textures.FilterMode.LINEAR);
+      this.appTheme = theme;
+      this.scheduleDeferredThemeRender('full');
+    };
+    if (this.textures.exists(atlasKey)) {
+      apply();
+      return;
+    }
+    this.queueThemeAtlas(theme);
+    this.load.once(Phaser.Loader.Events.COMPLETE, apply);
+    this.load.start();
   }
 
   create() {
@@ -480,16 +534,18 @@ export class MissionControlScene extends Phaser.Scene {
     // Re-paint the backdrop when Phaser resizes (driven by the
     // window `resize` listener in main.ts -> scale.resize(W, H)).
     this.scale.on('resize', () => {
+      this.markVisualChange();
       this.redrawBackdrop();
       this.scheduleResizeRender();
     });
     // Clean up scene-owned resources on shutdown so a future
     // reload/HMR doesn't leak handlers.
     this.events.once('shutdown', () => this.shutdown());
+    this.installRenderOnDemand();
+    document.addEventListener('visibilitychange', this.visibilityListener);
 
     this.map = this.add.graphics().setDepth(1);
-    this.textures.get(SPACE_ATLAS_KEY)?.setFilter?.(Phaser.Textures.FilterMode.LINEAR);
-    this.textures.get(MEDIEVAL_ATLAS_KEY)?.setFilter?.(Phaser.Textures.FilterMode.LINEAR);
+    this.textures.get(THEME_ATLASES[this.appTheme].key).setFilter(Phaser.Textures.FilterMode.LINEAR);
     this.ensurePulseTextures();
     this.createPulseVisualPools();
     this.moatPulseRings = [
@@ -549,10 +605,7 @@ export class MissionControlScene extends Phaser.Scene {
     };
     window.__cmcSetAppTheme = (nextTheme: AppTheme) => {
       if (!this.scene?.isActive?.()) return;
-      const normalized = normalizeAppTheme(nextTheme);
-      if (normalized === this.appTheme) return;
-      this.appTheme = normalized;
-      this.scheduleDeferredThemeRender('full');
+      this.applyAppTheme(normalizeAppTheme(nextTheme));
     };
     // Focus-mode toggle. Hides side panels and re-lays-out the ring so
     // the castle + quarters expand to fill the canvas. Idempotent —
@@ -634,6 +687,7 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private refreshActivityViewState(recomputeLayout = false) {
+    this.markVisualChange();
     if (recomputeLayout || !this.layout) {
       this.layout = this.computeLayout();
     }
@@ -710,9 +764,10 @@ export class MissionControlScene extends Phaser.Scene {
     this.pendingPushRefresh = true;
     const elapsed = performance.now() - this.lastPushRefreshAt;
     const delay = Math.max(0, PUSH_REFRESH_MIN_INTERVAL_MS - elapsed);
+    const deferUntil = performance.now() + delay + MAX_PUSH_REFRESH_DEFER_MS;
     const run = () => {
       this.pushRefreshEvent = null;
-      if (this.loading || this.hasActiveMotion()) {
+      if (this.loading || (this.hasActiveMotion() && performance.now() < deferUntil)) {
         this.pushRefreshEvent = this.time.delayedCall(ACTIVE_ANIMATION_REFRESH_DELAY_MS, run);
         return;
       }
@@ -748,6 +803,9 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   shutdown() {
+    document.removeEventListener('visibilitychange', this.visibilityListener);
+    this.restoreLoopCallback?.();
+    this.restoreLoopCallback = null;
     if (this.pollEvent) {
       this.pollEvent.remove(false);
       this.pollEvent = undefined;
@@ -816,7 +874,6 @@ export class MissionControlScene extends Phaser.Scene {
     this.replayCursor = 0;
     this.replayPaused = false;
     this.replayPlayTimer = 0;
-    this.workMixHistory = {};
     this.attentionEntered.clear();
     this.attentionAlertedAt.clear();
     this.turnEndSeen.clear();
@@ -831,6 +888,7 @@ export class MissionControlScene extends Phaser.Scene {
   /// current viewport instead of leaving slivers when the user grows
   /// the window.
   private redrawBackdrop() {
+    this.markVisualChange();
     if (!this.backdrop) return;
     this.backdrop.clear();
     this.backdrop.fillStyle(theme.backdropFill, 1);
@@ -993,6 +1051,9 @@ export class MissionControlScene extends Phaser.Scene {
       ...sessions.flatMap((session) =>
         (session.recent_tool_calls ?? []).map((call) => toolCallSignalEvent(session.id, call)),
       ),
+      ...sessions.flatMap((session) =>
+        (session.recent_turns ?? []).map((turn) => turnSignalEvent(session.id, turn)),
+      ),
     ];
     const generatedAtMs = normalized.activity_signal?.generated_at_ms ?? normalized.generated_at_ms ?? Date.now();
 
@@ -1006,7 +1067,11 @@ export class MissionControlScene extends Phaser.Scene {
       total_input_tokens: totalInputTokens,
       total_output_tokens: totalOutputTokens,
       total_turns: totalTurns,
-      activity_signal: buildActivitySignalFromEvents(signalEvents, generatedAtMs),
+      activity_signal: signalAfterReset(
+        normalizeActivitySignal(normalized.activity_signal),
+        buildActivitySignalFromEvents(signalEvents, generatedAtMs),
+        resetAt,
+      ),
     };
   }
 
@@ -1046,8 +1111,21 @@ export class MissionControlScene extends Phaser.Scene {
       recent_tool_calls: recentToolCalls,
       recent_turns: recentTurns,
       token_checkpoints: tokenCheckpoints,
-      activity_signal: createEmptyActivitySignal(this.rawActivity.activity_signal?.generated_at_ms ?? Date.now()),
+      activity_signal: this.sessionSignalAfterReset(session, recentToolCalls, recentTurns),
     };
+  }
+
+  private sessionSignalAfterReset(
+    session: CopilotSessionSummary,
+    recentToolCalls: SessionToolCall[],
+    recentTurns: SessionTurnSummary[],
+  ): CopilotActivitySignal {
+    const backend = normalizeActivitySignal(session.activity_signal);
+    const fallback = buildActivitySignalFromEvents([
+      ...recentToolCalls.map((call) => toolCallSignalEvent(session.id, call)),
+      ...recentTurns.map((turn) => turnSignalEvent(session.id, turn)),
+    ], backend.generated_at_ms);
+    return signalAfterReset(backend, fallback, this.activityResetAtMs ?? 0);
   }
 
   private isAfterReset(timestamp?: string | null): boolean {
@@ -1077,7 +1155,6 @@ export class MissionControlScene extends Phaser.Scene {
     this.replayTimeline = [];
     this.seenReplayTimelineKeys.clear();
     this.replaySessionId = null;
-    this.workMixHistory = {};
     this.eventPulses = [];
     this.arrivalEffects = [];
     this.hidePulseVisuals();
@@ -1182,7 +1259,48 @@ export class MissionControlScene extends Phaser.Scene {
     return createEmptyActivity();
   }
 
+  /// Phaser draws every frame by default, which keeps the GPU and WebKit
+  /// busy at 60 fps even when the map does not change. Idle frames run the
+  /// update step only (timers, input, and replay keep working) and skip the
+  /// draw.
+  private installRenderOnDemand() {
+    const game = this.game as any;
+    const loop = game?.loop;
+    if (!loop || typeof game.step !== 'function' || typeof game.headlessStep !== 'function') return;
+    const original = loop.callback;
+    const step = game.step.bind(game);
+    const headlessStep = game.headlessStep.bind(game);
+    loop.callback = (time: number, delta: number) => {
+      const now = performance.now();
+      if (this.needsRender(now)) {
+        this.lastFrameRenderAt = now;
+        step(time, delta);
+      } else {
+        headlessStep(time, delta);
+      }
+    };
+    const events = ['pointermove', 'pointerdown', 'wheel', 'keydown'];
+    for (const type of events) window.addEventListener(type, this.markVisualChangeListener, { passive: true });
+    this.markVisualChange();
+    this.restoreLoopCallback = () => {
+      loop.callback = original;
+      for (const type of events) window.removeEventListener(type, this.markVisualChangeListener);
+    };
+  }
+
+  private needsRender(now: number) {
+    if (this.hasActiveMotion()) return true;
+    if (!this.replayPaused && this.replayCursor < this.replayTimeline.length) return true;
+    if (now < this.visualChangeUntil) return true;
+    return now - this.lastFrameRenderAt >= IDLE_RENDER_INTERVAL_MS;
+  }
+
+  private markVisualChange() {
+    this.visualChangeUntil = Math.max(this.visualChangeUntil, performance.now() + VISUAL_SETTLE_MS);
+  }
+
   private renderActivity() {
+    this.markVisualChange();
     this.clearDynamicObjects();
     this.map.clear();
 
@@ -1196,6 +1314,7 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private renderMapOnly() {
+    this.markVisualChange();
     for (const text of this.textObjects) text.destroy();
     this.textObjects = [];
     this.map.clear();
@@ -1218,7 +1337,7 @@ export class MissionControlScene extends Phaser.Scene {
     const counts = this.selectedSessionCategoryCounts();
 
     const layout = this.layout ?? this.computeLayout();
-    const { centerX, centerY, radiusX, radiusY, topLift, s } = layout;
+    const { centerX, centerY, radiusX, radiusY, s } = layout;
     const specs: Omit<Quarter, 'x' | 'y' | 'count' | 'color'>[] = [
       { key: 'edits', label: 'Edits', short: 'Edits' },
       { key: 'library', label: 'Library', short: 'Reads' },
@@ -1267,54 +1386,6 @@ export class MissionControlScene extends Phaser.Scene {
       ['court', session?.court_count ?? 0],
       ['mcp', session?.mcp_count ?? 0],
     ]);
-  }
-
-  /// Recent activity per quarter (last 24h). Merges two sources to
-  /// match what the Activity Feed actually shows:
-  ///   1. Per-session `recent_tool_calls` snapshot — catches history
-  ///      that existed before the app was running (with category info).
-  ///   2. Live `workMixHistory` accumulated from `recent_events` as the
-  ///      app saw them — survives even after a session's per-session
-  ///      buffer evicts the call. Without this, bursty sessions would
-  ///      show 0 for low-volume categories like Intent even though
-  ///      events visibly streamed through the Activity Feed.
-  /// The merge is additive but deduped via the shared key format so an
-  /// event present in BOTH sources only counts once. A previous version
-  /// used Math.max(snapshot, live), which silently swallowed live
-  /// increments whenever the snapshot dominated — pulses fired but the
-  /// count never moved.
-  /// Excludes failed terminal commands — those are LLM noise, not
-  /// something the dev can fix, so they don't get to inflate "Commands".
-  private compute24hCategoryCounts(): Map<string, number> {
-    const cutoff = Date.now() - 24 * 60 * 60_000;
-    const counts = new Map<string, number>();
-    const seen = new Set<string>();
-    for (const session of this.activity.sessions) {
-      for (const call of session.recent_tool_calls ?? []) {
-        const ts = Date.parse(call.timestamp);
-        if (!Number.isFinite(ts) || ts < cutoff) continue;
-        if (call.category === 'terminal' && !call.success) continue;
-        const key = `${call.timestamp}|${call.tool}|${call.category}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        counts.set(call.category, (counts.get(call.category) ?? 0) + 1);
-      }
-    }
-    const perfCutoff = performance.now() - 24 * 60 * 60_000;
-    for (const [category, samples] of Object.entries(this.workMixHistory)) {
-      // Terminal stays snapshot-only so the failed-bash filter still
-      // applies — workMixHistory tracks start events and has no
-      // success info, so merging it would re-inflate Commands with
-      // every failed shell call.
-      if (category === 'terminal') continue;
-      for (const entry of samples) {
-        if (entry.perfTs < perfCutoff) continue;
-        if (seen.has(entry.key)) continue;
-        seen.add(entry.key);
-        counts.set(category, (counts.get(category) ?? 0) + 1);
-      }
-    }
-    return counts;
   }
 
   private drawBackground() {
@@ -1534,7 +1605,7 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private drawOrbitalField(layout: MissionLayout) {
-    const { centerX, centerY, hubY, radiusX, radiusY, s } = layout;
+    const { centerX, hubY, radiusX, radiusY, s } = layout;
     const orbitColor = theme.mode === 'light' ? 0x315f9f : 0x61d6ff;
     const secondaryColor = theme.mode === 'light' ? 0x7a4bc2 : 0xb86dff;
     const ringY = hubY;
@@ -1800,7 +1871,6 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private ingestActivityEvents(events: CopilotEventSummary[]) {
-    const nowMs = performance.now();
     const selectedSessionId = this.selectedSession?.id ?? null;
     const includeAllSessions = this.isAllSessionsSelected();
     const activityResult = ingestReplayEvents({
@@ -1831,16 +1901,6 @@ export class MissionControlScene extends Phaser.Scene {
     }
 
     for (const event of activityResult.appended) {
-      // Track rolling histories. The buffer self-trims during render so
-      // unbounded growth is impossible. The live entry's key
-      // matches the per-session snapshot's dedupe format so
-      // compute24hCategoryCounts can merge the two sources without
-      // double-counting overlap.
-      const quarterKey = quarterKeyForEvent(event);
-      if (quarterKey && (event.kind === 'tool.execution_start' || event.kind === 'hook.start')) {
-        const bucket = (this.workMixHistory[quarterKey] ??= []);
-        bucket.push({ key: `${event.timestamp}|${event.tool}|${quarterKey}`, perfTs: nowMs });
-      }
       // Turn-end chime: one per session, debounced by timestamp so a
       // re-render of the same event doesn't replay the sound.
       if (event.kind === 'assistant.turn_end') {
@@ -1857,15 +1917,21 @@ export class MissionControlScene extends Phaser.Scene {
 
     if (replayResult.wasAtLive && !this.replayPaused && this.bootstrapCompleted) {
       if (this.quarters.length > 0) {
-        const latestPulseByQuarter = new Map<MissionCategory, CopilotEventSummary>();
-        for (const event of activityResult.appended) {
-          if (event.kind !== 'tool.execution_start' && event.kind !== 'hook.start') continue;
-          const quarterKey = quarterKeyForEvent(event);
-          if (!quarterKey) continue;
-          latestPulseByQuarter.set(quarterKey, event);
-        }
-        Array.from(latestPulseByQuarter.values()).forEach((event, i) => {
-          this.queueEventPulse(event, 'live', i * PULSE_STAGGER_MS);
+        // "Every event" (default) sends one pulse per tool or hook start in
+        // event order; "Grouped" sends the newest start per sector.
+        // The log is in time order, so its last event is the newest seen.
+        const newestMs = Date.parse(this.eventLog[this.eventLog.length - 1]?.timestamp ?? '') || 0;
+        const oldestLiveMs = newestMs - LIVE_PULSE_MAX_AGE_MS;
+        const starts = activityResult.appended
+          .filter(isPulseStartEvent)
+          .filter(event => (Date.parse(event.timestamp) || 0) >= oldestLiveMs)
+          .sort((a, b) => (Date.parse(a.timestamp) || 0) - (Date.parse(b.timestamp) || 0));
+        const pulses = loadPulseMode() === 'grouped'
+          ? Array.from(new Map(starts.map(event => [quarterKeyForEvent(event), event])).values())
+          : starts.slice(-MAX_LIVE_PULSES_PER_REFRESH);
+        const stagger = Math.min(PULSE_STAGGER_MS, MAX_PULSE_TRAIN_MS / Math.max(1, pulses.length));
+        pulses.forEach((event, i) => {
+          this.queueEventPulse(event, 'live', i * stagger);
         });
       }
     }
@@ -1947,17 +2013,12 @@ export class MissionControlScene extends Phaser.Scene {
   }
 
   private queueEventPulse(event: CopilotEventSummary, source: 'live' | 'replay' = 'live', delay = 0) {
-    // Pulses must be in lock-step with workMixHistory so the count and
-    // the visible flow agree. Only start events increment the visible
-    // work mix, so completion events still appear in the Activity Feed
-    // without fabricating a building animation.
-    if (event.kind !== 'tool.execution_start' && event.kind !== 'hook.start') return;
+    if (!isPulseStartEvent(event)) return;
     const quarterKey = quarterKeyForEvent(event);
     if (!quarterKey) return;
     const quarter = this.quarters.find(d => d.key === quarterKey);
     if (!quarter) return;
 
-    const s = sceneScale();
     // Real castle center, cached when drawCastle() ran. Falls back to
     // the previous heuristic only on pre-bootstrap rendering when the
     // geometry isn't populated yet (rare; one frame at most).
@@ -2059,7 +2120,6 @@ export class MissionControlScene extends Phaser.Scene {
       if (pulse.progress >= 1 && !pulse.arrived) {
         pulse.arrived = true;
         if (pulse.source === 'live') {
-          this.incrementQuarterActivity(pulse.quarterKey);
           // Sigil at the building's actual center (not the pulse's
           // arrival point, which is offset above/below the building).
           const quarter = this.quarters.find(d => d.key === pulse.quarterKey);
@@ -2111,18 +2171,6 @@ export class MissionControlScene extends Phaser.Scene {
     }
     this.arrivalEffects.length = activeArrivalWrite;
     this.activeEventPulseCount = this.eventPulses.length + this.arrivalEffects.length;
-  }
-
-  /// Reserved for future per-pulse-arrival hook. Currently a no-op:
-  /// quarter badge counts are sourced from `compute24hCategoryCounts`
-  /// which reads `workMixHistory` — updated in `ingestActivityEvents`
-  /// BEFORE the pulse is even queued. The previous implementation
-  /// triggered a full `renderActivity()` rebuild on every arrival just
-  /// to redraw the same number, which destroyed framerate during
-  /// bursts (8+ full scene rebuilds/second). The arrival sigil is now
-  /// the sole visual feedback for "pulse landed".
-  private incrementQuarterActivity(_key: MissionCategory) {
-    // intentionally empty — see comment above.
   }
 
   private advanceDemoActivity(delta: number) {
@@ -2488,23 +2536,6 @@ export class MissionControlScene extends Phaser.Scene {
     return models;
   }
 
-  private pickQuarterForSession(session: CopilotSessionSummary) {
-    const preferred = session.last_event_category && this.quarters.some(d => d.key === session.last_event_category)
-      ? session.last_event_category
-      : session.error_count > 0
-      ? 'terminal'
-      : session.write_count >= session.read_count && session.write_count > 0
-        ? 'edits'
-        : session.command_count > 0
-          ? 'terminal'
-          : session.web_count > 0
-            ? 'signal'
-            : session.task_count > 0
-              ? 'delegates'
-              : 'library';
-    return this.quarters.find(d => d.key === preferred) ?? this.quarters[0];
-  }
-
   private clearDynamicObjects() {
     for (const text of this.textObjects) text.destroy();
     this.textObjects = [];
@@ -2737,17 +2768,16 @@ function normalizeActivitySignal(signal?: CopilotActivitySignal): CopilotActivit
     ? signal.hourly_24h.map(normalizeSignalBucket)
     : createEmptySignalBuckets(generatedAtMs);
   const peakHour = Math.max(0, ...hourly.map(bucket => Number(bucket.event_count || 0)));
-  const peakLaunch = Math.max(0, ...hourly.map(bucket => Number(bucket.launch_count || 0)));
-  const activeLaunchHours = hourly.filter(bucket => bucket.launch_count > 0).length;
+  const activeHours = hourly.filter(bucket => bucket.event_count > 0).length;
   return {
     generated_at_ms: generatedAtMs,
     launches_last_5m: Number(signal.launches_last_5m || 0),
     launches_last_hour: Number(signal.launches_last_hour || 0),
     velocity_per_hour: Number(signal.velocity_per_hour || 0),
-    peak_velocity_per_hour: signal.peak_velocity_per_hour == null ? peakLaunch : Number(signal.peak_velocity_per_hour),
+    peak_velocity_per_hour: signal.peak_velocity_per_hour == null ? peakHour : Number(signal.peak_velocity_per_hour),
     peak_hour_event_count_24h: signal.peak_hour_event_count_24h == null ? peakHour : Number(signal.peak_hour_event_count_24h),
     busiest_hour_label_24h: signal.busiest_hour_label_24h || busiestSignalBucketLabel(hourly),
-    active_hours_24h: signal.active_hours_24h == null ? activeLaunchHours : Number(signal.active_hours_24h),
+    active_hours_24h: signal.active_hours_24h == null ? activeHours : Number(signal.active_hours_24h),
     hourly_24h: hourly,
   };
 }
@@ -2783,17 +2813,18 @@ function createEmptySignalBuckets(generatedAtMs: number): CopilotActivitySignalB
   });
 }
 
+// Activity items are tool starts plus assistant turn starts, matching the
+// Rust per-session signal. Other events only add failures.
 function buildActivitySignalFromEvents(events: CopilotEventSummary[], generatedAtMs: number): CopilotActivitySignal {
   const hourMs = 60 * 60 * 1000;
   const buckets = createEmptySignalBuckets(generatedAtMs);
   const indexByStart = new Map(buckets.map((bucket, index) => [bucket.start, index]));
   const sessionSets = buckets.map(() => new Set<string>());
   const seen = new Set<string>();
-  const endMs = generatedAtMs;
-  const fiveMinStart = endMs - 5 * 60 * 1000;
-  const hourStart = endMs - hourMs;
-  let launchesLast5m = 0;
-  let launchesLastHour = 0;
+  const fiveMinStart = generatedAtMs - 5 * 60 * 1000;
+  const hourStart = generatedAtMs - hourMs;
+  let activityLast5m = 0;
+  let activityLastHour = 0;
 
   for (const event of events) {
     const timestamp = Date.parse(event.timestamp || '');
@@ -2801,56 +2832,93 @@ function buildActivitySignalFromEvents(events: CopilotEventSummary[], generatedA
     const key = `${event.session_id}\u001f${event.timestamp}\u001f${event.kind}\u001f${event.tool}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    const isToolStart = event.kind === 'tool.execution_start';
+    const isTurnStart = event.kind === 'assistant.turn_start';
     const bucketStart = Math.floor(timestamp / hourMs) * hourMs;
-    const bucketKey = new Date(bucketStart).toISOString().replace('.000Z', 'Z');
-    const bucketIndex = indexByStart.get(bucketKey);
+    const bucketIndex = indexByStart.get(new Date(bucketStart).toISOString().replace('.000Z', 'Z'));
     if (bucketIndex != null) {
       const bucket = buckets[bucketIndex];
-      bucket.event_count += 1;
-      if (isLaunchSignal(event)) bucket.launch_count += 1;
       if (!event.success) bucket.failure_count += 1;
-      if (event.session_id) sessionSets[bucketIndex].add(event.session_id);
+      if (isToolStart || isTurnStart) {
+        bucket.event_count += 1;
+        if (isToolStart) bucket.launch_count += 1;
+        if (isTurnStart) bucket.turn_count = (bucket.turn_count ?? 0) + 1;
+        if (event.session_id) sessionSets[bucketIndex].add(event.session_id);
+      }
     }
-    if (isLaunchSignal(event) && timestamp >= fiveMinStart && timestamp <= endMs) launchesLast5m += 1;
-    if (isLaunchSignal(event) && timestamp >= hourStart && timestamp <= endMs) launchesLastHour += 1;
+    if (!isToolStart && !isTurnStart) continue;
+    if (timestamp >= fiveMinStart && timestamp <= generatedAtMs) activityLast5m += 1;
+    if (timestamp >= hourStart && timestamp <= generatedAtMs) activityLastHour += 1;
   }
 
   buckets.forEach((bucket, index) => {
     bucket.active_sessions = sessionSets[index].size;
   });
-  const peakHour = Math.max(0, ...buckets.map(bucket => bucket.event_count));
-  const peakLaunch = Math.max(0, ...buckets.map(bucket => bucket.launch_count));
+  return finalizeActivitySignal(buckets, generatedAtMs, activityLast5m, activityLastHour);
+}
+
+function finalizeActivitySignal(
+  buckets: CopilotActivitySignalBucket[],
+  generatedAtMs: number,
+  activityLast5m: number,
+  activityLastHour: number,
+): CopilotActivitySignal {
+  const peak = Math.max(0, ...buckets.map(bucket => bucket.event_count));
   buckets.forEach(bucket => {
-    bucket.intensity = peakLaunch > 0 && bucket.launch_count > 0 ? Math.min(1, bucket.launch_count / peakLaunch) : 0;
+    bucket.intensity = peak > 0 ? bucket.event_count / peak : 0;
   });
   return {
     generated_at_ms: generatedAtMs,
-    launches_last_5m: launchesLast5m,
-    launches_last_hour: launchesLastHour,
-    velocity_per_hour: launchesLastHour,
-    peak_velocity_per_hour: peakLaunch,
-    peak_hour_event_count_24h: peakHour,
+    launches_last_5m: activityLast5m,
+    launches_last_hour: activityLastHour,
+    velocity_per_hour: activityLastHour,
+    peak_velocity_per_hour: peak,
+    peak_hour_event_count_24h: peak,
     busiest_hour_label_24h: busiestSignalBucketLabel(buckets),
-    active_hours_24h: buckets.filter(bucket => bucket.launch_count > 0).length,
+    active_hours_24h: buckets.filter(bucket => bucket.event_count > 0).length,
     hourly_24h: buckets,
   };
 }
 
+// After Reset counters, hours that start after the reset use the backend's
+// full-file signal. The hour that contains the reset uses the capped recent
+// lists (only they can split the hour), and earlier hours are empty.
+function signalAfterReset(
+  backend: CopilotActivitySignal,
+  fallback: CopilotActivitySignal,
+  resetAtMs: number,
+): CopilotActivitySignal {
+  const hourMs = 60 * 60 * 1000;
+  const generatedAtMs = backend.generated_at_ms;
+  const backendByStart = new Map(backend.hourly_24h.map(bucket => [bucket.start, bucket]));
+  const fallbackByStart = new Map(fallback.hourly_24h.map(bucket => [bucket.start, bucket]));
+  const buckets = createEmptySignalBuckets(generatedAtMs).map((empty) => {
+    const startMs = Date.parse(empty.start);
+    if (startMs + hourMs <= resetAtMs) return empty;
+    const source = startMs < resetAtMs ? fallbackByStart : backendByStart;
+    return { ...(source.get(empty.start) ?? empty) };
+  });
+  const windowValue = (windowMs: number, backendValue: number, fallbackValue: number) =>
+    resetAtMs <= generatedAtMs - windowMs ? backendValue : fallbackValue;
+  return finalizeActivitySignal(
+    buckets,
+    generatedAtMs,
+    windowValue(5 * 60 * 1000, backend.launches_last_5m, fallback.launches_last_5m),
+    windowValue(hourMs, backend.launches_last_hour, fallback.launches_last_hour),
+  );
+}
+
 function busiestSignalBucketLabel(buckets: CopilotActivitySignalBucket[]): string {
   const busiest = buckets.reduce<CopilotActivitySignalBucket | null>((best, bucket) => {
-    if (!best || bucket.launch_count >= best.launch_count) return bucket;
+    if (!best || bucket.event_count >= best.event_count) return bucket;
     return best;
   }, null);
-  return busiest && busiest.launch_count > 0 ? busiest.label : 'No activity';
+  return busiest && busiest.event_count > 0 ? busiest.label : 'No activity';
 }
 
 function signalHourLabel(startMs: number): string {
   const date = new Date(startMs);
   return `${String(date.getUTCHours()).padStart(2, '0')}:00Z`;
-}
-
-function isLaunchSignal(event: CopilotEventSummary): boolean {
-  return event.kind === 'tool.execution_start' && event.category === 'delegates';
 }
 
 function toolCallSignalEvent(sessionId: string, call: SessionToolCall): CopilotEventSummary {
@@ -2860,6 +2928,23 @@ function toolCallSignalEvent(sessionId: string, call: SessionToolCall): CopilotE
     kind: call.category === 'hooks' ? 'hook.start' : 'tool.execution_start',
     tool: call.tool,
     category: call.category,
+    success: true,
+  };
+}
+
+// Only tool and hook starts with a sector fly to the map; completion events
+// still appear in the Activity Feed without a building animation.
+function isPulseStartEvent(event: CopilotEventSummary): boolean {
+  return (event.kind === 'tool.execution_start' || event.kind === 'hook.start') && quarterKeyForEvent(event) !== null;
+}
+
+function turnSignalEvent(sessionId: string, turn: SessionTurnSummary): CopilotEventSummary {
+  return {
+    session_id: sessionId,
+    timestamp: turn.started_at,
+    kind: 'assistant.turn_start',
+    tool: 'thinking',
+    category: 'thinking',
     success: true,
   };
 }
@@ -2876,10 +2961,6 @@ function quarterKeyForEvent(event: CopilotEventSummary): MissionCategory | null 
   // pulse — that previously created the illusion of work flowing into
   // Intent (the prior fallthrough) without the count ever changing.
   return null;
-}
-
-function categoryColor(category: string) {
-  return QUARTER_COLORS[category as MissionCategory] ?? 0x9aa6c8;
 }
 
 function colorToCss(color: number) {
@@ -2911,31 +2992,12 @@ function quarterTextColor(color: number): number {
   return theme.mode === 'light' ? darkenColor(color, 0.45) : color;
 }
 
-function truncate(text: string, max: number) {
-  return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text;
-}
-
 function snap(value: number) {
   return Math.round(value);
 }
 
 function sceneScale() {
   return computeSceneScale(W, H);
-}
-
-function compactNumber(value: number) {
-  if (value >= 1_000_000) return `${Math.round(value / 100_000) / 10}m`;
-  if (value >= 1_000) return `${Math.round(value / 100) / 10}k`;
-  return String(value);
-}
-
-/// Integer-rounded variant of `compactNumber` for tight UI slots where
-/// the decimal in "924.8k" would push the string past the available
-/// width. "925k" / "1m" instead of "924.8k" / "1.3m".
-function compactNumberShort(value: number) {
-  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}m`;
-  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
-  return String(value);
 }
 
 function categoryCountsFromToolCalls(calls: SessionToolCall[]): Record<string, number> {

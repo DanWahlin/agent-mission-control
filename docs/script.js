@@ -1,3 +1,4 @@
+"use strict";
 // @ts-nocheck
 /* ============================================================
    Agent Mission Control — landing page interactions

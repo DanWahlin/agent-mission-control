@@ -17,7 +17,6 @@
     "test:headed": "npm run build:frontend && npx playwright test --headed",
     "test:mcp": "node --test tests/mcp-insights.test.mts",
     "test:skill-evaluator": "cd src-tauri && cargo test skill_evaluator --quiet",
-    "test:skill-evaluator:copilot-sdk": "cd src-tauri && CMC_RUN_COPILOT_SDK_TESTS=1 cargo test copilot_sdk_judge_integration_returns_result -- --ignored",
     "mcp:insights": "node mcp/mission-control-insights.ts",
     "release": "node scripts/release.ts",
     "test:updater": "node scripts/test-updater.ts",
@@ -26,12 +25,11 @@
   "author": "Dan Wahlin",
   "license": "MIT",
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
-    "@tauri-apps/cli": "^2.0.0",
-    "serve": "^14.2.6",
-    "typescript": "^5.6.0"
+    "@playwright/test": "^1.64.0",
+    "@tauri-apps/cli": "^2.12.1",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
-    "phaser": "^4.0.0"
+    "phaser": "^4.2.1"
   }
 }

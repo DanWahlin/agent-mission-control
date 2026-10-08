@@ -217,9 +217,12 @@ const MISSION_FIXTURE = {
 
 const LONG_TOOL_NAME = 'bash-command-with-a-very-long-safe-label-for-turn-story-truncation';
 
+// Mirrors hud.ts lastSelectableDayForMonth(): the current month selects today,
+// and a past month selects its last day.
 function expectedJuneSelectedDay() {
-  const day = Math.min(new Date().getDate(), 30);
-  return `2026-06-${String(day).padStart(2, '0')}`;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return today.slice(0, 7) <= '2026-06' ? today : '2026-06-30';
 }
 
 async function installFixture(page: Page, fixture = MISSION_FIXTURE) {
@@ -1513,6 +1516,8 @@ test.describe('Agent Mission Control — Dashboard', () => {
       window.__cmcOnAgentActivityChanged?.();
     });
     await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    // The push refresh runs on a timer, so wait for the rebuilt events.
+    await expect.poll(async () => (await getMissionState(page))!.eventLogTools).toContain('rg');
 
     const result = await page.evaluate(() => {
       const scene = (window as any).__phaserGame.scene.getScene('mission-control') as any;
@@ -1657,6 +1662,83 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(tempo.locator('.cmc-tempo-heat-cell')).toHaveCount(24);
   });
 
+  test('dashboard Activity Rate keeps the full backend signal after an old counter reset', async ({ page }) => {
+    await page.evaluate(() => {
+      const now = Date.now();
+      const hourMs = 60 * 60 * 1000;
+      const currentHour = Math.floor(now / hourMs) * hourMs;
+      const hourly = Array.from({ length: 24 }, (_, index) => {
+        const start = currentHour - (23 - index) * hourMs;
+        const isCurrent = index === 23;
+        return {
+          start: new Date(start).toISOString().replace('.000Z', 'Z'),
+          label: `${String(new Date(start).getUTCHours()).padStart(2, '0')}:00Z`,
+          event_count: isCurrent ? 9 : 0,
+          launch_count: isCurrent ? 6 : 0,
+          turn_count: isCurrent ? 3 : 0,
+          failure_count: 0,
+          active_sessions: isCurrent ? 1 : 0,
+          intensity: isCurrent ? 1 : 0,
+        };
+      });
+      window.localStorage.setItem('cmc_prefs', JSON.stringify({
+        activityResetAtMs: now - 3 * 24 * hourMs,
+        lastSelectedSessionId: 'alpha123',
+      }));
+      const fixture = (window as any).__missionControlFixture;
+      const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
+      alpha.recent_tool_calls = [];
+      alpha.recent_turns = [];
+      alpha.activity_signal = {
+        generated_at_ms: now,
+        launches_last_5m: 3,
+        launches_last_hour: 9,
+        velocity_per_hour: 9,
+        peak_velocity_per_hour: 9,
+        peak_hour_event_count_24h: 9,
+        busiest_hour_label_24h: hourly[23].label,
+        active_hours_24h: 1,
+        hourly_24h: hourly,
+      };
+      (window as any).__missionControlFixture = fixture;
+      window.sessionStorage.setItem('cmc_test_fixture', JSON.stringify(fixture));
+    });
+    await page.addInitScript(() => {
+      const saved = window.sessionStorage.getItem('cmc_test_fixture');
+      if (saved) (window as any).__missionControlFixture = JSON.parse(saved);
+    });
+    await page.reload();
+    await waitForGame(page);
+    await page.evaluate(() => (window as any).__cmcSelectSession('alpha123'));
+
+    const tempo = page.locator('#dom-session .cmc-ops-tempo');
+    await expect(tempo).toContainText('9 activities/hr');
+    await expect(tempo).toContainText('3 activities');
+    await tempo.locator('.cmc-tempo-heat-cell').last().hover();
+    await expect(tempo.locator('.cmc-tempo-readout')).toContainText('6 tool calls, 3 turns');
+  });
+
+  test('selected session panel does not scroll sideways for a long branch name', async ({ page }) => {
+    await selectSession(page, 'alpha123');
+    // Change the branch after the panel renders. The new event sends the
+    // refresh through the live (fingerprint-gated) dashboard path.
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
+      alpha.branch = 'danwahlin-app-functional-audit-and-cleanup-with-a-very-long-branch-name';
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'branch_probe', category: 'library', success: true },
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+
+    // The live path must update the panel at once, not after the pulses land.
+    await expect(page.locator('#dom-session .cmc-session-subtitle')).toContainText('very-long-branch-name', { timeout: 2_000 });
+    const overflow = await page.locator('#dom-session .cmc-panel-body').evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+
   test('Recent Activity Feed fills remaining vertical space and scrolls overflow', async ({ page }) => {
     await selectSession(page, 'alpha123');
     await page.evaluate(() => {
@@ -1767,8 +1849,13 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(idleOption).toHaveCount(1);
     await expect(idleOption.locator('.cmc-session-status-label')).toHaveText('idle');
 
-    await idleOption.click();
+    // Options are plain buttons so accessibility tools can press them.
+    const idleButton = page.getByRole('group', { name: 'Select Copilot session' }).getByRole('button', { name: /Research UI/ });
+    await expect(idleButton).toHaveCount(1);
+    await idleButton.click();
     await expect.poll(async () => (await getMissionState(page))!.selectedSessionId).toBe('gamma890');
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').click();
+    await expect(idleOption).toHaveAttribute('aria-current', 'true');
   });
 
   test('idle session replay reconstructs pulse-able tool events from recent_tool_calls when raw events have aged out', async ({ page }) => {
@@ -1792,6 +1879,8 @@ test.describe('Agent Mission Control — Dashboard', () => {
 
     await page.evaluate(() => (window as any).__cmcSelectSession('gamma890'));
     await expect.poll(async () => (await getMissionState(page))!.selectedSessionId).toBe('gamma890');
+    // The push refresh runs on a timer, so wait for the rebuilt events.
+    await expect.poll(async () => (await getMissionState(page))!.eventLogTools).toContain('rg');
 
     const state = await getMissionState(page);
     // The activity log now carries the retained tool calls as pulse-able
@@ -1963,6 +2052,26 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await expect(page.locator('#dom-session .cmc-session-meta')).toContainText('Tokens in/out: pending / 4,200');
   });
 
+  test('active session shows pending tokens before Copilot CLI reports usage', async ({ page }) => {
+    const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
+    const alpha = fixture.sessions.find((session: any) => session.id === 'alpha123');
+    alpha.is_active = true;
+    alpha.turn_count = 3;
+    alpha.input_tokens = 0;
+    alpha.output_tokens = 0;
+    alpha.token_checkpoints = [];
+    fixture.sessions = [alpha];
+
+    await installFixture(page, fixture);
+    await page.goto(GAME_URL);
+    await waitForGame(page);
+
+    const meta = page.locator('#dom-session .cmc-session-meta');
+    await expect(meta).toContainText('Tokens in/out: pending');
+    await expect(meta).not.toContainText('0 / 0');
+    await expect(page.locator('#dom-session .cmc-token-pending')).toHaveAttribute('title', /when a session shuts down/i);
+  });
+
   test('History selected session shows pending input tokens until usage summary is emitted', async ({ page }) => {
     const fixture = JSON.parse(JSON.stringify(MISSION_FIXTURE));
     const alpha = fixture.history.recent_sessions.find((session: any) => session.id === 'alpha123');
@@ -2042,6 +2151,181 @@ test.describe('Agent Mission Control — Dashboard', () => {
     await page.waitForTimeout(250);
     const mid = await getMissionState(page);
     expect(mid!.activeEventPulseCount).toBeGreaterThan(0);
+  });
+
+  test('live refresh sends one pulse per tool start across sessions', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      scene.eventPulses = [];
+      const fixture = (window as any).__missionControlFixture;
+      const now = Date.now();
+      const start = (session_id: string, offsetMs: number, tool: string, category: string) => ({
+        session_id,
+        timestamp: new Date(now + offsetMs).toISOString(),
+        kind: 'tool.execution_start',
+        tool,
+        category,
+        success: true,
+      });
+      fixture.recent_events = [
+        start('alpha123', 0, 'bash', 'terminal'),
+        start('beta4567', 0, 'bash', 'terminal'),
+        start('beta4567', 10, 'apply_patch', 'edits'),
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+
+    await expect.poll(async () => page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      const live = scene.eventPulses.filter((pulse: any) => pulse.source === 'live');
+      return {
+        terminal: live.filter((pulse: any) => pulse.quarterKey === 'terminal').length,
+        edits: live.filter((pulse: any) => pulse.quarterKey === 'edits').length,
+      };
+    }), { timeout: 1500 }).toEqual({ terminal: 2, edits: 1 });
+  });
+
+  test('Grouped sector pulses send one pulse per sector per update', async ({ page }) => {
+    await page.locator('#settings-btn').click();
+    await expect(page.locator('#pulse-mode-select')).toHaveValue('every');
+    await page.locator('#pulse-mode-select').selectOption('grouped');
+    await page.locator('#settings-done').click();
+    expect(await page.evaluate(() => window.localStorage.getItem('cmc_pulse_mode'))).toBe('grouped');
+
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      scene.eventPulses = [];
+      const fixture = (window as any).__missionControlFixture;
+      const now = new Date().toISOString();
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: now, kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
+        { session_id: 'beta4567', timestamp: now, kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await page.waitForTimeout(400);
+    const terminalPulses = await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      return scene.eventPulses.filter((pulse: any) => pulse.source === 'live' && pulse.quarterKey === 'terminal').length;
+    });
+    expect(terminalPulses).toBe(1);
+  });
+
+  test('live panel updates patch the DOM and keep keyboard focus', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.locator('#dom-session [data-cmc-action="session-menu"]').focus();
+    const metaBefore = await page.locator('#dom-session .cmc-session-meta').textContent();
+    await page.evaluate(() => {
+      (window as any).__cmcProbeTrigger = document.querySelector('#dom-session [data-cmc-action="session-menu"]');
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'beta4567', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'focus_probe', category: 'library', success: true },
+        ...fixture.recent_events,
+      ];
+      // Change session data too, so the Selected Session panel re-renders.
+      fixture.sessions.find((session: any) => session.id === 'beta4567').output_tokens += 1111;
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await expect(page.locator('#dom-feed .cmc-feed-row').first()).toContainText('focus_probe');
+    await expect(page.locator('#dom-session .cmc-session-meta')).not.toHaveText(metaBefore || '');
+    const kept = await page.evaluate(() => {
+      const trigger = (window as any).__cmcProbeTrigger;
+      return { sameNode: trigger.isConnected, focused: document.activeElement === trigger };
+    });
+    expect(kept).toEqual({ sameNode: true, focused: true });
+  });
+
+  test('becoming visible refreshes activity without a watcher push', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'visible_probe', category: 'library', success: true },
+        ...fixture.recent_events,
+      ];
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect.poll(async () => (await getMissionState(page))!.eventLogTools, { timeout: 2500 }).toContain('visible_probe');
+  });
+
+  test('push refresh is not starved by pulses that stay in flight', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await expect.poll(async () => page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      return scene.eventPulses.length;
+    }), { timeout: 1500 }).toBeGreaterThan(0);
+    // Keep motion active for the rest of the test.
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      for (const pulse of scene.eventPulses) pulse.duration = 60_000;
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'beta4567', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'starved_probe', category: 'library', success: true },
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await expect.poll(async () => (await getMissionState(page))!.eventLogTools, { timeout: 2500 }).toContain('starved_probe');
+  });
+
+  test('late older events keep feed order and send no live pulse', async ({ page }) => {
+    await page.evaluate(() => (window as any).__cmcSelectSession('__all_sessions__'));
+    await page.waitForTimeout(800);
+    const livePulses = () => page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      return scene.eventPulses.filter((pulse: any) => pulse.source === 'live').map((pulse: any) => pulse.quarterKey);
+    });
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      scene.eventPulses = [];
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        { session_id: 'alpha123', timestamp: new Date().toISOString(), kind: 'tool.execution_start', tool: 'bash', category: 'terminal', success: true },
+        ...fixture.recent_events,
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await expect.poll(livePulses, { timeout: 1500 }).toEqual(['terminal']);
+    await expect(page.locator('#dom-feed .cmc-feed-row').first()).toContainText('bash');
+
+    await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      scene.eventPulses = [];
+      const fixture = (window as any).__missionControlFixture;
+      fixture.recent_events = [
+        ...fixture.recent_events,
+        { session_id: 'beta4567', timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(), kind: 'tool.execution_start', tool: 'apply_patch', category: 'edits', success: true },
+      ];
+      (window as any).__cmcOnAgentActivityChanged?.();
+    });
+    await page.waitForTimeout(600);
+    expect(await livePulses()).toEqual([]);
+    const order = await page.evaluate(() => {
+      const scene = (window as any).__phaserGame.scene.getScene('mission-control');
+      const times = scene.eventLog.map((event: any) => Date.parse(event.timestamp));
+      return times.every((time: number, index: number) => index === 0 || time >= times[index - 1]);
+    });
+    expect(order).toBe(true);
+    await expect(page.locator('#dom-feed .cmc-feed-row').first()).toContainText('bash');
+    await expect(page.locator('#dom-feed .cmc-feed-row').first()).not.toContainText('apply_patch');
   });
 
   test('hook events route to the Hooks sector flow', async ({ page }) => {
