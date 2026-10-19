@@ -28,13 +28,14 @@ assets/icon.png            — App icon (square, used by tools that need a singl
 docs/                    — GitHub Pages site
   img/                   — README + landing-page screenshots (regenerable)
 scripts/release.ts       — Version bump + git-cliff + tag + push
+scripts/windows-signing.ps1 — Azure Artifact Signing for Windows release builds (Tauri signCommand)
 scripts/snap-readme.mjs  — Playwright screenshotter for docs/img/
 tests/                   — Playwright (Chromium, headless)
   app.spec.ts                — App shell smoke tests
   mission-control.spec.ts    — Scene behavior + multi-viewport layout regressions
   helpers.ts                 — waitForGame() + getMissionStatus()
 .github/workflows/
-  build.yml              — Build & Release on v* tags
+  build.yml              — Build & Release on v* tags (signs Windows in the `release` environment)
   ci.yml                 — type-check, build, Playwright, MCP tests, and Rust fmt/Clippy/tests on PRs
   deploy-pages.yml       — docs/ → GitHub Pages on push to main
 ```
@@ -122,6 +123,6 @@ npm run release <version>    # e.g. npm run release 0.2.0
 1. Bumps version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
 2. Regenerates `CHANGELOG.md` from git via `git-cliff` (config: `cliff.toml`).
 3. Commits everything, creates a `v<version>` tag, and pushes to `origin`.
-4. The `Build & Release` workflow takes over: builds macOS (universal), Windows, and Linux installers, then attaches them to the GitHub Release.
+4. The `Build & Release` workflow takes over: builds macOS (universal), Windows, and Linux installers, then attaches them to the GitHub Release. The Windows build signs the app and installers with Azure Artifact Signing (see the README's "Windows signing" section); a signing failure fails the release.
 
 All three version files must be updated together for installer filenames to be correct — the script does this automatically.

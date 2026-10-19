@@ -49,7 +49,7 @@ Click the 👁 button in the top-right to hide the side panels and put the missi
 
 ## Install
 
-Builds for macOS, Windows, and Linux are produced from the [latest GitHub Release](https://github.com/DanWahlin/agent-mission-control/releases). The app is not code-signed; see the release notes for platform-specific quarantine/SmartScreen unlock instructions.
+Builds for macOS, Windows, and Linux are produced from the [latest GitHub Release](https://github.com/DanWahlin/agent-mission-control/releases). The Windows app is signed by Dan Wahlin (Azure Artifact Signing), so Smart App Control lets it run; SmartScreen may still ask you to confirm early signed releases. The macOS and Linux apps are not code-signed; see the release notes for platform-specific instructions.
 
 ## Develop
 
@@ -90,6 +90,17 @@ npm run release 0.2.0
 ```
 
 `scripts/release.ts` bumps `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`, regenerates `CHANGELOG.md` via `git-cliff`, commits, tags `v0.2.0`, and pushes. The `Build & Release` workflow then builds installers for all three platforms and attaches them to the GitHub Release.
+
+### Windows signing
+
+Release builds sign the Windows app with [Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/) so Smart App Control and SmartScreen trust it. macOS and Linux builds, and local builds, are not signed.
+
+- The Windows build job runs in the `release` GitHub environment, which only allows `v*` tags. Its variables (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, `ARTIFACT_SIGNING_PROFILE`) point at the signing account; `azure/login` signs in with OIDC, so there are no secrets.
+- [`scripts/windows-signing.ps1`](scripts/windows-signing.ps1) `-Setup` downloads signtool and the Artifact Signing library (pinned NuGet packages checked against SHA-256s) and an x64 .NET 8 runtime, and allows only the Azure CLI credential.
+- The workflow passes Tauri a `bundle.windows.signCommand` (via `--config`) that runs the script, so Tauri signs the app, the NSIS plugins, uninstaller and installer, and the MSI before it zips and minisigns the updater artifacts.
+- A check step then verifies the installers, the app and uninstaller inside them, and the installers inside the `.nsis.zip`/`.msi.zip` updater archives are signed by `CN=Dan Wahlin` with a timestamp. Any signing or verification failure fails the build, so a tag never publishes an unsigned Windows app.
+
+To try a signed build from a branch, temporarily allow the branch on the `release` environment (`gh api -X POST repos/DanWahlin/agent-mission-control/environments/release/deployment-branch-policies -f name=<branch> -f type=branch`), run `gh workflow run build.yml --ref <branch> -f sign_windows=true`, then delete that rule. Branch runs never publish a release (the `release` job only runs for `v*` tags).
 
 ## License
 
