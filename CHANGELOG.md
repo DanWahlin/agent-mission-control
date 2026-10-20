@@ -1,6 +1,11 @@
 # Changelog
 
 All notable changes to Agent Mission Control.
+## [0.3.1] - 2026-10-20
+
+### ⚙️ CI/CD & Build
+
+- Ci: sign Windows release builds with Azure Artifact Signing ([#9](https://github.com/DanWahlin/agent-mission-control/issues/9))
 ## [0.3.0] - 2026-10-08
 
 ### 🚀 Features & Improvements
@@ -16,6 +21,10 @@ All notable changes to Agent Mission Control.
 ### 🔧 Refactoring
 
 - Review cleanup: share analytics-session detection and signal helpers
+
+### ⚙️ CI/CD & Build
+
+- Release v0.3.0
 
 ### 🎨 Styling
 
