@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      sign_windows:
+        description: 'Sign the Windows app (needs a deployment rule for this branch on the release environment)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -25,6 +30,14 @@ jobs:
             args: ''
 
     runs-on: ${{ matrix.os }}
+    # Only the Windows build signs, and only in the `release` environment (v* tags, or a manual
+    # run with sign_windows on a branch that the environment allows).
+    environment: ${{ matrix.platform == 'win' && (startsWith(github.ref, 'refs/tags/v') || inputs.sign_windows) && 'release' || '' }}
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      SIGN_WINDOWS: ${{ matrix.platform == 'win' && (startsWith(github.ref, 'refs/tags/v') || inputs.sign_windows) }}
 
     steps:
       - name: Checkout
@@ -53,6 +66,35 @@ jobs:
       - name: Build frontend
         run: npm run build:frontend
 
+      - name: Sign in to Azure (Windows signing)
+        if: env.SIGN_WINDOWS == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Tauri runs the signCommand on the app exe, the NSIS plugins, uninstaller and installer,
+      # and the MSI, before it zips and minisigns the updater artifacts. A signing failure fails
+      # the build, so a tag never publishes an unsigned Windows app.
+      - name: Set up Windows signing
+        id: signing
+        if: env.SIGN_WINDOWS == 'true'
+        shell: pwsh
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: |
+          ./scripts/windows-signing.ps1 -Setup
+          $script = (Resolve-Path scripts/windows-signing.ps1).Path
+          $config = @{ bundle = @{ windows = @{ signCommand = @{
+            cmd = 'pwsh'; args = @('-NoProfile', '-File', $script, '%1') } } } }
+          $file = Join-Path $env:RUNNER_TEMP 'tauri-windows-signing.json'
+          $config | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $file -Encoding utf8
+          Get-Content -LiteralPath $file
+          "tauri_args=--config $($file -replace '\\', '/')" >> $env:GITHUB_OUTPUT
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -60,7 +102,54 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ steps.signing.outputs.tauri_args }}
+
+      # Checks what ships: the installers, the files inside them (Tauri leaves
+      # target/release/<app>.exe itself unsigned), and the installers inside the updater zips.
+      - name: Check Windows signatures
+        if: env.SIGN_WINDOWS == 'true'
+        shell: pwsh
+        run: |
+          $bundle = 'src-tauri/target/release/bundle'
+          $sign = './scripts/windows-signing.ps1'
+          $nsis = @(Get-ChildItem "$bundle/nsis/*-setup.exe")
+          $msi = @(Get-ChildItem "$bundle/msi/*.msi")
+          if ($nsis.Count -ne 1 -or $msi.Count -ne 1) { throw "Expected one NSIS installer and one MSI, found $($nsis.Count) and $($msi.Count)." }
+          & $sign -Verify $nsis[0].FullName, $msi[0].FullName
+
+          # The NSIS installer's app and uninstaller (7-Zip rebuilds uninstall.exe as it was signed).
+          $out = Join-Path $env:RUNNER_TEMP 'nsis-contents'
+          7z x $nsis[0].FullName "-o$out" -y | Out-Null
+          if ($LASTEXITCODE) { throw "7-Zip couldn't extract $($nsis[0].Name)." }
+          $files = @(Get-ChildItem $out -Recurse -File -Include *.exe, *.dll |
+            Where-Object { $_.FullName -notlike '*\$PLUGINSDIR\*' })
+          if (-not ($files | Where-Object Name -eq 'uninstall.exe') -or -not ($files | Where-Object Name -ne 'uninstall.exe')) {
+            throw "The NSIS installer should contain the app and uninstall.exe; found: $($files.Name -join ', ')"
+          }
+          & $sign -Verify $files.FullName
+
+          # The MSI's app (an administrative install unpacks it without installing).
+          $out = Join-Path $env:RUNNER_TEMP 'msi-contents'
+          $msiexec = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/a', "`"$($msi[0].FullName)`"", '/qn', "TARGETDIR=`"$out`"")
+          if ($msiexec.ExitCode) { throw "msiexec couldn't unpack $($msi[0].Name) (exit code $($msiexec.ExitCode))." }
+          $files = @(Get-ChildItem $out -Recurse -File -Include *.exe, *.dll)
+          if (-not $files) { throw "The MSI should contain the app." }
+          & $sign -Verify $files.FullName
+
+          # The updater zips must hold these signed installers, so the .sig covers signed files.
+          foreach ($pair in @(@($nsis[0], '.nsis.zip'), @($msi[0], '.msi.zip'))) {
+            $installer = $pair[0]
+            $zip = Get-Item -LiteralPath ([IO.Path]::ChangeExtension($installer.FullName, $pair[1]))
+            if (-not (Test-Path -LiteralPath "$($zip.FullName).sig")) { throw "$($zip.Name) has no updater signature." }
+            $out = Join-Path $env:RUNNER_TEMP "updater-$($installer.Extension.TrimStart('.'))"
+            Expand-Archive -LiteralPath $zip.FullName $out -Force
+            $inner = Get-Item -LiteralPath (Join-Path $out $installer.Name)
+            & $sign -Verify $inner.FullName
+            if ((Get-FileHash -LiteralPath $inner.FullName).Hash -ne (Get-FileHash -LiteralPath $installer.FullName).Hash) {
+              throw "$($zip.Name) holds a different $($installer.Name) than the signed installer."
+            }
+          }
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -176,7 +265,7 @@ jobs:
             copilot --allow-all -p "Install the latest version of this app for me https://github.com/DanWahlin/agent-mission-control/releases"
             ```
 
-            > **Note:** The app is not code-signed, so after installing you'll still need to manually run the commands shown below for your operating system.
+            > **Note:** The Windows app is code-signed. The macOS and Linux apps are not, so after installing on those you'll still need to manually run the commands shown below for your operating system.
 
             Or download the installer for your OS from the **Assets** list below.
 
@@ -187,7 +276,7 @@ jobs:
 
             > Download the `.dmg` file from the **Assets** list below.
             >
-            > **Note:** The app is not code-signed. After installing, open Terminal and run:
+            > **Note:** The macOS app is not code-signed. After installing, open Terminal and run:
             > ```
             > sudo xattr -rd com.apple.quarantine /Applications/Agent\ Mission\ Control.app
             > ```
@@ -200,9 +289,11 @@ jobs:
 
             > Download the `.msi` or `.exe` file from the **Assets** list below.
             >
-            > **Note:** The app is not code-signed, so Windows may flag it:
+            > **Signed:** The Windows app and installers are signed by **Dan Wahlin** (Azure Artifact Signing), so Smart App Control lets them run.
+            >
+            > While the new signature builds reputation, SmartScreen may still show "Windows protected your PC" for early signed releases:
             > 1. If your browser warns about the download, select **"Keep"**
-            > 2. When you see "Windows protected your PC", click **"More info"**
+            > 2. When you see "Windows protected your PC", click **"More info"** (the publisher shows as Dan Wahlin)
             > 3. Then click **"Run anyway"**
 
             ### 🐧 Linux
